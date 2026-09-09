@@ -65,12 +65,23 @@ def _yt_options(cookie_file=None):
       'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'128'}],
     }
     if cookie_file and Path(cookie_file).is_file(): o['cookiefile']=cookie_file
-    clients=[x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','default,web_embedded').split(',') if x.strip()]
+    clients=[x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','web_safari,web_embedded,default').split(',') if x.strip()]
     o['extractor_args']={'youtube':{'player_client':clients or ['default']}}
     return o
 
 def _cookie_candidates():
+    """جمع ملفات YouTube cookies بدون طباعة محتواها.
+    يدعم: ملف مباشر عبر YOUTUBE_COOKIES_FILE، أو محتوى Netscape عبر
+    YOUTUBE_COOKIES و YOUTUBE_COOKIES_1..10.
+    """
     out=[]
+    file_env=os.getenv('YOUTUBE_COOKIES_FILE','').strip()
+    if file_env and Path(file_env).is_file():
+        out.append(file_env)
+    # اسم شائع داخل المشروع؛ يسمح برفع cookies.txt مع ZIP/GitHub إن أراد المستخدم.
+    for candidate in (BASE_DIR/'youtube_cookies.txt', BASE_DIR/'cookies.txt'):
+        if candidate.is_file() and str(candidate) not in out:
+            out.append(str(candidate))
     raw=os.getenv('YOUTUBE_COOKIES','').strip()
     if raw:
         p=Path('/tmp/youtube_cookies.txt'); p.write_text(raw, encoding='utf-8'); out.append(str(p))
@@ -79,6 +90,22 @@ def _cookie_candidates():
         if raw:
             p=Path(f'/tmp/youtube_cookies_{i}.txt'); p.write_text(raw, encoding='utf-8'); out.append(str(p))
     return out
+
+def youtube_cookie_status():
+    files=_cookie_candidates()
+    if not files:
+        return False, 'لا يوجد ملف Cookies مضبوط.'
+    for f in files:
+        try:
+            rows=0
+            for line in Path(f).read_text(encoding='utf-8', errors='ignore').splitlines():
+                if line and not line.startswith('#') and len(line.split('\t')) >= 7:
+                    rows += 1
+            if rows:
+                return True, f'Cookies موجودة: {rows} سجل.'
+        except Exception:
+            pass
+    return False, 'ملف Cookies موجود لكنه ليس بصيغة Netscape الصحيحة.'
 
 def search_download_youtube(query):
     if yt_dlp is None: raise RuntimeError('yt-dlp غير مثبت')
@@ -116,7 +143,7 @@ def search_download_youtube(query):
 
 def music_url(path):
     base=public_base_url()
-    if not base: raise RuntimeError('Railway Public Domain غير مفعّل')
+    if not base: raise RuntimeError('رابط الوسائط العام غير مضبوط. فعّل Public Domain للخدمة في Railway أو ضع PUBLIC_BASE_URL.')
     return base + '/media/music/' + quote(Path(path).name)
 
 def gift_image(gid):
@@ -128,7 +155,7 @@ def gift_image(gid):
 
 def gift_url(path):
     base=public_base_url()
-    if not base: raise RuntimeError('Railway Public Domain غير مفعّل')
+    if not base: raise RuntimeError('رابط الوسائط العام غير مضبوط. فعّل Public Domain للخدمة في Railway أو ضع PUBLIC_BASE_URL.')
     # copy image into served media/gifts so assets are not exposed directly
     target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
     dst=target/(f'{Path(path).stem}_{uuid.uuid4().hex[:8]}{Path(path).suffix}')

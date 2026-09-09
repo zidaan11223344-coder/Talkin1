@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 import subprocess
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -916,6 +917,30 @@ class TalkinBot:
         self.send_query(encode_query("chat_message", type_="text", to=username, body=text))
         return True
 
+    def report_master_error(self, source: str, exc: Exception):
+        """Send the real exception to the configured master privately.
+        The room only receives the short user-friendly failure message.
+        """
+        if not BOT_MASTER:
+            return
+        try:
+            detail = traceback.format_exc().strip()
+            if not detail or detail == "NoneType: None":
+                detail = repr(exc)
+            # Keep private diagnostics readable and bounded.
+            if len(detail) > 3500:
+                detail = detail[-3500:]
+            text = (
+                f"🚨 خطأ فعلي في البوت\n"
+                f"📍 القسم: {source}\n"
+                f"⚠️ النوع: {type(exc).__name__}\n"
+                f"📝 الخطأ: {exc!s}\n"
+                f"```\n{detail}\n```"
+            )
+            self.send_private_text(BOT_MASTER, text)
+        except Exception as report_exc:
+            self.log("[ERROR-REPORT] failed:", repr(report_exc))
+
     def request_occupants(self, room: str = ""):
         """Load users from ALL rooms currently joined by the bot.
 
@@ -1318,7 +1343,8 @@ class TalkinBot:
                 return
         except Exception as e:
             self.log("[MEDIA] command failed:", repr(e))
-            self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. راجع سجل Railway لمعرفة السبب.")
+            self.report_master_error("الأغاني والهدايا", e)
+            self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. تم إرسال الخطأ الفعلي للماستر.")
             return
 
         # Master-only administrative commands.
