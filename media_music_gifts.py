@@ -151,7 +151,15 @@ def search_download_youtube(query):
                     artist=str(info.get('uploader') or info.get('channel') or 'YouTube')
                     direct=str(info.get('webpage_url') or url)
                     opts=_yt_options(cookie, clients, format_selector); opts['outtmpl']=str(MUSIC_DIR/f'{vid}.%(ext)s')
-                    with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([direct])
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        # Do not call ydl.download([direct]) here. That makes
+                        # yt-dlp request the YouTube page a second time and
+                        # is the common cause of "The page needs to be
+                        # reloaded" after metadata extraction succeeded.
+                        if hasattr(ydl, 'process_ie_result'):
+                            ydl.process_ie_result(info, download=True)
+                        else:
+                            ydl.download([direct])
                     mp3=MUSIC_DIR/f'{vid}.mp3'
                     candidates=list(MUSIC_DIR.glob(f'{vid}.*'))
                     if not mp3.exists():
