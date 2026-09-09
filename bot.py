@@ -725,7 +725,7 @@ class TalkinBot:
         self.invite_sent = set()
         self.invite_thread = None
         self.invite_lock = threading.Lock()
-        self.invite_message_template = "{sender} يدعوك للغرفة {room}"
+        self.invite_message_template = "تم العثور على شريكك في غرفة {room}\nYour partner was found in room {room}"
         self.known_rooms = set()
         # Persistent points ledger. The configured master has unlimited points
         # and is never stored in the ledger. All other balances are integers.
@@ -1242,7 +1242,6 @@ class TalkinBot:
     def _run_music_command(self, room, frm, query):
         """Download outside the WebSocket reader so slow YouTube requests cannot disconnect the bot."""
         try:
-            self.send_room_text(room, "⏳ جاري تجهيز الأغنية…")
             track = search_download_youtube(query)
             url = music_url(track["path"])
             self.send_room_text(room, f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{frm}\n🏠 الغرفة: {room}")
@@ -1273,7 +1272,8 @@ class TalkinBot:
         role = str(event.get(8, "") or "").strip().lower()
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
-        self.log(f"[EVENT] type={event_type} from={frm} user={username!r} room={room} role={role!r} count={count!r} body={body!r}")
+        if event_type != "text":
+            self.log(f"[EVENT] type={event_type} user={username!r} room={room} role={role!r} count={count!r} reconnected={reconnected}")
 
         # Keep the live membership state in sync.  The APK itself uses these
         # exact event names and RoomEvent fields.
@@ -1308,8 +1308,6 @@ class TalkinBot:
             return
 
         # Keep a small per-room message history for diagnostics.
-        self.last_messages[room].append((frm, body, event_id))
-        self.last_messages[room] = self.last_messages[room][-50:]
 
         # Points commands.
         # sa@اسم_المستخدم@كمية
@@ -1334,13 +1332,18 @@ class TalkinBot:
             return
 
         # Music and gifts: available to room members.
-        low = body.strip().lower()
+        command_body = body.strip().replace("🔛", "").strip()
+        low = command_body.lower()
         try:
             if low in ("الهدايا", "gifts", "gv"):
                 self.send_room_text(room, gifts_catalog())
                 return
-            if low.startswith("اغنية ") or low.startswith("أغنية ") or low.startswith("تشغيل ") or low.startswith("music "):
-                query = body.split(None, 1)[1].strip()
+            if low.startswith(("اغنية ", "أغنية ", "تشغيل ", "music ")):
+                query = command_body.split(None, 1)[1].strip()
+                if not query:
+                    self.send_room_text(room, "❌ اكتب اسم الأغنية بعد الأمر.")
+                    return
+                self.send_room_text(room, "⏳ جاري البحث عن الأغنية…")
                 threading.Thread(target=self._run_music_command, args=(room, frm, query), name="music-download", daemon=True).start()
                 return
             if body.strip().lower().startswith("gv@"):
@@ -1462,7 +1465,16 @@ class TalkinBot:
                     if BOT_MASTER and frm == BOT_MASTER and body:
                         # Reuse room command handling with the command-context room.
                         ctx_room = self.room
-                        if body.lower().startswith(("inv", "دعوات", "invite")):
+                        if body.lower().startswith(("invmsg ", "رسالةدعوة ")):
+                            template = body.split(None, 1)[1].strip()
+                            if template:
+                                self.invite_message_template = template
+                                self.send_private_text(BOT_MASTER, f"✅ تم تغيير رسالة الدعوات إلى:\n{template}")
+                            else:
+                                self.send_private_text(BOT_MASTER, "❌ الاستخدام: invmsg نص الرسالة")
+                        elif body.lower() in ("invmsg", "رسالةدعوة"):
+                            self.send_private_text(BOT_MASTER, f"ℹ️ رسالة الدعوات الحالية:\n{self.invite_message_template}\n\nالاستخدام: invmsg نص الرسالة")
+                        elif body.lower().startswith(("inv", "دعوات", "invite")):
                             parts = body.split()
                             target_room = parts[1] if len(parts) > 1 else ctx_room
                             self.request_occupants(target_room)

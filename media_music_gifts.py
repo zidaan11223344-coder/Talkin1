@@ -52,11 +52,13 @@ def start_media_server(port=None):
     return server
 
 def _cleanup():
-    cutoff=time.time()-3600
-    for p in MUSIC_DIR.glob('*'):
-        try:
-            if p.is_file() and p.stat().st_mtime < cutoff: p.unlink()
-        except OSError: pass
+    cutoff=time.time()-1800
+    for directory in (MUSIC_DIR, MEDIA_DIR/'gifts'):
+        directory.mkdir(parents=True, exist_ok=True)
+        for p in directory.glob('*'):
+            try:
+                if p.is_file() and p.stat().st_mtime < cutoff: p.unlink()
+            except OSError: pass
 
 def _yt_options(cookie_file=None, player_clients=None):
     o={
@@ -172,6 +174,7 @@ def gift_url(path):
 
 def gift_card_url(gid, sender, receiver):
     """Create a personalized card from the supplied elegant template."""
+    _cleanup()
     base=public_base_url()
     if not base: raise RuntimeError('رابط الوسائط العام غير مضبوط. فعّل Public Domain للخدمة في Railway أو ضع PUBLIC_BASE_URL.')
     if Image is None:
