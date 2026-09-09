@@ -150,6 +150,8 @@ AUTH_METHOD = "1"
 
 # Keep these enabled for easy troubleshooting.
 DEBUG = os.getenv("DEBUG", "1") == "1"
+WS_IDLE_READ_TIMEOUT = float(os.getenv("WS_IDLE_READ_TIMEOUT", "5"))
+WS_KEEPALIVE_INTERVAL = float(os.getenv("WS_KEEPALIVE_INTERVAL", "10"))
 RAW_DIAGNOSTIC = os.getenv("RAW_DIAGNOSTIC", "1") == "1"
 ACK_ROOM_EVENTS = os.getenv("ACK_ROOM_EVENTS", "1") == "1"
 AUTO_HELP = os.getenv("AUTO_HELP", "1") == "1"
@@ -411,6 +413,7 @@ class RawWebSocket:
         self._recvbuf = bytearray()
         self.peer_ip = None
         self.permessage_deflate = False
+        self._send_lock = threading.Lock()
 
     def _connect_android_like(self):
         # Android's Y9/s resolves all addresses before creating the socket.
@@ -537,14 +540,20 @@ class RawWebSocket:
         else:
             hdr = bytes([0x82, 0x80 | 127]) + struct.pack('!Q', n)
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(hdr + mask + masked)
+        with self._send_lock:
+            if not self.sock:
+                raise ConnectionError("socket is not connected")
+            self.sock.sendall(hdr + mask + masked)
 
     def send_control(self, opcode, payload=b''):
         payload = bytes(payload); mask = os.urandom(4)
         if len(payload) > 125: raise ValueError('control frame too large')
         hdr = bytes([0x80 | opcode, 0x80 | len(payload)])
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(hdr + mask + masked)
+        with self._send_lock:
+            if not self.sock:
+                raise ConnectionError("socket is not connected")
+            self.sock.sendall(hdr + mask + masked)
 
     def recv(self):
         b1, b2 = self._recv_exact(2)
@@ -1309,7 +1318,7 @@ class TalkinBot:
                 return
         except Exception as e:
             self.log("[MEDIA] command failed:", repr(e))
-            self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. تم تسجيل الخطأ للإصلاح.")
+            self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. راجع سجل Railway لمعرفة السبب.")
             return
 
         # Master-only administrative commands.
@@ -1567,15 +1576,24 @@ class TalkinBot:
                         self.ws.connect()
                         self.log("[WS] CONNECTED:", url)
                         self.log("[WS] custom headers:", [x.split(":",1)[0] + ": <redacted>" if x.lower().startswith(("username:", "password:")) else x for x in header_lines])
+                        # Short reads allow keepalive while the room is silent.
+                        # Idle timeouts are never treated as disconnects.
+                        self.ws.sock.settimeout(max(1.0, WS_IDLE_READ_TIMEOUT))
+                        last_keepalive = time.monotonic()
                         self.bootstrap_after_connect()
 
                         while not self.stop_event.is_set():
                             try:
                                 kind, message = self.ws.recv()
                             except socket.timeout:
-                                # An idle room is normal. Do not reconnect just
-                                # because no WebSocket frame arrived during the
-                                # read timeout.
+                                # The room may be completely silent. Keep the SAME
+                                # WebSocket alive with a control ping; never reconnect
+                                # merely because no room message arrived.
+                                now = time.monotonic()
+                                if now - last_keepalive >= WS_KEEPALIVE_INTERVAL:
+                                    self.ws.send_control(0x9, b"janit-keepalive")
+                                    last_keepalive = now
+                                    self.log("[WS] keepalive ping sent (idle room)")
                                 continue
                             if kind == "binary":
                                 self.on_message(self.ws, message)

@@ -30,12 +30,21 @@ def public_base_url():
     manual = os.getenv('PUBLIC_BASE_URL','').strip().rstrip('/')
     if manual: return manual
     domain = os.getenv('RAILWAY_PUBLIC_DOMAIN','').strip().strip('/')
-    if domain: return 'https://' + domain
+    if domain:
+        if domain.startswith('http://') or domain.startswith('https://'):
+            return domain.rstrip('/')
+        return 'https://' + domain
+    # Railway may expose the public domain through RAILWAY_STATIC_URL in some deployments.
+    static = os.getenv('RAILWAY_STATIC_URL','').strip().rstrip('/')
+    if static: return static
     return ''
 
-def start_media_server(port=8080):
+def start_media_server(port=None):
+    # Railway routes HTTP traffic to the assigned PORT. Binding a fixed 8080
+    # makes generated music/gift URLs unreachable on many Railway services.
+    port = int(port or os.getenv('PORT','8080'))
     os.chdir(str(MEDIA_DIR.parent))
-    server = ThreadingHTTPServer(('0.0.0.0', int(port)), _Handler)
+    server = ThreadingHTTPServer(('0.0.0.0', port), _Handler)
     threading.Thread(target=server.serve_forever, name='media-server', daemon=True).start()
     print(f'[MEDIA] server listening on 0.0.0.0:{port}', flush=True)
     return server
