@@ -8,6 +8,11 @@ try:
 except Exception:
     yt_dlp = None
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:
+    Image = ImageDraw = ImageFont = None
+
 BASE_DIR = Path(__file__).resolve().parent
 MEDIA_DIR = BASE_DIR / 'media'
 MUSIC_DIR = MEDIA_DIR / 'music'
@@ -163,6 +168,36 @@ def gift_url(path):
     target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
     dst=target/(f'{Path(path).stem}_{uuid.uuid4().hex[:8]}{Path(path).suffix}')
     dst.write_bytes(Path(path).read_bytes())
+    return base + '/media/gifts/' + quote(dst.name)
+
+def gift_card_url(gid, sender, receiver):
+    """Create a personalized card from the supplied elegant template."""
+    base=public_base_url()
+    if not base: raise RuntimeError('رابط الوسائط العام غير مضبوط. فعّل Public Domain للخدمة في Railway أو ضع PUBLIC_BASE_URL.')
+    if Image is None:
+        return gift_url(gift_image(gid))
+    template=GIFT_DIR/'gift_template_elegant.png'
+    if not template.is_file():
+        return gift_url(gift_image(gid))
+    target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
+    dst=target/(f'gift_{int(gid):02d}_{uuid.uuid4().hex[:8]}.png')
+    image=Image.open(template).convert('RGBA')
+    draw=ImageDraw.Draw(image)
+    font_path=GIFT_DIR/'NotoSansArabic-SemiBold.ttf'
+    font_small=GIFT_DIR/'DejaVuSans.ttf'
+    try:
+        ar_font=ImageFont.truetype(str(font_path), 47)
+        en_font=ImageFont.truetype(str(font_small), 35)
+        title_font=ImageFont.truetype(str(font_path), 62)
+    except Exception:
+        ar_font=en_font=title_font=ImageFont.load_default()
+    cx=image.width//2
+    emoji,name=GIFTS.get(str(gid), ('🎁','هدية'))
+    draw.text((cx, 235), f'{emoji} {name}', font=title_font, fill='#4b241d', anchor='mm', stroke_width=1, stroke_fill='#f0c27b')
+    draw.text((cx, 430), f'المرسل / Sender: @{sender}', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    draw.text((cx, 515), f'المستقبل / Receiver: @{receiver}', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    draw.text((cx, 650), 'A special gift for you', font=en_font, fill='#6a3428', anchor='mm')
+    image.save(dst, format='PNG', optimize=True)
     return base + '/media/gifts/' + quote(dst.name)
 
 def gifts_catalog():

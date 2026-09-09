@@ -22,7 +22,7 @@ except Exception:
 from dotenv import load_dotenv
 
 load_dotenv()
-from media_music_gifts import search_download_youtube, music_url, gift_image, gift_url, gifts_catalog, start_media_server, GIFTS
+from media_music_gifts import search_download_youtube, music_url, gift_image, gift_url, gift_card_url, gifts_catalog, start_media_server, GIFTS
 
 # ============================================================
 # Talkin/ChatP protocol ported from the supplied Android APK.
@@ -1249,11 +1249,15 @@ class TalkinBot:
             self.send_room_media(room, "voice", url, f"▶️ {track['title']}", track["duration_ms"])
         except Exception as e:
             self.log("[MEDIA] music worker failed:", repr(e))
-            self.report_master_error("الأغاني والهدايا", e)
+            # Report privately first; this worker must never re-raise into the
+            # WebSocket event loop, otherwise one failed search could trigger
+            # a reconnect and make the bot appear to leave the room.
+            self.report_master_error("تشغيل الأغاني", e)
             try:
-                self.send_room_text(room, "❌ تعذر تنفيذ طلب الأغنية حالياً. جرّب اسم أغنية آخر بعد قليل.")
+                self.send_room_text(room, "❌ لم أجد الأغنية أو تعذر تشغيلها حالياً. جرّب كتابة اسم آخر.")
             except Exception as send_exc:
                 self.log("[MEDIA] failure notice failed:", repr(send_exc))
+            return
 
     def handle_room_event(self, result):
         event = result.get("room_event") or {}
@@ -1349,9 +1353,10 @@ class TalkinBot:
                 if not receiver:
                     self.send_room_text(room, "❌ استخدم: gv@رقم_الهدية@اسم_المستخدم")
                     return
-                path=gift_image(gid); url=gift_url(path); emoji,name=GIFTS[gid]
+                emoji,name=GIFTS[gid]
+                url=gift_card_url(gid, frm, receiver)
                 self.send_room_text(room, f"🎁 @{frm} أرسل {emoji} {name} إلى @{receiver}")
-                self.send_room_media(room, "image", url, f"{emoji} {name} | من @{frm} إلى @{receiver}")
+                self.send_room_media(room, "image", url, f"{emoji} {name} | المرسل / Sender: @{frm} | المستقبل / Receiver: @{receiver}")
                 return
         except Exception as e:
             self.log("[MEDIA] command failed:", repr(e))
