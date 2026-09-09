@@ -140,8 +140,12 @@ def search_download_youtube(query):
             for format_selector in _youtube_format_profiles():
               for attempt in range(max(1, attempts)):
                 try:
-                    opts=_yt_options(cookie, clients, format_selector); opts['skip_download']=True
-                    with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=False)
+                    # Extract and download in one yt-dlp transaction. Splitting
+                    # metadata extraction from download makes YouTube reload
+                    # the page and frequently returns "The page needs to be
+                    # reloaded" for the same video.
+                    opts=_yt_options(cookie, clients, format_selector)
+                    with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=True)
                     if info and info.get('entries'): info=next((e for e in info['entries'] if e), None)
                     if not info: raise RuntimeError('لم يتم العثور على نتيجة')
                     duration=float(info.get('duration') or 0)
@@ -150,16 +154,8 @@ def search_download_youtube(query):
                     title=str(info.get('title') or q)
                     artist=str(info.get('uploader') or info.get('channel') or 'YouTube')
                     direct=str(info.get('webpage_url') or url)
-                    opts=_yt_options(cookie, clients, format_selector); opts['outtmpl']=str(MUSIC_DIR/f'{vid}.%(ext)s')
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        # Do not call ydl.download([direct]) here. That makes
-                        # yt-dlp request the YouTube page a second time and
-                        # is the common cause of "The page needs to be
-                        # reloaded" after metadata extraction succeeded.
-                        if hasattr(ydl, 'process_ie_result'):
-                            ydl.process_ie_result(info, download=True)
-                        else:
-                            ydl.download([direct])
+                    # The one-pass extractor already downloaded the selected
+                    # entry using %(id)s.%(ext)s; do not request the URL again.
                     mp3=MUSIC_DIR/f'{vid}.mp3'
                     candidates=list(MUSIC_DIR.glob(f'{vid}.*'))
                     if not mp3.exists():

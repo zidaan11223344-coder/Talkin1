@@ -882,6 +882,24 @@ class TalkinBot:
         # APK's room_join sets room and explicitly sets intValue=0.
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
 
+    def leave_all_rooms(self):
+        """Leave all tracked rooms while keeping the WebSocket alive."""
+        rooms = sorted({r for r in self.known_rooms if r} | ({self.room} if self.room else set()))
+        errors = []
+        for room in rooms:
+            try:
+                self.send_query(encode_query("room_leave", room=room))
+                time.sleep(0.1)
+            except Exception as e:
+                errors.append(f"{room}: {e}")
+        self.known_rooms.clear()
+        self.room_users.clear()
+        self.last_joined_room = None
+        self.room = ""
+        if errors:
+            raise RuntimeError(" | ".join(errors))
+        return rooms
+
     def send_room_text(self, room: str, text: str):
         self.send_query(encode_query("room_message", type_="text", room=room, body=text))
 
@@ -1387,6 +1405,10 @@ class TalkinBot:
                         self.send_admin(room, target, "ban")
                     elif cmd in ("u@", "unban") and target:
                         self.send_admin(room, target, "member")
+                    elif cmd in ("leaveall", "exitall", "خروج", "غادر", "اخرج"):
+                        left = self.leave_all_rooms()
+                        self.send_private_text(BOT_MASTER, f"✅ خرجت من جميع الغرف ({len(left)}): {', '.join(left) or 'لا توجد غرف'}")
+                        return
                     elif cmd in ("دخول", "join", "ادخل", "enter") and target:
                         # Master can command the bot from private chat: "دخول اسم الغرفة".
                         # Joining is done on the existing WebSocket; no reconnect is needed.
@@ -1474,6 +1496,9 @@ class TalkinBot:
                                 self.send_private_text(BOT_MASTER, "❌ الاستخدام: invmsg نص الرسالة")
                         elif body.lower() in ("invmsg", "رسالةدعوة"):
                             self.send_private_text(BOT_MASTER, f"ℹ️ رسالة الدعوات الحالية:\n{self.invite_message_template}\n\nالاستخدام: invmsg نص الرسالة")
+                        elif body.lower() in ("leaveall", "exitall", "خروج", "غادر", "اخرج"):
+                            left = self.leave_all_rooms()
+                            self.send_private_text(BOT_MASTER, f"✅ خرجت من جميع الغرف ({len(left)}): {', '.join(left) or 'لا توجد غرف'}")
                         elif body.lower().startswith(("inv", "دعوات", "invite")):
                             parts = body.split()
                             target_room = parts[1] if len(parts) > 1 else ctx_room
