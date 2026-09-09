@@ -1,0 +1,130 @@
+import os, re, time, uuid, random, threading, mimetypes
+from pathlib import Path
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import quote
+
+try:
+    import yt_dlp
+except Exception:
+    yt_dlp = None
+
+BASE_DIR = Path(__file__).resolve().parent
+MEDIA_DIR = BASE_DIR / 'media'
+MUSIC_DIR = MEDIA_DIR / 'music'
+GIFT_DIR = BASE_DIR / 'assets'
+MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+GIFTS = {
+ '1':('🌹','وردة'), '2':('❤️','قلب'), '3':('💋','قبلة'), '4':('🧸','دب'),
+ '5':('🎂','كعكة'), '6':('🎆','ألعاب نارية'), '7':('⚡','برق'), '8':('👑','تاج'),
+ '9':('👸','أميرة'), '10':('🏎️','سيارة'), '11':('✈️','طائرة'), '12':('🐉','تنين'),
+ '13':('🚀','سفينة فضاء'), '14':('🏰','قصر')
+}
+
+class _Handler(SimpleHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass
+
+def public_base_url():
+    manual = os.getenv('PUBLIC_BASE_URL','').strip().rstrip('/')
+    if manual: return manual
+    domain = os.getenv('RAILWAY_PUBLIC_DOMAIN','').strip().strip('/')
+    if domain: return 'https://' + domain
+    return ''
+
+def start_media_server(port=8080):
+    os.chdir(str(MEDIA_DIR.parent))
+    server = ThreadingHTTPServer(('0.0.0.0', int(port)), _Handler)
+    threading.Thread(target=server.serve_forever, name='media-server', daemon=True).start()
+    print(f'[MEDIA] server listening on 0.0.0.0:{port}', flush=True)
+    return server
+
+def _cleanup():
+    cutoff=time.time()-3600
+    for p in MUSIC_DIR.glob('*'):
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff: p.unlink()
+        except OSError: pass
+
+def _yt_options(cookie_file=None):
+    o={
+      'quiet':True,'no_warnings':True,'noplaylist':True,'socket_timeout':35,
+      'retries':4,'fragment_retries':4,'cachedir':False,'overwrites':True,
+      'format':'bestaudio/best','http_headers':{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36'},
+      'outtmpl':str(MUSIC_DIR/'%(id)s.%(ext)s'),
+      'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'128'}],
+    }
+    if cookie_file and Path(cookie_file).is_file(): o['cookiefile']=cookie_file
+    clients=[x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','default,web_embedded').split(',') if x.strip()]
+    o['extractor_args']={'youtube':{'player_client':clients or ['default']}}
+    return o
+
+def _cookie_candidates():
+    out=[]
+    raw=os.getenv('YOUTUBE_COOKIES','').strip()
+    if raw:
+        p=Path('/tmp/youtube_cookies.txt'); p.write_text(raw, encoding='utf-8'); out.append(str(p))
+    for i in range(1,11):
+        raw=os.getenv(f'YOUTUBE_COOKIES_{i}','').strip()
+        if raw:
+            p=Path(f'/tmp/youtube_cookies_{i}.txt'); p.write_text(raw, encoding='utf-8'); out.append(str(p))
+    return out
+
+def search_download_youtube(query):
+    if yt_dlp is None: raise RuntimeError('yt-dlp غير مثبت')
+    q=str(query or '').strip()
+    if not q: raise RuntimeError('اكتب اسم الأغنية')
+    _cleanup()
+    url=q if re.match(r'https?://(?:www\.)?(?:youtube\.com|youtu\.be)/', q, re.I) else 'ytsearch1:' + q
+    errors=[]
+    cookies=_cookie_candidates() or [None]
+    for cookie in cookies:
+      try:
+        info=None
+        opts=_yt_options(cookie); opts['skip_download']=True
+        with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=False)
+        if info and info.get('entries'): info=next((e for e in info['entries'] if e), None)
+        if not info: raise RuntimeError('لم يتم العثور على نتيجة')
+        duration=float(info.get('duration') or 0)
+        if duration > 900: raise RuntimeError('الأغنية أطول من 15 دقيقة')
+        vid=str(info.get('id') or uuid.uuid4().hex)
+        title=str(info.get('title') or q)
+        artist=str(info.get('uploader') or info.get('channel') or 'YouTube')
+        direct=str(info.get('webpage_url') or url)
+        # Download using the same selected result URL.
+        opts=_yt_options(cookie); opts['outtmpl']=str(MUSIC_DIR/f'{vid}.%(ext)s')
+        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([direct])
+        mp3=MUSIC_DIR/f'{vid}.mp3'
+        candidates=list(MUSIC_DIR.glob(f'{vid}.*'))
+        if not mp3.exists():
+            candidates=[p for p in candidates if p.suffix.lower() in ('.mp3','.m4a','.webm','.opus')]
+            if not candidates: raise RuntimeError('فشل تنزيل الصوت')
+            mp3=candidates[0]
+        return {'title':title,'artist':artist,'duration_ms':int(duration*1000),'path':mp3,'source_url':direct}
+      except Exception as e: errors.append(str(e))
+    raise RuntimeError(' | '.join(errors[-3:]))
+
+def music_url(path):
+    base=public_base_url()
+    if not base: raise RuntimeError('Railway Public Domain غير مفعّل')
+    return base + '/media/music/' + quote(Path(path).name)
+
+def gift_image(gid):
+    patterns=[f'gift_{int(gid):02d}_*.png',f'gift_{int(gid):02d}_*.jpg',f'gift_{int(gid):02d}_*.jpeg']
+    files=[]
+    for pat in patterns: files += list(GIFT_DIR.glob(pat))
+    if not files: raise RuntimeError(f'لا توجد صورة للهدية رقم {gid}')
+    return random.choice(files)
+
+def gift_url(path):
+    base=public_base_url()
+    if not base: raise RuntimeError('Railway Public Domain غير مفعّل')
+    # copy image into served media/gifts so assets are not exposed directly
+    target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
+    dst=target/(f'{Path(path).stem}_{uuid.uuid4().hex[:8]}{Path(path).suffix}')
+    dst.write_bytes(Path(path).read_bytes())
+    return base + '/media/gifts/' + quote(dst.name)
+
+def gifts_catalog():
+    return '\n'.join(['🎁 الهدايا','━━━━━━━━━━━━',' '.join([f'{k}:{v[0]} {v[1]}' for k,v in GIFTS.items()]),'━━━━━━━━━━━━','الإرسال: gv@رقم_الهدية@اسم_المستخدم'])
