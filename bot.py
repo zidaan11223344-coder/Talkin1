@@ -1239,6 +1239,22 @@ class TalkinBot:
         )
         self.invite_thread.start()
 
+    def _run_music_command(self, room, frm, query):
+        """Download outside the WebSocket reader so slow YouTube requests cannot disconnect the bot."""
+        try:
+            self.send_room_text(room, "⏳ جاري تجهيز الأغنية…")
+            track = search_download_youtube(query)
+            url = music_url(track["path"])
+            self.send_room_text(room, f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{frm}\n🏠 الغرفة: {room}")
+            self.send_room_media(room, "voice", url, f"▶️ {track['title']}", track["duration_ms"])
+        except Exception as e:
+            self.log("[MEDIA] music worker failed:", repr(e))
+            self.report_master_error("الأغاني والهدايا", e)
+            try:
+                self.send_room_text(room, "❌ تعذر تنفيذ طلب الأغنية حالياً. جرّب اسم أغنية آخر بعد قليل.")
+            except Exception as send_exc:
+                self.log("[MEDIA] failure notice failed:", repr(send_exc))
+
     def handle_room_event(self, result):
         event = result.get("room_event") or {}
         event_type = str(event.get(1, ""))
@@ -1321,11 +1337,7 @@ class TalkinBot:
                 return
             if low.startswith("اغنية ") or low.startswith("أغنية ") or low.startswith("تشغيل ") or low.startswith("music "):
                 query = body.split(None, 1)[1].strip()
-                self.send_room_text(room, "⏳ جاري تجهيز الأغنية…")
-                track = search_download_youtube(query)
-                url = music_url(track["path"])
-                self.send_room_text(room, f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{frm}\n🏠 الغرفة: {room}")
-                self.send_room_media(room, "voice", url, f"▶️ {track['title']}", track["duration_ms"])
+                threading.Thread(target=self._run_music_command, args=(room, frm, query), name="music-download", daemon=True).start()
                 return
             if body.strip().lower().startswith("gv@"):
                 parts = body.strip().split("@")
@@ -1344,7 +1356,10 @@ class TalkinBot:
         except Exception as e:
             self.log("[MEDIA] command failed:", repr(e))
             self.report_master_error("الأغاني والهدايا", e)
-            self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. تم إرسال الخطأ الفعلي للماستر.")
+            try:
+                self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. تم إرسال الخطأ الفعلي للماستر.")
+            except Exception as send_exc:
+                self.log("[MEDIA] failure notice failed:", repr(send_exc))
             return
 
         # Master-only administrative commands.

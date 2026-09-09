@@ -34,14 +34,11 @@ def public_base_url():
         if domain.startswith('http://') or domain.startswith('https://'):
             return domain.rstrip('/')
         return 'https://' + domain
-    # Railway may expose the public domain through RAILWAY_STATIC_URL in some deployments.
     static = os.getenv('RAILWAY_STATIC_URL','').strip().rstrip('/')
     if static: return static
     return ''
 
 def start_media_server(port=None):
-    # Railway routes HTTP traffic to the assigned PORT. Binding a fixed 8080
-    # makes generated music/gift URLs unreachable on many Railway services.
     port = int(port or os.getenv('PORT','8080'))
     os.chdir(str(MEDIA_DIR.parent))
     server = ThreadingHTTPServer(('0.0.0.0', port), _Handler)
@@ -56,32 +53,29 @@ def _cleanup():
             if p.is_file() and p.stat().st_mtime < cutoff: p.unlink()
         except OSError: pass
 
-def _yt_options(cookie_file=None):
+def _yt_options(cookie_file=None, player_clients=None):
     o={
-      'quiet':True,'no_warnings':True,'noplaylist':True,'socket_timeout':35,
-      'retries':4,'fragment_retries':4,'cachedir':False,'overwrites':True,
-      'format':'bestaudio/best','http_headers':{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36'},
+      'quiet':True, 'no_warnings':True, 'noplaylist':True,
+      'socket_timeout':35, 'retries':6, 'fragment_retries':6,
+      'file_access_retries':3, 'extractor_retries':3,
+      'retry_sleep_functions': {'http': lambda n: min(2 ** n, 8), 'fragment': lambda n: min(2 ** n, 8)},
+      'cachedir':False, 'overwrites':True,
+      'format':'bestaudio/best',
+      'http_headers': {'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36'},
       'outtmpl':str(MUSIC_DIR/'%(id)s.%(ext)s'),
       'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'128'}],
     }
     if cookie_file and Path(cookie_file).is_file(): o['cookiefile']=cookie_file
-    clients=[x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','web_safari,web_embedded,default').split(',') if x.strip()]
-    o['extractor_args']={'youtube':{'player_client':clients or ['default']}}
+    clients = player_clients or [x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','web_safari,web_embedded,default').split(',') if x.strip()]
+    o['extractor_args'] = {'youtube': {'player_client': clients or ['default']}}
     return o
 
 def _cookie_candidates():
-    """جمع ملفات YouTube cookies بدون طباعة محتواها.
-    يدعم: ملف مباشر عبر YOUTUBE_COOKIES_FILE، أو محتوى Netscape عبر
-    YOUTUBE_COOKIES و YOUTUBE_COOKIES_1..10.
-    """
     out=[]
     file_env=os.getenv('YOUTUBE_COOKIES_FILE','').strip()
-    if file_env and Path(file_env).is_file():
-        out.append(file_env)
-    # اسم شائع داخل المشروع؛ يسمح برفع cookies.txt مع ZIP/GitHub إن أراد المستخدم.
+    if file_env and Path(file_env).is_file(): out.append(file_env)
     for candidate in (BASE_DIR/'youtube_cookies.txt', BASE_DIR/'cookies.txt'):
-        if candidate.is_file() and str(candidate) not in out:
-            out.append(str(candidate))
+        if candidate.is_file() and str(candidate) not in out: out.append(str(candidate))
     raw=os.getenv('YOUTUBE_COOKIES','').strip()
     if raw:
         p=Path('/tmp/youtube_cookies.txt'); p.write_text(raw, encoding='utf-8'); out.append(str(p))
@@ -93,19 +87,24 @@ def _cookie_candidates():
 
 def youtube_cookie_status():
     files=_cookie_candidates()
-    if not files:
-        return False, 'لا يوجد ملف Cookies مضبوط.'
+    if not files: return False, 'لا يوجد ملف Cookies مضبوط.'
     for f in files:
         try:
             rows=0
             for line in Path(f).read_text(encoding='utf-8', errors='ignore').splitlines():
-                if line and not line.startswith('#') and len(line.split('\t')) >= 7:
-                    rows += 1
-            if rows:
-                return True, f'Cookies موجودة: {rows} سجل.'
-        except Exception:
-            pass
+                if line and not line.startswith('#') and len(line.split('\t')) >= 7: rows += 1
+            if rows: return True, f'Cookies موجودة: {rows} سجل.'
+        except Exception: pass
     return False, 'ملف Cookies موجود لكنه ليس بصيغة Netscape الصحيحة.'
+
+def _youtube_client_profiles():
+    """Return ordered profiles; YouTube occasionally invalidates one client temporarily."""
+    configured = [x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','web_safari,web_embedded,default').split(',') if x.strip()]
+    profiles = [configured or ['default'], ['web_safari'], ['web_embedded'], ['android'], ['ios'], ['default']]
+    unique=[]
+    for profile in profiles:
+        if profile not in unique: unique.append(profile)
+    return unique
 
 def search_download_youtube(query):
     if yt_dlp is None: raise RuntimeError('yt-dlp غير مثبت')
@@ -115,31 +114,36 @@ def search_download_youtube(query):
     url=q if re.match(r'https?://(?:www\.)?(?:youtube\.com|youtu\.be)/', q, re.I) else 'ytsearch1:' + q
     errors=[]
     cookies=_cookie_candidates() or [None]
+    # A transient "page needs to be reloaded" must not fail the command immediately.
+    attempts=int(os.getenv('YOUTUBE_ATTEMPTS','2'))
     for cookie in cookies:
-      try:
-        info=None
-        opts=_yt_options(cookie); opts['skip_download']=True
-        with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=False)
-        if info and info.get('entries'): info=next((e for e in info['entries'] if e), None)
-        if not info: raise RuntimeError('لم يتم العثور على نتيجة')
-        duration=float(info.get('duration') or 0)
-        if duration > 900: raise RuntimeError('الأغنية أطول من 15 دقيقة')
-        vid=str(info.get('id') or uuid.uuid4().hex)
-        title=str(info.get('title') or q)
-        artist=str(info.get('uploader') or info.get('channel') or 'YouTube')
-        direct=str(info.get('webpage_url') or url)
-        # Download using the same selected result URL.
-        opts=_yt_options(cookie); opts['outtmpl']=str(MUSIC_DIR/f'{vid}.%(ext)s')
-        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([direct])
-        mp3=MUSIC_DIR/f'{vid}.mp3'
-        candidates=list(MUSIC_DIR.glob(f'{vid}.*'))
-        if not mp3.exists():
-            candidates=[p for p in candidates if p.suffix.lower() in ('.mp3','.m4a','.webm','.opus')]
-            if not candidates: raise RuntimeError('فشل تنزيل الصوت')
-            mp3=candidates[0]
-        return {'title':title,'artist':artist,'duration_ms':int(duration*1000),'path':mp3,'source_url':direct}
-      except Exception as e: errors.append(str(e))
-    raise RuntimeError(' | '.join(errors[-3:]))
+        for clients in _youtube_client_profiles():
+            for attempt in range(max(1, attempts)):
+                try:
+                    opts=_yt_options(cookie, clients); opts['skip_download']=True
+                    with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=False)
+                    if info and info.get('entries'): info=next((e for e in info['entries'] if e), None)
+                    if not info: raise RuntimeError('لم يتم العثور على نتيجة')
+                    duration=float(info.get('duration') or 0)
+                    if duration > 900: raise RuntimeError('الأغنية أطول من 15 دقيقة')
+                    vid=str(info.get('id') or uuid.uuid4().hex)
+                    title=str(info.get('title') or q)
+                    artist=str(info.get('uploader') or info.get('channel') or 'YouTube')
+                    direct=str(info.get('webpage_url') or url)
+                    opts=_yt_options(cookie, clients); opts['outtmpl']=str(MUSIC_DIR/f'{vid}.%(ext)s')
+                    with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([direct])
+                    mp3=MUSIC_DIR/f'{vid}.mp3'
+                    candidates=list(MUSIC_DIR.glob(f'{vid}.*'))
+                    if not mp3.exists():
+                        candidates=[p for p in candidates if p.suffix.lower() in ('.mp3','.m4a','.webm','.opus')]
+                        if not candidates: raise RuntimeError('فشل تنزيل الصوت')
+                        mp3=candidates[0]
+                    return {'title':title,'artist':artist,'duration_ms':int(duration*1000),'path':mp3,'source_url':direct}
+                except Exception as e:
+                    message=str(e).strip() or type(e).__name__
+                    errors.append(f'{clients[0]}#{attempt+1}: {message}')
+                    if attempt + 1 < max(1, attempts): time.sleep(min(2 + attempt * 2, 6))
+    raise RuntimeError(' | '.join(errors[-3:]) or 'تعذر تنزيل الأغنية')
 
 def music_url(path):
     base=public_base_url()
@@ -156,7 +160,6 @@ def gift_image(gid):
 def gift_url(path):
     base=public_base_url()
     if not base: raise RuntimeError('رابط الوسائط العام غير مضبوط. فعّل Public Domain للخدمة في Railway أو ضع PUBLIC_BASE_URL.')
-    # copy image into served media/gifts so assets are not exposed directly
     target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
     dst=target/(f'{Path(path).stem}_{uuid.uuid4().hex[:8]}{Path(path).suffix}')
     dst.write_bytes(Path(path).read_bytes())
