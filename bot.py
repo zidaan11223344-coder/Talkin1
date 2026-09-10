@@ -22,7 +22,9 @@ except Exception:
 from dotenv import load_dotenv
 
 load_dotenv()
-from media_music_gifts import search_download_youtube, music_url, gift_image, gift_url, gift_card_url, gifts_catalog, start_media_server, GIFTS
+from media_music_gifts import (search_download_youtube, music_url, gift_image, gift_url, gift_card_url,
+                               gift_card, gifts_catalog, start_media_server, url_is_reachable, GIFTS)
+from commands_help import menu_text, help_index, resolve as resolve_help
 
 # ============================================================
 # Talkin/ChatP protocol ported from the supplied Android APK.
@@ -725,7 +727,7 @@ class TalkinBot:
         self.invite_sent = set()
         self.invite_thread = None
         self.invite_lock = threading.Lock()
-        self.invite_message_template = "تم العثور على شريكك في غرفة {room}\nYour partner was found in room {room}"
+        self.invite_message_template = "{sender} يدعوك للغرفة {room}"
         self.known_rooms = set()
         # Persistent points ledger. The configured master has unlimited points
         # and is never stored in the ledger. All other balances are integers.
@@ -882,24 +884,6 @@ class TalkinBot:
         # APK's room_join sets room and explicitly sets intValue=0.
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
 
-    def leave_all_rooms(self):
-        """Leave all tracked rooms while keeping the WebSocket alive."""
-        rooms = sorted({r for r in self.known_rooms if r} | ({self.room} if self.room else set()))
-        errors = []
-        for room in rooms:
-            try:
-                self.send_query(encode_query("room_leave", room=room))
-                time.sleep(0.1)
-            except Exception as e:
-                errors.append(f"{room}: {e}")
-        self.known_rooms.clear()
-        self.room_users.clear()
-        self.last_joined_room = None
-        self.room = ""
-        if errors:
-            raise RuntimeError(" | ".join(errors))
-        return rooms
-
     def send_room_text(self, room: str, text: str):
         self.send_query(encode_query("room_message", type_="text", room=room, body=text))
 
@@ -933,6 +917,15 @@ class TalkinBot:
         if not username or username == BOT_ID:
             return False
         self.send_query(encode_query("chat_message", type_="text", to=username, body=text))
+        return True
+
+    def send_private_media(self, username: str, media_type: str, url: str, text: str = "", duration_ms: int = 0):
+        """Send media (image/voice) in a private chat, same fields as room media."""
+        username = str(username or "").strip()
+        if not username or username == BOT_ID:
+            return False
+        self.send_query(encode_query("chat_message", type_=media_type, to=username,
+                                     body=text, url=url, length=str(int(duration_ms or 0))))
         return True
 
     def report_master_error(self, source: str, exc: Exception):
@@ -1260,6 +1253,7 @@ class TalkinBot:
     def _run_music_command(self, room, frm, query):
         """Download outside the WebSocket reader so slow YouTube requests cannot disconnect the bot."""
         try:
+            self.send_room_text(room, "⏳ جاري تجهيز الأغنية…")
             track = search_download_youtube(query)
             url = music_url(track["path"])
             self.send_room_text(room, f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{frm}\n🏠 الغرفة: {room}")
@@ -1290,8 +1284,7 @@ class TalkinBot:
         role = str(event.get(8, "") or "").strip().lower()
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
-        if event_type != "text":
-            self.log(f"[EVENT] type={event_type} user={username!r} room={room} role={role!r} count={count!r} reconnected={reconnected}")
+        self.log(f"[EVENT] type={event_type} from={frm} user={username!r} room={room} role={role!r} count={count!r} body={body!r}")
 
         # Keep the live membership state in sync.  The APK itself uses these
         # exact event names and RoomEvent fields.
@@ -1326,14 +1319,94 @@ class TalkinBot:
             return
 
         # Keep a small per-room message history for diagnostics.
+        self.last_messages[room].append((frm, body, event_id))
+        self.last_messages[room] = self.last_messages[room][-50:]
 
-        # Points commands.
-        # sa@اسم_المستخدم@كمية
-        raw_body = body.strip()
-        if raw_body.casefold().startswith("sa@"):
+        self.handle_command(body, frm, room=room, private=False)
+
+    # --------------------- unified command router ------------------------
+    # Every reply goes back to the SAME channel the command arrived on:
+    # a room command answers in that room, a private command answers privately.
+
+    def reply_text(self, ctx, text):
+        try:
+            if ctx["private"]:
+                self.send_private_text(ctx["frm"], text)
+            else:
+                self.send_room_text(ctx["room"], text)
+        except Exception as e:
+            self.log("[REPLY] text failed:", repr(e))
+
+    def reply_media(self, ctx, media_type, url, text="", duration_ms=0):
+        try:
+            if ctx["private"]:
+                self.send_private_media(ctx["frm"], media_type, url, text, duration_ms)
+            else:
+                self.send_room_media(ctx["room"], media_type, url, text, duration_ms)
+        except Exception as e:
+            self.log("[REPLY] media failed:", repr(e))
+
+    def _run_music_command_ctx(self, ctx, query):
+        try:
+            self.reply_text(ctx, "⏳ جاري تجهيز الأغنية…")
+            track = search_download_youtube(query)
+            url = music_url(track["path"])
+            self.reply_text(
+                ctx,
+                f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{ctx['frm']}"
+            )
+            self.reply_media(ctx, "voice", url, f"▶️ {track['title']}", track["duration_ms"])
+        except Exception as e:
+            self.log("[MEDIA] music worker failed:", repr(e))
+            self.report_master_error("تشغيل الأغاني", e)
+            self.reply_text(ctx, "❌ لم أتمكن من تشغيل هذه الأغنية. جرّب اسماً آخر أو رابط يوتيوب مباشر.")
+
+    def _run_gift_command(self, ctx, gid, receiver):
+        emoji, name = GIFTS[gid]
+        sender = ctx["frm"]
+        try:
+            url = gift_card(gid, sender, receiver)
+        except Exception as e:
+            self.log("[GIFT] image failed:", repr(e))
+            self.report_master_error("صور الهدايا", e)
+            self.reply_text(ctx, f"🎁 @{sender} أرسل {emoji} {name} إلى @{receiver}\n⚠️ تعذر تجهيز صورة الهدية.")
+            return
+        caption = f"🎁 {emoji} {name}\n👤 المرسل / Sender: @{sender}\n🎯 المستقبل / Receiver: @{receiver}"
+        # Send the picture first so the gift never appears without its image.
+        self.reply_media(ctx, "image", url, caption)
+        self.reply_text(ctx, caption)
+        if not url_is_reachable(url):
+            self.log("[GIFT] media url not reachable:", url)
+            try:
+                self.send_private_text(
+                    BOT_MASTER,
+                    "⚠️ رابط صورة الهدية غير قابل للفتح من الإنترنت:\n" + url +
+                    "\nتأكد من تفعيل Public Domain في Railway أو ضبط PUBLIC_BASE_URL."
+                )
+            except Exception:
+                pass
+
+    def handle_command(self, body, frm, room="", private=False):
+        raw_body = str(body or "").strip()
+        if not raw_body or not frm or frm == BOT_ID:
+            return
+        ctx = {"frm": frm, "room": (room or self.room or "").strip(), "private": bool(private)}
+        low = raw_body.casefold()
+
+        # ---------------- command menus ----------------
+        if low in ("help", "الاوامر", "الأوامر", "مساعدة", "!help", "اوامر", "أوامر"):
+            self.reply_text(ctx, help_index())
+            return
+        menu = resolve_help(raw_body)
+        if menu:
+            self.reply_text(ctx, menu_text(menu))
+            return
+
+        # ---------------- points ----------------
+        if low.startswith("sa@"):
             parts_sa = raw_body.split("@")
             if len(parts_sa) != 3 or not parts_sa[1].strip() or not parts_sa[2].strip():
-                self.send_room_text(room, "❌ الاستخدام الصحيح: sa@اسم_المستخدم@كمية_النقاط")
+                self.reply_text(ctx, "❌ الاستخدام الصحيح: sa@اسم_المستخدم@كمية_النقاط")
                 return
             receiver = parts_sa[1].strip().lstrip("@")
             try:
@@ -1341,125 +1414,97 @@ class TalkinBot:
                 sender_balance, receiver_balance = self.transfer_points(frm, receiver, amount)
                 sender_after = "♾️ غير محدودة" if sender_balance is None else f"{sender_balance:,}"
                 receiver_after = "♾️ غير محدودة" if receiver_balance is None else f"{receiver_balance:,}"
-                self.send_room_text(room, f"✅ تم تحويل {amount:,} نقطة من @{frm} إلى @{receiver}\n💰 رصيد المرسل: {sender_after}\n💰 رصيد المستلم: {receiver_after}")
+                self.reply_text(ctx, f"✅ تم تحويل {amount:,} نقطة من @{frm} إلى @{receiver}\n💰 رصيد المرسل: {sender_after}\n💰 رصيد المستلم: {receiver_after}")
             except Exception as e:
-                self.send_room_text(room, f"❌ تعذر تحويل النقاط: {e}")
+                self.reply_text(ctx, f"❌ تعذر تحويل النقاط: {e}")
             return
-        if raw_body.casefold() in ("نقاطي", "رصيدي", "points", "balance"):
-            self.send_room_text(room, self.points_text(frm))
+        if low in ("نقاطي", "رصيدي", "points", "balance"):
+            self.reply_text(ctx, self.points_text(frm))
             return
 
-        # Music and gifts: available to room members.
-        command_body = body.strip().replace("🔛", "").strip()
-        low = command_body.lower()
+        # ---------------- gifts and music ----------------
         try:
-            if low in ("الهدايا", "gifts", "gv"):
-                self.send_room_text(room, gifts_catalog())
+            if low in ("gv", "الهدايا", "gifts"):
+                self.reply_text(ctx, gifts_catalog())
                 return
-            if low.startswith(("اغنية ", "أغنية ", "تشغيل ", "music ")):
-                query = command_body.split(None, 1)[1].strip()
-                if not query:
-                    self.send_room_text(room, "❌ اكتب اسم الأغنية بعد الأمر.")
-                    return
-                self.send_room_text(room, "⏳ جاري البحث عن الأغنية…")
-                threading.Thread(target=self._run_music_command, args=(room, frm, query), name="music-download", daemon=True).start()
-                return
-            if body.strip().lower().startswith("gv@"):
-                parts = body.strip().split("@")
-                gid = parts[1].strip() if len(parts)>1 else ""
-                receiver = parts[2].strip().lstrip("@") if len(parts)>2 else ""
+            if low.startswith("gv@"):
+                parts = raw_body.split("@")
+                gid = parts[1].strip() if len(parts) > 1 else ""
+                receiver = parts[2].strip().lstrip("@") if len(parts) > 2 else ""
                 if gid not in GIFTS:
-                    self.send_room_text(room, "❌ رقم الهدية غير صحيح. أرسل gv لرؤية الهدايا.")
+                    self.reply_text(ctx, "❌ رقم الهدية غير صحيح. أرسل gv لرؤية الهدايا.")
                     return
                 if not receiver:
-                    self.send_room_text(room, "❌ استخدم: gv@رقم_الهدية@اسم_المستخدم")
+                    self.reply_text(ctx, "❌ استخدم: gv@رقم_الهدية@اسم_المستخدم")
                     return
-                emoji,name=GIFTS[gid]
-                url=gift_card_url(gid, frm, receiver)
-                self.send_room_text(room, f"🎁 @{frm} أرسل {emoji} {name} إلى @{receiver}")
-                self.send_room_media(room, "image", url, f"{emoji} {name} | المرسل / Sender: @{frm} | المستقبل / Receiver: @{receiver}")
+                threading.Thread(target=self._run_gift_command, args=(ctx, gid, receiver),
+                                 name="gift-send", daemon=True).start()
+                return
+            if low.startswith(("اغنية ", "أغنية ", "تشغيل ", "music ")):
+                query = raw_body.split(None, 1)[1].strip()
+                threading.Thread(target=self._run_music_command_ctx, args=(ctx, query),
+                                 name="music-download", daemon=True).start()
                 return
         except Exception as e:
             self.log("[MEDIA] command failed:", repr(e))
             self.report_master_error("الأغاني والهدايا", e)
-            try:
-                self.send_room_text(room, "❌ تعذر تنفيذ الطلب حالياً. تم إرسال الخطأ الفعلي للماستر.")
-            except Exception as send_exc:
-                self.log("[MEDIA] failure notice failed:", repr(send_exc))
+            self.reply_text(ctx, "❌ تعذر تنفيذ الطلب حالياً. تم إرسال الخطأ الفعلي للماستر.")
             return
 
-        # Master-only administrative commands.
+        # ---------------- master-only administration ----------------
         if BOT_MASTER and frm == BOT_MASTER:
-            parts = body.strip().split()
-            if parts:
-                cmd = parts[0].lower()
-                target = parts[1].lstrip("@").strip() if len(parts) >= 2 else ""
-                try:
-                    if cmd in ("a@", "admin") and target:
-                        self.send_admin(room, target, "admin")
-                    elif cmd in ("o@", "owner") and target:
-                        self.send_admin(room, target, "owner")
-                    elif cmd in ("k@", "kick") and target:
-                        self.send_admin(room, target, "kick")
-                    elif cmd in ("b@", "ban") and target:
-                        self.send_admin(room, target, "ban")
-                    elif cmd in ("u@", "unban") and target:
-                        self.send_admin(room, target, "member")
-                    elif cmd in ("leaveall", "exitall", "خروج", "غادر", "اخرج"):
-                        left = self.leave_all_rooms()
-                        self.send_private_text(BOT_MASTER, f"✅ خرجت من جميع الغرف ({len(left)}): {', '.join(left) or 'لا توجد غرف'}")
-                        return
-                    elif cmd in ("دخول", "join", "ادخل", "enter") and target:
-                        # Master can command the bot from private chat: "دخول اسم الغرفة".
-                        # Joining is done on the existing WebSocket; no reconnect is needed.
-                        # Keep every previously joined room. room_join is sent
-                        # for the new room without replacing the current room.
-                        self.join_room(target)
-                        self.known_rooms.add(target)
-                        self.send_private_text(BOT_MASTER, f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}")
-                    elif cmd in ("invmsg", "رسالةدعوة"):
-                        template = body.split(None, 1)[1].strip() if len(parts) >= 2 else "{sender} يدعوك للغرفة {room}"
-                        self.invite_message_template = template
-                        self.send_private_text(BOT_MASTER, f"✅ تم تغيير نص الدعوة إلى: {template}")
-                    elif cmd in ("inv", "دعوات", "invite"):
-                        # In a room: `inv` always uses THIS room's name in the invitation.
-                        # From private master chat: `inv اسم_الغرفة` targets that explicit room.
-                        target_room = target if target else room
-                        if target_room and target_room != BOT_MASTER:
-                            self.request_occupants(target_room)
-                            self.send_private_text(BOT_MASTER, f"📨 بدأت دعوات جميع الغرف النشطة. اسم الدعوة: {target_room}")
-                    elif cmd in ("say", "قل") and len(parts) >= 2:
-                        self.send_room_text(room, body.split(None, 1)[1])
-                    elif cmd in ("help", "مساعدة") and AUTO_HELP:
-                        self.send_room_text(room, "أوامر البوت: k@ اسم للطرد، b@ اسم للحظر، a@ اسم مشرف، o@ اسم مالك، inv لدعوة مستخدمي الغرفة، say النص")
-                    else:
-                        return
-                    self.log("[ADMIN/MASTER]", cmd, target)
-                    if cmd in ("k@", "kick", "b@", "ban") and target:
-                        try:
-                            action_ar = "الطرد" if cmd in ("k@", "kick") else "الحظر"
-                            self.send_private_text(BOT_MASTER, f"✅ تم إرسال أمر {action_ar} الفعلي إلى @{target} في الغرفة {room}.")
-                        except Exception as e2:
-                            self.log("[ADMIN] confirmation failed:", repr(e2))
-                except Exception as e:
-                    self.log("[ADMIN] failed:", e)
+            parts = raw_body.split()
+            if not parts:
+                return
+            cmd = parts[0].lower()
+            target = parts[1].lstrip("@").strip() if len(parts) >= 2 else ""
+            admin_room = ctx["room"] if not ctx["private"] else (self.last_joined_room or self.room)
+            try:
+                if cmd in ("a@", "admin") and target:
+                    self.send_admin(admin_room, target, "admin")
+                elif cmd in ("o@", "owner") and target:
+                    self.send_admin(admin_room, target, "owner")
+                elif cmd in ("k@", "kick") and target:
+                    self.send_admin(admin_room, target, "kick")
+                elif cmd in ("b@", "ban") and target:
+                    self.send_admin(admin_room, target, "ban")
+                elif cmd in ("u@", "unban") and target:
+                    self.send_admin(admin_room, target, "member")
+                elif cmd in ("دخول", "join", "ادخل", "enter") and target:
+                    self.join_room(target)
+                    self.known_rooms.add(target)
+                    self.reply_text(ctx, f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}")
+                elif cmd in ("invmsg", "رسالةدعوة"):
+                    template = raw_body.split(None, 1)[1].strip() if len(parts) >= 2 else "{sender} يدعوك للغرفة {room}"
+                    self.invite_message_template = template
+                    self.reply_text(ctx, f"✅ تم تغيير نص الدعوة إلى: {template}")
+                elif cmd in ("inv", "دعوات", "invite"):
+                    target_room = target or admin_room
+                    if target_room and target_room != BOT_MASTER:
+                        self.request_occupants(target_room)
+                        self.reply_text(ctx, f"📨 بدأت دعوات جميع الغرف النشطة. اسم الدعوة: {target_room}")
+                elif cmd in ("say", "قل") and len(parts) >= 2:
+                    self.send_room_text(admin_room, raw_body.split(None, 1)[1])
+                else:
+                    return
+                self.log("[ADMIN/MASTER]", cmd, target)
+                if cmd in ("k@", "kick", "b@", "ban") and target:
+                    action_ar = "الطرد" if cmd in ("k@", "kick") else "الحظر"
+                    self.reply_text(ctx, f"✅ تم إرسال أمر {action_ar} إلى @{target} في الغرفة {admin_room}.")
+            except Exception as e:
+                self.log("[ADMIN] failed:", repr(e))
+                self.reply_text(ctx, f"❌ تعذر تنفيذ الأمر: {e}")
             return
 
-        # Optional automatic word filter. It uses the same room ban operation
-        # already implemented for manual `b@` commands. Enable explicitly in .env.
-        if AUTO_BAN_WORDS and self.banned_words:
-            low = body.casefold()
+        # ---------------- optional word filter ----------------
+        if AUTO_BAN_WORDS and self.banned_words and not ctx["private"]:
             hit = next((w for w in self.banned_words if w.casefold() in low), None)
             if hit:
                 try:
-                    self.send_admin(room, frm, "ban")
+                    self.send_admin(ctx["room"], frm, "ban")
                     self.log("[WORD-FILTER] banned", frm, "word=", hit)
                 except Exception as e:
                     self.log("[WORD-FILTER] failed:", repr(e))
-                return
-
-        if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
-            self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، inv لدعوة مستخدمي الغرفة")
 
     def on_message(self, ws, message):
         try:
@@ -1479,37 +1524,14 @@ class TalkinBot:
                 self.log("[ROOM_ADMIN]", result["room_admin"])
             if result.get("chat_message"):
                 self.log("[CHAT_MESSAGE]", result["chat_message"])
-                # Private master commands are also accepted as ChatMessage frames.
                 cm = result["chat_message"]
                 try:
+                    cm_type = str(cm.get(2, "") or "").strip()
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
-                    if BOT_MASTER and frm == BOT_MASTER and body:
-                        # Reuse room command handling with the command-context room.
-                        ctx_room = self.room
-                        if body.lower().startswith(("invmsg ", "رسالةدعوة ")):
-                            template = body.split(None, 1)[1].strip()
-                            if template:
-                                self.invite_message_template = template
-                                self.send_private_text(BOT_MASTER, f"✅ تم تغيير رسالة الدعوات إلى:\n{template}")
-                            else:
-                                self.send_private_text(BOT_MASTER, "❌ الاستخدام: invmsg نص الرسالة")
-                        elif body.lower() in ("invmsg", "رسالةدعوة"):
-                            self.send_private_text(BOT_MASTER, f"ℹ️ رسالة الدعوات الحالية:\n{self.invite_message_template}\n\nالاستخدام: invmsg نص الرسالة")
-                        elif body.lower() in ("leaveall", "exitall", "خروج", "غادر", "اخرج"):
-                            left = self.leave_all_rooms()
-                            self.send_private_text(BOT_MASTER, f"✅ خرجت من جميع الغرف ({len(left)}): {', '.join(left) or 'لا توجد غرف'}")
-                        elif body.lower().startswith(("inv", "دعوات", "invite")):
-                            parts = body.split()
-                            target_room = parts[1] if len(parts) > 1 else ctx_room
-                            self.request_occupants(target_room)
-                        elif body.lower().startswith(("دخول ", "join ", "ادخل ", "enter ")):
-                            parts = body.split(None, 1)
-                            if len(parts) == 2 and parts[1].strip():
-                                target_room = parts[1].strip()
-                                self.join_room(target_room)
-                                self.known_rooms.add(target_room)
-                                self.send_private_text(BOT_MASTER, f"✅ دخلت الغرفة: {target_room} | الغرف الحالية: {len(self.known_rooms)}")
+                    if body and frm and frm != BOT_ID and cm_type in ("", "text"):
+                        # A command sent privately is answered privately.
+                        self.handle_command(body, frm, room=self.room, private=True)
                 except Exception as e:
                     self.log("[CHAT_MESSAGE] private command handling failed:", repr(e))
             if result.get("type") or result.get("value"):

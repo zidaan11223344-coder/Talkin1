@@ -28,8 +28,20 @@ GIFTS = {
 }
 
 class _Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *a, **kw):
+        # Always serve from the project root so /media/... resolves even if the
+        # bot changes its working directory later.
+        kw['directory'] = str(BASE_DIR)
+        super().__init__(*a, **kw)
+
     def log_message(self, fmt, *args):
         pass
+
+    def end_headers(self):
+        # Chat clients fetch media from another origin.
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'public, max-age=3600')
+        super().end_headers()
 
 def public_base_url():
     manual = os.getenv('PUBLIC_BASE_URL','').strip().rstrip('/')
@@ -45,37 +57,32 @@ def public_base_url():
 
 def start_media_server(port=None):
     port = int(port or os.getenv('PORT','8080'))
-    os.chdir(str(MEDIA_DIR.parent))
     server = ThreadingHTTPServer(('0.0.0.0', port), _Handler)
     threading.Thread(target=server.serve_forever, name='media-server', daemon=True).start()
     print(f'[MEDIA] server listening on 0.0.0.0:{port}', flush=True)
     return server
 
 def _cleanup():
-    cutoff=time.time()-1800
-    for directory in (MUSIC_DIR, MEDIA_DIR/'gifts'):
-        directory.mkdir(parents=True, exist_ok=True)
-        for p in directory.glob('*'):
-            try:
-                if p.is_file() and p.stat().st_mtime < cutoff: p.unlink()
-            except OSError: pass
+    cutoff=time.time()-3600
+    for p in MUSIC_DIR.glob('*'):
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff: p.unlink()
+        except OSError: pass
 
-def _yt_options(cookie_file=None, player_clients=None, format_selector=None):
+def _yt_options(cookie_file=None, player_clients=None):
     o={
       'quiet':True, 'no_warnings':True, 'noplaylist':True,
       'socket_timeout':35, 'retries':6, 'fragment_retries':6,
       'file_access_retries':3, 'extractor_retries':3,
       'retry_sleep_functions': {'http': lambda n: min(2 ** n, 8), 'fragment': lambda n: min(2 ** n, 8)},
       'cachedir':False, 'overwrites':True,
-      # YouTube may expose different formats per player client. The selector
-      # is overridden per attempt with a fallback chain.
-      'format': format_selector or 'bestaudio/best/best[ext=mp4]/best[ext=webm]/best',
+      'format':'bestaudio/best',
       'http_headers': {'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36'},
       'outtmpl':str(MUSIC_DIR/'%(id)s.%(ext)s'),
       'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'128'}],
     }
     if cookie_file and Path(cookie_file).is_file(): o['cookiefile']=cookie_file
-    clients = player_clients or [x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','web_safari,web_embedded,default').split(',') if x.strip()]
+    clients = player_clients or [x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','tv,web_safari,mweb,web_embedded,default').split(',') if x.strip()]
     o['extractor_args'] = {'youtube': {'player_client': clients or ['default']}}
     return o
 
@@ -108,22 +115,12 @@ def youtube_cookie_status():
 
 def _youtube_client_profiles():
     """Return ordered profiles; YouTube occasionally invalidates one client temporarily."""
-    configured = [x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','web_safari,web_embedded,default').split(',') if x.strip()]
-    profiles = [configured or ['default'], ['web_safari'], ['web_embedded'], ['android'], ['ios'], ['default']]
+    configured = [x.strip() for x in os.getenv('YOUTUBE_PLAYER_CLIENTS','tv,web_safari,mweb,web_embedded,default').split(',') if x.strip()]
+    profiles = [configured or ['default'], ['tv'], ['mweb'], ['web_safari'], ['web_embedded'], ['android_vr'], ['ios'], ['android'], ['default']]
     unique=[]
     for profile in profiles:
         if profile not in unique: unique.append(profile)
     return unique
-
-def _youtube_format_profiles():
-    """Fallback selectors for videos whose preferred audio format is absent."""
-    configured = os.getenv('YOUTUBE_FORMATS','').strip()
-    profiles = [x.strip() for x in configured.split('|') if x.strip()] if configured else [
-        'bestaudio/best/best[ext=mp4]/best[ext=webm]/best',
-        'best[ext=m4a]/best[ext=webm]/best[ext=mp4]/best',
-        'worstaudio/worst/best',
-    ]
-    return list(dict.fromkeys(profiles))
 
 def search_download_youtube(query):
     if yt_dlp is None: raise RuntimeError('yt-dlp غير مثبت')
@@ -134,18 +131,13 @@ def search_download_youtube(query):
     errors=[]
     cookies=_cookie_candidates() or [None]
     # A transient "page needs to be reloaded" must not fail the command immediately.
-    attempts=int(os.getenv('YOUTUBE_ATTEMPTS','2'))
+    attempts=int(os.getenv('YOUTUBE_ATTEMPTS','3'))
     for cookie in cookies:
         for clients in _youtube_client_profiles():
-            for format_selector in _youtube_format_profiles():
-              for attempt in range(max(1, attempts)):
+            for attempt in range(max(1, attempts)):
                 try:
-                    # Extract and download in one yt-dlp transaction. Splitting
-                    # metadata extraction from download makes YouTube reload
-                    # the page and frequently returns "The page needs to be
-                    # reloaded" for the same video.
-                    opts=_yt_options(cookie, clients, format_selector)
-                    with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=True)
+                    opts=_yt_options(cookie, clients); opts['skip_download']=True
+                    with yt_dlp.YoutubeDL(opts) as ydl: info=ydl.extract_info(url, download=False)
                     if info and info.get('entries'): info=next((e for e in info['entries'] if e), None)
                     if not info: raise RuntimeError('لم يتم العثور على نتيجة')
                     duration=float(info.get('duration') or 0)
@@ -154,8 +146,8 @@ def search_download_youtube(query):
                     title=str(info.get('title') or q)
                     artist=str(info.get('uploader') or info.get('channel') or 'YouTube')
                     direct=str(info.get('webpage_url') or url)
-                    # The one-pass extractor already downloaded the selected
-                    # entry using %(id)s.%(ext)s; do not request the URL again.
+                    opts=_yt_options(cookie, clients); opts['outtmpl']=str(MUSIC_DIR/f'{vid}.%(ext)s')
+                    with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([direct])
                     mp3=MUSIC_DIR/f'{vid}.mp3'
                     candidates=list(MUSIC_DIR.glob(f'{vid}.*'))
                     if not mp3.exists():
@@ -165,7 +157,7 @@ def search_download_youtube(query):
                     return {'title':title,'artist':artist,'duration_ms':int(duration*1000),'path':mp3,'source_url':direct}
                 except Exception as e:
                     message=str(e).strip() or type(e).__name__
-                    errors.append(f'{clients[0]}:{format_selector[:18]}#{attempt+1}: {message}')
+                    errors.append(f'{clients[0]}#{attempt+1}: {message}')
                     if attempt + 1 < max(1, attempts): time.sleep(min(2 + attempt * 2, 6))
     raise RuntimeError(' | '.join(errors[-3:]) or 'تعذر تنزيل الأغنية')
 
@@ -189,52 +181,65 @@ def gift_url(path):
     dst.write_bytes(Path(path).read_bytes())
     return base + '/media/gifts/' + quote(dst.name)
 
-def _draw_name_center(draw, image_width, y, label_ar, label_en, value, ar_font, en_font):
-    """Draw bilingual label and preserve the username exactly as received."""
-    cx=image_width//2
-    value=str(value or '').strip()
-    # Draw labels with their matching fonts, then the unchanged username.
-    draw.text((cx, y-25), label_ar, font=ar_font, fill='#3f211b', anchor='mm')
-    draw.text((cx, y+20), f'{label_en}: {value}', font=en_font, fill='#3f211b', anchor='mm')
-
 def gift_card_url(gid, sender, receiver):
-    """Create one non-blank personalized card: gift image + two name boxes."""
-    _cleanup()
+    """Create a personalized card from the supplied elegant template."""
     base=public_base_url()
     if not base: raise RuntimeError('رابط الوسائط العام غير مضبوط. فعّل Public Domain للخدمة في Railway أو ضع PUBLIC_BASE_URL.')
     if Image is None:
-        raise RuntimeError('مكتبة Pillow غير مثبتة؛ أعد النشر لتثبيت Pillow.')
+        return gift_url(gift_image(gid))
     template=GIFT_DIR/'gift_template_elegant.png'
-    gift=gift_image(gid)
     if not template.is_file():
-        return gift_url(gift)
+        try:
+            template=gift_image(gid)
+        except Exception:
+            return gift_url(gift_image(gid))
     target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
     dst=target/(f'gift_{int(gid):02d}_{uuid.uuid4().hex[:8]}.png')
     image=Image.open(template).convert('RGBA')
-    # Put the actual gift artwork inside the template panel; never return a
-    # second blank image and never send the raw template separately.
-    artwork=Image.open(gift).convert('RGB')
-    panel=(65, 70, image.width-65, 820)
-    panel_w, panel_h=panel[2]-panel[0], panel[3]-panel[1]
-    artwork.thumbnail((panel_w, panel_h), Image.Resampling.LANCZOS)
-    art=Image.new('RGB', (panel_w, panel_h), '#ead0a3')
-    art.paste(artwork, ((panel_w-artwork.width)//2, (panel_h-artwork.height)//2))
-    image.alpha_composite(art.convert('RGBA'), (panel[0], panel[1]))
     draw=ImageDraw.Draw(image)
-    ar_path=GIFT_DIR/'Amiri-Bold.ttf'
-    en_path=GIFT_DIR/'DejaVuSans.ttf'
-    ar_font=ImageFont.truetype(str(ar_path), 42)
-    en_font=ImageFont.truetype(str(en_path), 30)
-    title_font=ImageFont.truetype(str(ar_path), 54)
+    font_path=GIFT_DIR/'NotoSansArabic-SemiBold.ttf'
+    font_small=GIFT_DIR/'DejaVuSans.ttf'
+    try:
+        ar_font=ImageFont.truetype(str(font_path), 47)
+        en_font=ImageFont.truetype(str(font_small), 35)
+        title_font=ImageFont.truetype(str(font_path), 62)
+    except Exception:
+        ar_font=en_font=title_font=ImageFont.load_default()
+    cx=image.width//2
     emoji,name=GIFTS.get(str(gid), ('🎁','هدية'))
-    draw.text((image.width//2, 845), f'{emoji} {name}', font=title_font, fill='#4b241d', anchor='mm')
-    # Two clearly separated boxes: sender and receiver.
-    boxes=((80, 900, image.width-80, 1035), (80, 1055, image.width-80, 1190))
-    for box in boxes:
-        draw.rounded_rectangle(box, radius=22, fill='#f7e5c5', outline='#8e5d3d', width=4)
-    _draw_name_center(draw, image.width, 962, 'المرسل', 'Sender', sender, ar_font, en_font)
-    _draw_name_center(draw, image.width, 1117, 'المستقبل', 'Receiver', receiver, ar_font, en_font)
+    draw.text((cx, 235), f'{emoji} {name}', font=title_font, fill='#4b241d', anchor='mm', stroke_width=1, stroke_fill='#f0c27b')
+    draw.text((cx, 430), f'المرسل / Sender: @{sender}', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    draw.text((cx, 515), f'المستقبل / Receiver: @{receiver}', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    draw.text((cx, 650), 'A special gift for you', font=en_font, fill='#6a3428', anchor='mm')
     image.save(dst, format='PNG', optimize=True)
     return base + '/media/gifts/' + quote(dst.name)
+
+def url_is_reachable(url, timeout=6):
+    """Verify the chat server will actually be able to fetch the media URL."""
+    try:
+        import urllib.request
+        req=urllib.request.Request(url, method='GET', headers={'Range':'bytes=0-64','User-Agent':'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= int(resp.status) < 400
+    except Exception:
+        return False
+
+
+def gift_card(gid, sender, receiver):
+    """Always return a usable public image URL for a gift.
+
+    Order: personalized card -> plain gift picture -> raise.
+    Any failure in the fancy card must never remove the picture.
+    """
+    errors=[]
+    for maker in (lambda: gift_card_url(gid, sender, receiver), lambda: gift_url(gift_image(gid))):
+        try:
+            url=maker()
+            if url: return url
+        except Exception as e:
+            errors.append(str(e))
+    raise RuntimeError(' | '.join(errors) or 'تعذر تجهيز صورة الهدية')
+
+
 def gifts_catalog():
     return '\n'.join(['🎁 الهدايا','━━━━━━━━━━━━',' '.join([f'{k}:{v[0]} {v[1]}' for k,v in GIFTS.items()]),'━━━━━━━━━━━━','الإرسال: gv@رقم_الهدية@اسم_المستخدم'])

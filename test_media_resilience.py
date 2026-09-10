@@ -16,9 +16,6 @@ class FakeYDL:
         FakeYDL.extract_calls += 1
         if FakeYDL.extract_calls == 1:
             raise RuntimeError('ERROR: [youtube] test: The page needs to be reloaded.')
-        if download:
-            FakeYDL.download_calls += 1
-            Path(media.MUSIC_DIR / 'test123.mp3').write_bytes(b'test')
         return {'id': 'test123', 'title': 'Test', 'uploader': 'Tester', 'duration': 10,
                 'webpage_url': 'https://www.youtube.com/watch?v=test123'}
     def download(self, urls):
