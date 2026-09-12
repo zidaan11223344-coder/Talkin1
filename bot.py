@@ -477,6 +477,7 @@ class RawWebSocket:
         self._recvbuf = bytearray()
         self.peer_ip = None
         self.permessage_deflate = False
+        self._send_lock = threading.Lock()
 
     def _connect_android_like(self):
         # Android's Y9/s resolves all addresses before creating the socket.
@@ -603,14 +604,16 @@ class RawWebSocket:
         else:
             hdr = bytes([0x82, 0x80 | 127]) + struct.pack('!Q', n)
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(hdr + mask + masked)
+        with self._send_lock:
+            self.sock.sendall(hdr + mask + masked)
 
     def send_control(self, opcode, payload=b''):
         payload = bytes(payload); mask = os.urandom(4)
         if len(payload) > 125: raise ValueError('control frame too large')
         hdr = bytes([0x80 | opcode, 0x80 | len(payload)])
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(hdr + mask + masked)
+        with self._send_lock:
+            self.sock.sendall(hdr + mask + masked)
 
     def recv(self):
         b1, b2 = self._recv_exact(2)
@@ -635,6 +638,11 @@ class RawWebSocket:
                     reason = data[2:].decode('utf-8', 'replace')
                 except Exception:
                     pass
+            # A peer-initiated close must be acknowledged before reconnecting.
+            try:
+                self.send_control(0x8, data[:125])
+            except Exception:
+                pass
             return ('close', {'code': code, 'reason': reason, 'raw': data})
         if opcode == 0x9:
             self.send_control(0xA, data); return ('ping', data)
@@ -1054,6 +1062,11 @@ class TalkinBot:
         # occupants_list and by user_joined/user_left room events.
         self.room_users = defaultdict(dict)
         self.last_joined_room = None
+        # Moderation commands are confirmed only after the server emits a
+        # matching role_changed event.  Sending a packet is not proof that it
+        # was accepted by the room server.
+        self.pending_admin_actions = {}
+        self.pending_admin_lock = threading.Lock()
         self.invite_pending = False
         self.invite_room = ""
         self.invite_sent = set()
@@ -1067,6 +1080,8 @@ class TalkinBot:
         self._last_reconnect = 0.0
         self._pending_reconnect_reason = ""
         self._had_connection = False
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
         self.banned_words = set(BANNED_WORDS)
         self.text_limit = max(80, int(os.getenv("TALKIN_TEXT_LIMIT", "180")))
         self.db = DatabaseBridge(self.log)
@@ -1206,6 +1221,39 @@ class TalkinBot:
         if not self.ws:
             raise RuntimeError("WebSocket is not connected")
         self.ws.send_binary(payload)
+
+    def _start_heartbeat(self):
+        """Keep the realtime socket alive while the room is idle.
+
+        The server accepts RFC6455 control pings. The old loop only answered
+        incoming pings, so an idle connection could be closed with code 1000.
+        """
+        self._stop_heartbeat()
+        stop = threading.Event()
+        self._heartbeat_stop = stop
+        interval = max(10.0, float(os.getenv("WS_HEARTBEAT_SECONDS", "25")))
+
+        def run():
+            while not stop.wait(interval):
+                ws = self.ws
+                if not ws or not ws.sock:
+                    return
+                try:
+                    ws.send_control(0x9, b"talkin-heartbeat")
+                    self.log("[WS] heartbeat ping sent")
+                except Exception as exc:
+                    self.log("[WS] heartbeat failed:", repr(exc))
+                    return
+
+        self._heartbeat_thread = threading.Thread(target=run, name="ws-heartbeat", daemon=True)
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self):
+        stop = self._heartbeat_stop
+        if stop:
+            stop.set()
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
 
     def join_room(self, room: str, force: bool = False):
         """Join a room without spamming room_join.
@@ -1357,6 +1405,50 @@ class TalkinBot:
                 )
             )
         raise ValueError("Unknown admin operation: " + operation)
+
+    def request_admin_action(self, room: str, target: str, operation: str, requester: str):
+        """Send moderation request and report success only after server confirmation."""
+        role_by_operation = {
+            "kick": "kicked", "ban": "outcast", "member": "member",
+            "admin": "admin", "owner": "owner",
+        }
+        expected_role = role_by_operation.get(operation)
+        if not expected_role:
+            raise ValueError("Unknown admin operation: " + operation)
+        room = str(room or "").strip()
+        target = str(target or "").strip().lstrip("@")
+        requester = str(requester or "").strip()
+        try:
+            self.send_admin(room, target, operation)
+        except Exception as exc:
+            self.log(f"[MOD] request failed room={room} target=@{target}: {exc!r}")
+            if requester:
+                self.send_private_text(requester, f"❌ تعذر إرسال أمر الإدارة إلى الخادم: {exc}")
+            return False
+        key = (room.casefold(), target.casefold(), expected_role)
+        with self.pending_admin_lock:
+            self.pending_admin_actions[key] = {
+                "room": room, "target": target, "role": expected_role,
+                "requester": requester, "created_at": time.time(),
+            }
+        self.log(f"[MOD] awaiting server confirmation room={room} target=@{target} role={expected_role}")
+        threading.Thread(
+            target=self._admin_confirmation_timeout,
+            args=(key,), daemon=True, name="admin-confirmation-timeout",
+        ).start()
+        return True
+
+    def _admin_confirmation_timeout(self, key):
+        time.sleep(float(os.getenv("ADMIN_CONFIRMATION_TIMEOUT", "8")))
+        with self.pending_admin_lock:
+            pending = self.pending_admin_actions.pop(key, None)
+        if pending and pending.get("requester"):
+            self.send_private_text(
+                pending["requester"],
+                f"⚠️ لم يؤكد الخادم تنفيذ العملية على @{pending['target']} "
+                f"في الغرفة {pending['room']} خلال المهلة. لم يتم اعتبارها ناجحة.",
+            )
+            self.log(f"[MOD] confirmation timeout room={pending['room']} target=@{pending['target']}")
 
     def ack(self, uid: str):
         if uid:
@@ -2148,36 +2240,41 @@ class TalkinBot:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الطرد فيها."); return True
-            self.send_admin(room,target,"kick")
-            self.send_private_text(sender,f"✅ تم طرد @{target} من الغرفة {room}."); return True
+            if self.request_admin_action(room,target,"kick",sender):
+                self.send_private_text(sender,f"⏳ جارٍ تنفيذ طرد @{target} من الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            return True
         m=re.match(r"^(b@|ban\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الحظر فيها."); return True
-            self.send_admin(room,target,"ban")
-            self.send_private_text(sender,f"✅ تم حظر @{target} من الغرفة {room}."); return True
+            if self.request_admin_action(room,target,"ban",sender):
+                self.send_private_text(sender,f"⏳ جارٍ تنفيذ حظر @{target} في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            return True
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ فك الحظر فيها."); return True
-            self.send_admin(room,target,"member")
-            self.send_private_text(sender,f"✅ تم فك الحظر عن @{target} في الغرفة {room}."); return True
+            if self.request_admin_action(room,target,"member",sender):
+                self.send_private_text(sender,f"⏳ جارٍ تنفيذ فك حظر @{target} في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            return True
         m=re.match(r"^(a@|admin\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المشرف فيها."); return True
-            self.send_admin(room,target,"admin")
-            self.send_private_text(sender,f"✅ تم تعيين @{target} مشرفًا في الغرفة {room}."); return True
+            if self.request_admin_action(room,target,"admin",sender):
+                self.send_private_text(sender,f"⏳ جارٍ ترقية @{target} إلى مشرف في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            return True
         m=re.match(r"^(o@|owner\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المالك فيها."); return True
-            self.send_admin(room,target,"owner")
-            self.send_private_text(sender,f"✅ تم تعيين @{target} مالكًا في الغرفة {room}."); return True
+            if self.request_admin_action(room,target,"owner",sender):
+                self.send_private_text(sender,f"⏳ جارٍ ترقية @{target} إلى مالك في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            return True
         if low.startswith(("دخول ","join ","ادخل ","enter ")):
             parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
             if not target:
@@ -2326,6 +2423,29 @@ class TalkinBot:
                     self.send_room_text(room, str(cw["message"]).replace("{username}", username).replace("{room}", room))
         elif event_type == "user_left" and username:
             self.room_users[room].pop(username, None)
+        elif event_type == "role_changed":
+            # In native RoomEvent packets the affected user is field 17 and
+            # the resulting role is field 31. Field 8 is not reliable here.
+            changed_user = str(event.get(17, "") or event.get(22, "") or "").strip()
+            changed_role = str(event.get(31, "") or event.get(8, "") or "").strip().lower()
+            if changed_user and changed_role:
+                if changed_role in ("kicked", "outcast"):
+                    self.room_users[room].pop(changed_user, None)
+                else:
+                    self.room_users[room][changed_user] = changed_role
+                key = (room.casefold(), changed_user.casefold(), changed_role)
+                with self.pending_admin_lock:
+                    pending = self.pending_admin_actions.pop(key, None)
+                if pending:
+                    labels = {
+                        "kicked": f"✅ أكد الخادم طرد @{changed_user} من الغرفة {room}.",
+                        "outcast": f"✅ أكد الخادم حظر @{changed_user} في الغرفة {room}.",
+                        "member": f"✅ أكد الخادم فك حظر @{changed_user} في الغرفة {room}.",
+                        "admin": f"✅ أكد الخادم ترقية @{changed_user} إلى مشرف في الغرفة {room}.",
+                        "owner": f"✅ أكد الخادم ترقية @{changed_user} إلى مالك في الغرفة {room}.",
+                    }
+                    self.send_private_text(pending["requester"], labels.get(changed_role, f"✅ أكد الخادم تغيير دور @{changed_user} إلى {changed_role}."))
+                    self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
         elif event_type in ("room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin", "room_needs_captcha_rejoin", "room_needs_password_rejoin", "room_membership_required_rejoin"):
@@ -2479,24 +2599,24 @@ class TalkinBot:
                             self.send_private_text(frm, f"✅ تم تغيير رسالة الدعوة إلى: {arg}")
                         elif cmd in ("a@", "admin") and arg:
                             target = arg.lstrip("@").strip()
-                            self.send_admin(ctx_room, target, "admin")
-                            self.send_private_text(frm, f"✅ تم تعيين @{target} مشرفًا في الغرفة {ctx_room}.")
+                            if self.request_admin_action(ctx_room, target, "admin", frm):
+                                self.send_private_text(frm, f"⏳ جارٍ ترقية @{target} إلى مشرف في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
                         elif cmd in ("o@", "owner") and arg:
                             target = arg.lstrip("@").strip()
-                            self.send_admin(ctx_room, target, "owner")
-                            self.send_private_text(frm, f"✅ تم تعيين @{target} مالكًا في الغرفة {ctx_room}.")
+                            if self.request_admin_action(ctx_room, target, "owner", frm):
+                                self.send_private_text(frm, f"⏳ جارٍ ترقية @{target} إلى مالك في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
                         elif cmd in ("k@", "kick") and arg:
                             target = arg.lstrip("@").strip()
-                            self.send_admin(ctx_room, target, "kick")
-                            self.send_private_text(frm, f"✅ تم إرسال أمر الطرد إلى @{target} في الغرفة {ctx_room}.")
+                            if self.request_admin_action(ctx_room, target, "kick", frm):
+                                self.send_private_text(frm, f"⏳ جارٍ تنفيذ طرد @{target} من الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
                         elif cmd in ("b@", "ban") and arg:
                             target = arg.lstrip("@").strip()
-                            self.send_admin(ctx_room, target, "ban")
-                            self.send_private_text(frm, f"✅ تم إرسال أمر الحظر إلى @{target} في الغرفة {ctx_room}.")
+                            if self.request_admin_action(ctx_room, target, "ban", frm):
+                                self.send_private_text(frm, f"⏳ جارٍ تنفيذ حظر @{target} في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
                         elif cmd in ("u@", "unban") and arg:
                             target = arg.lstrip("@").strip()
-                            self.send_admin(ctx_room, target, "member")
-                            self.send_private_text(frm, f"✅ تم إلغاء حظر @{target} في الغرفة {ctx_room}.")
+                            if self.request_admin_action(ctx_room, target, "member", frm):
+                                self.send_private_text(frm, f"⏳ جارٍ تنفيذ فك حظر @{target} في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
                         elif cmd in ("say", "قل") and arg:
                             self.send_room_text(ctx_room, arg)
                 except Exception as e:
@@ -2641,6 +2761,7 @@ class TalkinBot:
                         # limited to the headers actually built by the APK.
                         self.ws = RawWebSocket(url, list(header_lines), timeout=20, debug=RAW_DIAGNOSTIC)
                         self.ws.connect()
+                        self._start_heartbeat()
                         self.log("[WS] CONNECTED:", url)
                         self.log("[WS] custom headers:", [x.split(":",1)[0] + ": <redacted>" if x.lower().startswith(("username:", "password:")) else x for x in header_lines])
                         self.bootstrap_after_connect()
@@ -2671,8 +2792,10 @@ class TalkinBot:
                                 self.log("[WS] unexpected text frame received")
                             elif kind == "close":
                                 raise ConnectionError(f"WebSocket closed by server: {message}")
+                        self._stop_heartbeat()
                         return
                     except Exception as e:
+                        self._stop_heartbeat()
                         last_error = e
                         self.log("[WS] host/path failed:", host, port, path, repr(e))
                         try:
