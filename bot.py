@@ -103,11 +103,13 @@ GIFT_CATALOG = {
 # Authentication is protobuf over POST /api?auth_new.
 # ============================================================
 
-BOT_ID = os.getenv("BOT_ID", "").strip()
-BOT_PWD = os.getenv("BOT_PWD", "")
-BOT_MASTER = os.getenv("BOT_MASTER", "").strip()
+# Keep the canonical names documented for Railway. The aliases preserve
+# compatibility with older deployments that used the original README names.
+BOT_ID = (os.getenv("BOT_ID") or os.getenv("BOT_USERNAME") or "").strip()
+BOT_PWD = os.getenv("BOT_PWD") or os.getenv("BOT_PASSWORD") or ""
+BOT_MASTER = (os.getenv("BOT_MASTER") or os.getenv("MASTER_USERNAME") or "").strip()
 INVITE_SENDER_NAME = os.getenv("INVITE_SENDER_NAME", "السفير").strip() or "السفير"
-GROUP_TO_JOIN = os.getenv("GROUP_TO_JOIN", "").strip()
+GROUP_TO_JOIN = (os.getenv("GROUP_TO_JOIN") or os.getenv("FIRST_ROOM") or "").strip()
 
 # Persistent Giant-style bot data. The owner/master has unlimited points.
 DATA_DIR = Path(__file__).resolve().parent
@@ -2683,9 +2685,19 @@ class TalkinBot:
 
     def start(self):
         print("=== Talkinchat Bot V22 - Talkin + YouTube Cookies + Giant Gift Cards ===", flush=True)
+        missing = []
+        if not BOT_ID:
+            missing.append("BOT_ID (or BOT_USERNAME)")
+        if not BOT_PWD:
+            missing.append("BOT_PWD (or BOT_PASSWORD)")
+        if not self.room:
+            missing.append("GROUP_TO_JOIN (or FIRST_ROOM)")
+        if missing:
+            raise SystemExit(
+                "Missing required deployment variables: " + ", ".join(missing) + ". "
+                "Add them to Railway Variables (not the source code) and redeploy."
+            )
         self.asset_server = start_asset_server()
-        if not BOT_ID or not BOT_PWD or not self.room:
-            raise SystemExit("Set BOT_ID, BOT_PWD and GROUP_TO_JOIN in .env first.")
         while not self.stop_event.is_set():
             try:
                 self.run_once()

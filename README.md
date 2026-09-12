@@ -1,10 +1,12 @@
 # TalkinChat V22 - Giant assets + points + masters + VIP + publishing
 
-Railway variables:
+Railway variables (required):
 - BOT_ID
 - BOT_PWD
-- BOT_MASTER
 - GROUP_TO_JOIN
+
+Optional:
+- BOT_MASTER
 - YOUTUBE_COOKIES (optional but recommended for YouTube)
 - PUBLIC_BASE_URL (optional; RAILWAY_PUBLIC_DOMAIN is preferred automatically)
 - GIFT_PUBLIC_BASE_URL (optional fallback public URL)
