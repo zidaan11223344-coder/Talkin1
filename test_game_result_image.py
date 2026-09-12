@@ -10,9 +10,9 @@ import bot as module
 old = module._public_base_url
 module._public_base_url = lambda: "https://example.test"
 try:
-    bot._send_game_result("adam", "result", "dice")
+    bot._send_game_result("adam", "result", "bet")
 finally:
     module._public_base_url = old
 assert bot.sent == [("adam", "result")]
-assert bot.media == [("adam", "https://example.test/assets/game_dice.jpg", "image")]
+assert bot.media == [("adam", "https://example.test/assets/game_bet.jpg", "image")]
 print("game result image: PASS")

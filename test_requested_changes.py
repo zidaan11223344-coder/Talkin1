@@ -14,9 +14,9 @@ obj.sent = []
 assert obj.request_admin_action('room', 'target', 'ban', 'master')
 assert obj.sent == [('room', '✅ تم أمر حظر @target بنجاح.')]
 
-# Games and image mappings are disabled/removed.
+# The new wager and million image mappings are present.
 assert bot.GAME_COMMANDS == {}
-assert bot.GAME_IMAGE_FILES == {}
+assert bot.GAME_IMAGE_FILES == {'bet': 'game_bet.jpg', 'million': 'game_million.jpg'}
 assert bot._looks_like_bot_command('bl@target')
 assert bot._looks_like_bot_command('دخول room')
 print('requested changes: PASS')

@@ -73,7 +73,10 @@ GIFT_IMAGE_FILES = {
     for i in range(1, 15)
 }
 # الألعاب وصورها معطلة بناءً على إعداد البوت المطلوب؛ لا تُرسل صور ألعاب.
-GAME_IMAGE_FILES = {}
+GAME_IMAGE_FILES = {
+    "bet": "game_bet.jpg",
+    "million": "game_million.jpg",
+}
 GAME_COMMANDS = {}
 # Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -806,10 +809,10 @@ def _looks_like_bot_command(text):
         return False
     prefixes = (
         "sa@", ".sa ", "s@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
-        "b@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
+        "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
         "say ", "قل ", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "انشر",
+        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
     )
     prefixes = prefixes + ("bl@",)
@@ -819,7 +822,7 @@ def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
     prefixes = (
         "s@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
-        "b@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
+        "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "توثيق الكل", "وثق الكل", "verify",
     )
@@ -1159,6 +1162,10 @@ class TalkinBot:
         self.game_cooldown = defaultdict(float)
         self.guess_games = {}
         self.help_pages = {}
+        # Global wager queues, crop timers, and fruit-match state.
+        self.wager_waiting = {}
+        self.crop_plots = {}
+        self.fruit_games = {}
         # Auto replies and per-user custom welcome messages.
         self.auto_replies_enabled = True
         self.auto_replies = {}
@@ -2151,106 +2158,138 @@ class TalkinBot:
                 self.log("[GAME] result image failed:", repr(exc))
 
     def game_help(self, room):
-        # Game results/help are one message; only command menus are chunked.
-        names = "، ".join(f"{command} ({label})" for command, (_, label) in GAME_COMMANDS.items())
-        self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال/مليون — سؤال معلومات عامة بجائزة 15 نقطة.\n⚔️ حرب — مواجهة عشوائية.\n🖼️ ألعاب الصور: " + names + "\n📌 بعد اكتمال كل لعبة تُرسل صورة نتيجتها تلقائياً. لا توجد تكلفة أو خصم نقاط.")
+        self.send_room_text(room, "🎮 ألعاب البوت\n━━━━━━━━━━━━\n"
+            "💰 مراهنة@المبلغ — مواجهة مع مستخدم آخر، والفائز يأخذ نقاط الرهان.\n"
+            "💰 رهان@المبلغ | مضاربة@المبلغ | استثمار@المبلغ | حظي@المبلغ\n"
+            "🎰 مليون — فرصة 1 من 100 مع جائزة مليون نقطة.\n"
+            "🤖 حظ | حجر ورق مقص | كنز | اسرق | رشوة — ألعاب مجانية.\n"
+            "🌱 زرع — عرض المحاصيل، ثم زرع@🍎 للحصاد.\n"
+            "🍓 فيس@🍎 — مطابقة فاكهة مع البوت.")
+
+    def _game_balance_ok(self, username, amount):
+        return _is_master_name(username) or _get_points(username) >= int(amount)
+
+    def _wager_result(self, first, second, stake, game_name):
+        a, b = first, second
+        winner, loser = (a, b) if random.choice((True, False)) else (b, a)
+        if _is_master_name(loser):
+            loser_balance = _get_points(loser)
+            winner_balance = _get_points(winner)
+        else:
+            loser_balance = _add_points(loser, -stake)
+            winner_balance = self._game_balance_ok(winner, 0) and _add_points(winner, stake)
+        text=(f"🎮 {game_name}\n🏆 الفائز: @{winner}\n💔 الخاسر: @{loser}\n"
+              f"💰 نقاط الفائز بعد الجولة: {_fmt_points(winner_balance)}\n"
+              f"📉 تم خصم {_fmt_points(stake)} نقطة من الخاسر.")
+        rooms=[]
+        for r in (first.get("room"), second.get("room")):
+            if r and r not in rooms: rooms.append(r)
+        for r in rooms:
+            self._send_game_result(r, text, "bet")
+
+    def _queue_wager(self, room, sender, game_name, amount):
+        try: amount=int(amount)
+        except Exception:
+            self.send_room_text(room, "❌ اكتب مبلغاً صحيحاً مثل: مراهنة@100"); return True
+        if amount <= 0:
+            self.send_room_text(room, "❌ يجب أن يكون مبلغ الرهان أكبر من صفر."); return True
+        if not _is_master_name(sender) and not self._game_balance_ok(sender, amount):
+            self.send_room_text(room, f"❌ رصيدك غير كافٍ. رصيدك الحالي: {_fmt_points(_get_points(sender))}"); return True
+        key=game_name.casefold()
+        with self.game_lock:
+            waiting=self.wager_waiting.get(key)
+            if waiting and _norm_user(waiting["user"]) == _norm_user(sender):
+                self.send_room_text(room, "⏳ أنت في قائمة انتظار هذه اللعبة بالفعل."); return True
+            if waiting:
+                self.wager_waiting.pop(key, None)
+            else:
+                self.wager_waiting[key]={"user":sender,"room":room,"stake":amount,"game":game_name,"created":time.time()}
+                self.send_room_text(room, f"🔎 جاري البحث عن خصم للعبة {game_name} بمبلغ {_fmt_points(amount)} نقطة...")
+                return True
+        if int(waiting["stake"]) != amount:
+            self.send_room_text(room, f"⚠️ مبلغ الخصم يجب أن يساوي {_fmt_points(waiting['stake'])} نقطة.")
+            with self.game_lock: self.wager_waiting[key]=waiting
+            return True
+        if _norm_user(waiting["user"]) == _norm_user(sender): return True
+        self._wager_result(waiting, {"user":sender,"room":room,"stake":amount,"game":game_name}, amount, game_name)
+        return True
+
+    def _fruit_match(self, room, sender, emoji):
+        fruits=("🍓","🍇","🍉","🍌","🍋","🍊","🍐","🍎","🍏","🥑","🥦","🍑","🥭","🍍","🥥","🥝","🍅","🍆","🧄","🥕","🌽","🌶️")
+        if emoji not in fruits:
+            self.send_room_text(room, "❌ اختر فاكهة من القائمة: " + " ".join(fruits)); return True
+        bot_fruit=random.choice(fruits)
+        if emoji == bot_fruit:
+            self._send_game_result(room, f"🍉 فيس @{sender}\n✅ تمت المطابقة! البوت أرسل {bot_fruit}\n🏆 فزت بـ 20 نقطة.", "")
+            self._game_award(sender,20)
+        else:
+            self.send_room_text(room, f"🍉 فيس @{sender}\n🤖 البوت أرسل {bot_fruit}\n❌ لم تتم المطابقة، حظاً موفقاً.")
+        return True
+
+    def _crop_command(self, room, sender, raw):
+        crops={"🍎":5,"🍐":10,"🍊":15,"🍋":20,"🍇":25,"🍉":30,"🍓":35,"🥕":40,"🌽":45,"🥭":50}
+        if raw.casefold()=="زرع":
+            self.send_room_text(room, "🌱 المحاصيل ومدة الانتظار:\n" + " | ".join(f"{k} {v} دقيقة" for k,v in crops.items()) + "\nاستخدم: زرع@🍎")
+            return True
+        m=re.fullmatch(r"زرع[@ ](.+)", raw, re.I)
+        if not m: return False
+        crop=m.group(1).strip()
+        if crop not in crops:
+            self.send_room_text(room, "❌ اختر محصولاً من القائمة عبر أمر زرع."); return True
+        key=(_norm_user(sender), crop)
+        now=time.time()
+        old=self.crop_plots.get(key)
+        if old is not None and now < old:
+            left=int((old-now)/60)+1
+            self.send_room_text(room, f"⏳ محصول {crop} لم ينضج بعد. المتبقي تقريباً: {left} دقيقة."); return True
+        if old is not None and now >= old:
+            self.crop_plots.pop(key, None)
+            reward=crops[crop]*2
+            balance=self._game_award(sender, reward)
+            self.send_room_text(room, f"🌾 حصدت محصول {crop} بنجاح!\n🎁 ربحت {reward} نقطة.\n💰 رصيدك: {_fmt_points(balance)}")
+            return True
+        self.crop_plots[key]=now+crops[crop]*60
+        self.send_room_text(room, f"🌱 تم زرع {crop}. عد بعد {crops[crop]} دقيقة واكتب زرع@{crop} للحصاد.")
+        return True
 
     def handle_game_command(self, room, text, sender_name):
-        # Games and their artwork were removed from this bot configuration.
-        return False
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
-        low=raw.casefold(); key=(str(room or "").casefold(), _norm_user(sender_name))
+        low=raw.casefold()
         if low in ("العاب","ألعاب","لعب","games","game"):
             self.game_help(room); return True
-
-        # Every artwork in assets has its own command. These lightweight
-        # challenges are intentionally free and always return their matching
-        # image after the result, even when the player loses.
-        for command, (image_key, label) in GAME_COMMANDS.items():
-            if low == command.casefold():
-                ok,wait=self._game_ready(sender_name,room,3.0)
-                if not ok:
-                    self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-                player=random.randint(1,6); opponent=random.randint(1,6)
-                reward=20 if player>opponent else (8 if player==opponent else 3)
-                result="🏆 فزت!" if player>opponent else ("🤝 تعادل!" if player==opponent else "😄 جولة ممتعة، حاول مرة أخرى.")
-                balance=self._game_award(sender_name,reward)
-                self._send_game_result(room,f"🎮 لعبة {label} — @{sender_name}\n🎲 نتيجتك: {player} | نتيجة الخصم: {opponent}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {_fmt_points(balance)}",image_key)
-                return True
-
-        if re.fullmatch(r"\d{1,2}", raw):
-            with self.game_lock: game=self.guess_games.get(key)
-            if not game: return False
-            guess=int(raw); game["attempts"]+=1; target=game["number"]
-            if not 1<=guess<=10:
-                self.send_room_text(room,f"🎯 @{sender_name} اختر رقماً من 1 إلى 10."); return True
-            if guess==target:
-                reward=max(10,30-(game["attempts"]-1)*5)
-                with self.game_lock: self.guess_games.pop(key,None)
-                balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-                self._send_game_result(room,f"🎯 مبروك @{sender_name}! الرقم هو {target} ✅\n🏆 ربحت {reward} نقطة.\n💰 الرصيد: {suffix}","guess"); return True
-            if game["attempts"]>=3:
-                with self.game_lock: self.guess_games.pop(key,None)
-                self._send_game_result(room,f"🎯 انتهت المحاولات يا @{sender_name}. الرقم الصحيح كان {target}. 😄","guess"); return True
-            hint="⬆️ الرقم أكبر" if guess<target else "⬇️ الرقم أصغر"
-            self.send_room_text(room,f"🎯 @{sender_name}: {hint} — بقيت {3-game['attempts']} محاولات."); return True
-
-        if low in ("حظ","الحظ","luck"):
-            ok,wait=self._game_ready(sender_name,room,4.0)
-            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-            label,reward=random.choice((("🍀 حظ ممتاز!",30),("✨ حظ جميل!",20),("🌟 حظ متوسط!",10),("😅 حظك اليوم عادي!",5)))
-            balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self._send_game_result(room, f"{label}\n👤 @{sender_name}\n🎁 الجائزة: {reward} نقطة\n💰 الرصيد: {suffix}","luck"); return True
-
-        if low in ("نرد","ارم النرد","ارمي النرد","dice"):
-            ok,wait=self._game_ready(sender_name,room,3.0)
-            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-            roll=random.randint(1,6); reward={1:2,2:3,3:5,4:7,5:10,6:20}[roll]
-            balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self._send_game_result(room,f"🎲 @{sender_name} رمى النرد: {roll}\n🎁 ربحت {reward} نقطة!\n💰 الرصيد: {suffix}","dice"); return True
-
-        if low in ("حجر","ورق","مقص"):
-            ok,wait=self._game_ready(sender_name,room,3.0)
-            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-            bot_choice=random.choice(("حجر","ورق","مقص"))
-            if low==bot_choice: result,reward="🤝 تعادل!",5
-            elif (low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق")): result,reward="🏆 فزت!",12
-            else: result,reward="😄 خسرت الجولة، جرّب مرة أخرى.",2
-            balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self._send_game_result(room,f"✂️ @{sender_name}: {low}\n🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {suffix}","rps"); return True
-
-        if low in ("حرب","الحرب","war"):
-            ok,wait=self._game_ready(sender_name,room,4.0)
-            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-            player=random.randint(1,100); opponent=random.randint(1,100)
-            if player>opponent:
-                result,reward="🏆 انتصرت في الحرب!",20
-            elif player==opponent:
-                result,reward="🤝 تعادل!",8
+        if low.startswith("زرع"):
+            return self._crop_command(room, sender_name, raw)
+        if low.startswith("فيس"):
+            m=re.fullmatch(r"فيس[@ ](.+)", raw, re.I)
+            return self._fruit_match(room, sender_name, m.group(1).strip() if m else "")
+        m=re.fullmatch(r"(مراهنة|رهان|مضاربة|استثمار|حظي)@([0-9]+)", raw, re.I)
+        if m:
+            return self._queue_wager(room, sender_name, m.group(1), int(m.group(2)))
+        if low in ("مليون","million"):
+            self.send_room_text(room, f"🎰 @{sender_name} جاري البحث علي مليون... نسبة الحظ 1 من 100")
+            if random.randint(1,100)==1:
+                self._game_award(sender_name,1000000)
+                self._send_game_result(room, f"🎉 مبروك @{sender_name}! حصلت على المليون 🏆\n💰 الجائزة: 1m نقطة", "million")
             else:
-                result,reward="🛡️ خسرْت المعركة، لكن حصلت على تعويض.",3
-            balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self._send_game_result(room,f"⚔️ حرب @{sender_name}\n🎯 قوتك: {player} | قوة الخصم: {opponent}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {suffix}","war"); return True
-
-        if low in ("تخمين","ابدأ تخمين","تخمين 1-10","guess"):
-            ok,wait=self._game_ready(sender_name,room,3.0)
-            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-            with self.game_lock: self.guess_games[key]={"number":random.randint(1,10),"attempts":0,"started":time.time()}
-            self.send_room_text(room,f"🎯 @{sender_name} بدأت لعبة التخمين!\n🔢 اختر رقماً من 1 إلى 10.\n🎲 لديك 3 محاولات — اكتب الرقم فقط."); return True
-
-        if low in ("سؤال","سوال","quiz","مسابقة","مليون","المليون","million"):
-            ok,wait=self._game_ready(sender_name,room,5.0)
-            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
-            q,a=random.choice((("ما هو أكبر كوكب في المجموعة الشمسية؟","المشتري"),("كم عدد أيام الأسبوع؟","7"),("ما عاصمة اليمن؟","صنعاء"),("ما لون الموز غالباً عند النضج؟","أصفر")))
-            with self.game_lock: self.guess_games[(str(room or "").casefold(),"__quiz__")]={"answer":a,"expires":time.time()+30}
-            self.send_room_text(room,f"🧠 سؤال سريع!\n❓ {q}\n💬 أول شخص يكتب الإجابة الصحيحة يربح 15 نقطة."); return True
-
-        with self.game_lock: quiz=self.guess_games.get((str(room or "").casefold(),"__quiz__"))
-        if quiz and time.time()<=quiz.get("expires",0) and low==str(quiz.get("answer","")).casefold():
-            with self.game_lock: self.guess_games.pop((str(room or "").casefold(),"__quiz__"),None)
-            balance=self._game_award(sender_name,15); suffix=_fmt_points(balance)
-            self._send_game_result(room,f"🧠 إجابة صحيحة يا @{sender_name}! 🎉\n🏆 +15 نقطة\n💰 الرصيد: {suffix}","quiz"); return True
+                self.send_room_text(room, f"🍀 حظ موفق في المرة القادمة يا @{sender_name}.")
+            return True
+        if low in ("حظ","الحظ","luck"):
+            reward=random.choice((5,10,20,30)); balance=self._game_award(sender_name,reward)
+            self.send_room_text(room, f"🍀 حظ @{sender_name}\n🎁 ربحت {reward} نقطة\n💰 رصيدك: {_fmt_points(balance)}"); return True
+        if low in ("حجر","ورق","مقص"):
+            bot_choice=random.choice(("حجر","ورق","مقص"))
+            win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
+            if low==bot_choice: result="🤝 تعادل"; reward=5
+            elif win: result="🏆 فزت"; reward=15
+            else: result="❌ خسرت"; reward=0
+            balance=self._game_award(sender_name,reward)
+            self.send_room_text(room, f"✂️ @{sender_name}: {low} | 🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 {_fmt_points(balance)}"); return True
+        if low in ("كنز","اسرق","سرقة","رشوة"):
+            labels={"كنز":"🗺️ كنز","اسرق":"🕵️ سرقة","سرقة":"🕵️ سرقة","رشوة":"💼 رشوة"}
+            won=random.random()<0.5; reward=random.randint(10,40) if won else 0
+            balance=self._game_award(sender_name,reward)
+            self.send_room_text(room, f"{labels[low]} @{sender_name}\n" + (f"🏆 نجحت وربحت {reward} نقطة." if won else "❌ لم تنجح هذه المرة.") + f"\n💰 {_fmt_points(balance)}"); return True
         return False
 
     def _send_help(self, room=None, private_to=None, page=1):
