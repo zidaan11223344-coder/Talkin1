@@ -852,7 +852,7 @@ def _looks_like_bot_command(text):
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "انشر",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
     )
-    return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game")
+    return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game") or low in {x.casefold() for x in GAME_COMMANDS}
 
 def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
@@ -2666,6 +2666,9 @@ class TalkinBot:
         if event_type == "image":
             media_url = str(event.get(7, "") or "").strip()
             if frm and frm != BOT_ID and media_url:
+                if not _is_verified_user(frm):
+                    self.send_room_text(room, f"🔒 @{frm} لاستخدام النشر يجب توثيق الحساب أولاً. { _verification_notice() }")
+                    return
                 if self._handle_publish_media(room, frm, media_url):
                     return
             return
@@ -2695,18 +2698,18 @@ class TalkinBot:
         # notice instead of being silently ignored.
         is_verified = _is_verified_user(frm)
         if not is_verified and _looks_like_bot_command(body):
-            self.send_private_text(frm, _verification_notice())
+            self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
         # Music/gifts require verification; masters are always allowed.
         if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
             if not is_verified:
-                self.send_private_text(frm, f"🔒 @{frm} غير موثّق لاستخدام الهدايا.")
+                self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الهدايا.\n{_verification_notice()}")
                 return
             if self.handle_gift_command(room, body, frm):
                 return
         if body.strip().lower().startswith(".sa "):
             if not is_verified:
-                self.send_private_text(frm, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.")
+                self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.\n{_verification_notice()}")
                 return
             if self.handle_music_command(room, body, frm):
                 return
@@ -2766,10 +2769,14 @@ class TalkinBot:
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
                     media_url = str(cm.get(6, "") or "").strip()
-                    if frm and media_url and self._handle_publish_media(self.room, frm, media_url):
-                        return
+                    if frm and media_url:
+                        if not _is_verified_user(frm):
+                            self.send_room_text(self.room, f"🔒 @{frm} لاستخدام النشر يجب توثيق الحساب أولاً.\n{_verification_notice()}")
+                            return
+                        if self._handle_publish_media(self.room, frm, media_url):
+                            return
                     if body and not _is_verified_user(frm) and _looks_like_bot_command(body):
-                        self.send_private_text(frm, _verification_notice())
+                        self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
                     if body:
                         if self._handle_management_command(self.room, body, frm, is_private=True):
@@ -2780,6 +2787,8 @@ class TalkinBot:
                     if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
                         if self.handle_gift_command(self.room, body, frm, private_to=frm):
                             return
+                    if body and _is_verified_user(frm) and self.handle_game_command(self.room, body, frm):
+                        return
                     if _is_master_name(frm) and body:
                         # Reuse room command handling with the command-context room.
                         ctx_room = self.room
