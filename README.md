@@ -1,11 +1,33 @@
-TalkinChat Bot V8
+# TalkinChat V22 - Giant assets + points + masters + VIP + publishing
 
-Changes from V7:
-- Uses AuthResult.server as the authoritative WebSocket port.
-- Defaults SOCKET_PORT to 5335 instead of 5333.
-- A normal WebSocket read timeout no longer causes a reconnect.
-- ping/pong frames are handled without disconnecting.
-- Keeps V7 login, load_list_new bootstrap, room join, message reception and moderation commands.
+Railway variables:
+- BOT_ID
+- BOT_PWD
+- BOT_MASTER
+- GROUP_TO_JOIN
+- YOUTUBE_COOKIES (optional but recommended for YouTube)
+- PUBLIC_BASE_URL (optional; RAILWAY_PUBLIC_DOMAIN is preferred automatically)
+- GIFT_PUBLIC_BASE_URL (optional fallback public URL)
+- PIPED_APIS (optional comma-separated Piped API instances; auto-discovery is attempted)
+- MUSIC_MAX_SECONDS=900
+- MUSIC_COOLDOWN=15
 
-Run in Pydroid:
-python bot.py
+Commands:
+- .sa SONG NAME
+- sa@GIFT_NUMBER@USERNAME
+- دخول ROOM
+- خروج ROOM
+- خروج
+- انشر
+- انشر@DESCRIPTION (then send image)
+- sb@USERNAME@POINTS (master)
+- mas@USERNAME (owner)
+- umas@USERNAME (owner)
+- s@USERNAME (master)
+- ازالة توثيق@USERNAME (master)
+- Vip@USERNAME (master)
+- unVip@USERNAME (master)
+- اوامر
+- نقاطي / توب
+
+The Giant Chat messages.json is included and used for message templates. Giant assets are copied verbatim under assets/.

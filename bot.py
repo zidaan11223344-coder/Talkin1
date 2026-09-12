@@ -10,7 +10,12 @@ import threading
 import time
 import uuid
 import subprocess
-import traceback
+import shutil
+import re
+import queue
+import mimetypes
+from urllib.parse import urlparse, unquote
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from collections import defaultdict
 from pathlib import Path
 
@@ -22,9 +27,75 @@ except Exception:
 from dotenv import load_dotenv
 
 load_dotenv()
-from media_music_gifts import (search_download_youtube, music_url, gift_image, gift_url, gift_card_url,
-                               gift_card, gifts_catalog, start_media_server, url_is_reachable, GIFTS)
-from commands_help import menu_text, help_index, resolve as resolve_help
+
+
+# ============================================================
+# Media / music / gifts ported from the supplied Giant bot + Talkin APK.
+# The actual Talkin transport remains the authoritative transport.
+# ============================================================
+try:
+    import yt_dlp
+except Exception:
+    yt_dlp = None
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except Exception:
+    Image = ImageDraw = ImageFont = None
+    PIL_AVAILABLE = False
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+except Exception:
+    arabic_reshaper = None
+    get_display = None
+
+MUSIC_MAX_SECONDS = int(os.getenv("MUSIC_MAX_SECONDS", "900"))
+MUSIC_COOLDOWN = float(os.getenv("MUSIC_COOLDOWN", "15"))
+# Optional YouTube Netscape cookies supplied as a Railway secret variable.
+YOUTUBE_COOKIES = os.getenv("YOUTUBE_COOKIES", "").strip()
+YOUTUBE_COOKIE_FILE = None
+if YOUTUBE_COOKIES:
+    try:
+        cookie_text = YOUTUBE_COOKIES.replace("\\n", "\n").replace("\\t", "\t")
+        if not cookie_text.startswith("# Netscape HTTP Cookie File"):
+            cookie_text = "# Netscape HTTP Cookie File\n" + cookie_text
+        YOUTUBE_COOKIE_FILE = "/tmp/youtube_cookies.txt"
+        Path(YOUTUBE_COOKIE_FILE).write_text(cookie_text, encoding="utf-8")
+    except Exception:
+        YOUTUBE_COOKIE_FILE = None
+
+# Gift images copied verbatim from the supplied Giant Chat bot assets/.
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
+GIFT_IMAGE_FILES = {
+    str(i): [ASSETS_DIR / f"gift_{i:02d}_1.png", ASSETS_DIR / f"gift_{i:02d}_2.png", ASSETS_DIR / f"gift_{i:02d}_3.png"]
+    for i in range(1, 15)
+}
+# Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+GIFT_PUBLIC_BASE_URL = os.getenv("GIFT_PUBLIC_BASE_URL", "").strip().rstrip("/")
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+
+def _public_base_url():
+    domain = RAILWAY_PUBLIC_DOMAIN
+    if domain:
+        if not domain.startswith(("http://", "https://")):
+            domain = "https://" + domain
+        return domain.rstrip("/")
+    return (PUBLIC_BASE_URL or GIFT_PUBLIC_BASE_URL).rstrip("/")
+
+MEDIA_PUBLIC_BASE_URL = _public_base_url()
+ASSET_HTTP_PORT = int(os.getenv("PORT", "8080"))
+ASSET_HTTP_ENABLED = os.getenv("ASSET_HTTP_ENABLED", "1") == "1"
+
+GIFT_CATALOG = {
+    "1": ("🌹", "وردة"), "2": ("❤️", "قلب"), "3": ("😘", "قبلة"),
+    "4": ("🧸", "دب"), "5": ("🎂", "كعكة"), "6": ("🎆", "ألعاب نارية"),
+    "7": ("⚡", "برق"), "8": ("👑", "تاج"), "9": ("👸", "أميرة"),
+    "10": ("🏎️", "سيارة"), "11": ("✈️", "طائرة"), "12": ("🐉", "تنين"),
+    "13": ("🚀", "سفينة فضاء"), "14": ("🏰", "قصر"),
+}
 
 # ============================================================
 # Talkin/ChatP protocol ported from the supplied Android APK.
@@ -32,11 +103,24 @@ from commands_help import menu_text, help_index, resolve as resolve_help
 # Authentication is protobuf over POST /api?auth_new.
 # ============================================================
 
-BOT_ID = os.getenv("BOT_USERNAME", "").strip()
-BOT_PWD = os.getenv("BOT_PASSWORD", "")
-BOT_MASTER = os.getenv("MASTER_USERNAME", "").strip()
-INVITE_SENDER_NAME = "السفير"
-GROUP_TO_JOIN = os.getenv("FIRST_ROOM", "").strip()
+BOT_ID = os.getenv("BOT_ID", "").strip()
+BOT_PWD = os.getenv("BOT_PWD", "")
+BOT_MASTER = os.getenv("BOT_MASTER", "").strip()
+INVITE_SENDER_NAME = os.getenv("INVITE_SENDER_NAME", "السفير").strip() or "السفير"
+GROUP_TO_JOIN = os.getenv("GROUP_TO_JOIN", "").strip()
+
+# Persistent Giant-style bot data. The owner/master has unlimited points.
+DATA_DIR = Path(__file__).resolve().parent
+MASTERS_FILE = DATA_DIR / "masters.json"
+VIP_FILE = DATA_DIR / "vip_users.json"
+VERIFIED_FILE = DATA_DIR / "verified_users.json"
+POINTS_FILE = DATA_DIR / "points.json"
+MESSAGES_FILE = DATA_DIR / "messages.json"
+PUBLISHED_FILE = DATA_DIR / "published_posts.json"
+
+# Giant Chat gift costs/labels; images remain the local Giant assets.
+GIFT_COSTS = {"1":10,"2":20,"3":30,"4":50,"5":80,"6":150,"7":200,"8":500,"9":800,"10":1000,"11":1500,"12":3000,"13":5000,"14":8000}
+
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://chatp.net/api?").rstrip("?") + "?"
 HOST = os.getenv("HOST_HEADER", "chatp.net").strip()
@@ -111,39 +195,16 @@ def android_build_info():
     return manufacturer.strip(), model.strip(), sdk.strip()
 
 
-_MANUFACTURER, _MODEL, _ANDROID_SDK = android_build_info()
-_MANUFACTURER = os.getenv("DEVICE_MANUFACTURER", "").strip() or _MANUFACTURER
-_MODEL = os.getenv("DEVICE_PRODUCT_MODEL", "").strip() or _MODEL
-SDK = os.getenv("SDK", "").strip() or _ANDROID_SDK
-
-# Do NOT silently generate a fake device identity. The APK sends the real
-# Android ID. If Pydroid cannot access it, the operator can set DEVICE_ID in
-# .env after obtaining the value from the same Android device.
-DEVICE_ID = os.getenv("DEVICE_ID", "").strip() or android_secure_id()
-# Exact fallback from the APK's M9/c.h(): when ANDROID_ID is unavailable,
-# it uses the literal prefix "null-" followed by a UUID, then replaces @.
-if not DEVICE_ID:
-    # APK behavior: when ANDROID_ID is unavailable it creates a UUID and
-    # stores it in SharedPreferences, so it stays stable across reconnects.
-    _fallback_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".talkin_device_id")
-    try:
-        if os.path.exists(_fallback_file):
-            DEVICE_ID = open(_fallback_file, "r", encoding="utf-8").read().strip()
-    except Exception:
-        pass
-    if not DEVICE_ID:
-        DEVICE_ID = "null-" + str(uuid.uuid4()).lower()
-        try:
-            with open(_fallback_file, "w", encoding="utf-8") as _f:
-                _f.write(DEVICE_ID)
-        except Exception:
-            pass
-    print("[DEVICE] ANDROID_ID unavailable; using persistent APK fallback", DEVICE_ID)
-_MANUFACTURER = _MANUFACTURER or "Generic"
-_MODEL = _MODEL or "Railway"
-SDK = SDK or "35"
+# Railway has no Android runtime and this bot does not need the phone's
+# Android ID or Android system properties for publishing.  Talkin's wire
+# protocol still requires device_id/device_model fields, so keep a stable
+# synthetic profile in the exact APK fingerprint format without probing Android.
+DEVICE_ID = "chatbuz-railway"
+_MANUFACTURER = "samsung"
+_MODEL = "SM-G998B"
+SDK = os.getenv("SDK", "35").strip() or "35"
 DEVICE_MODEL = os.getenv("DEVICE_MODEL", "").strip() or (
-    "444$" + _MANUFACTURER.replace("@", "-") + "-" + _MODEL.replace("@", "-") + "$" + SDK
+    "444$" + _MANUFACTURER + "-" + _MODEL + "$" + SDK
 )
 
 API_VER = "2"
@@ -153,9 +214,7 @@ AUTH_METHOD = "1"
 
 # Keep these enabled for easy troubleshooting.
 DEBUG = os.getenv("DEBUG", "1") == "1"
-WS_IDLE_READ_TIMEOUT = float(os.getenv("WS_IDLE_READ_TIMEOUT", "5"))
-WS_KEEPALIVE_INTERVAL = float(os.getenv("WS_KEEPALIVE_INTERVAL", "10"))
-RAW_DIAGNOSTIC = os.getenv("RAW_DIAGNOSTIC", "1") == "1"
+RAW_DIAGNOSTIC = os.getenv("RAW_DIAGNOSTIC", "0") == "1"
 ACK_ROOM_EVENTS = os.getenv("ACK_ROOM_EVENTS", "1") == "1"
 AUTO_HELP = os.getenv("AUTO_HELP", "1") == "1"
 BANNED_WORDS = {w.strip().lower() for w in os.getenv("BANNED_WORDS", "").split(",") if w.strip()}
@@ -416,7 +475,6 @@ class RawWebSocket:
         self._recvbuf = bytearray()
         self.peer_ip = None
         self.permessage_deflate = False
-        self._send_lock = threading.Lock()
 
     def _connect_android_like(self):
         # Android's Y9/s resolves all addresses before creating the socket.
@@ -543,20 +601,14 @@ class RawWebSocket:
         else:
             hdr = bytes([0x82, 0x80 | 127]) + struct.pack('!Q', n)
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        with self._send_lock:
-            if not self.sock:
-                raise ConnectionError("socket is not connected")
-            self.sock.sendall(hdr + mask + masked)
+        self.sock.sendall(hdr + mask + masked)
 
     def send_control(self, opcode, payload=b''):
         payload = bytes(payload); mask = os.urandom(4)
         if len(payload) > 125: raise ValueError('control frame too large')
         hdr = bytes([0x80 | opcode, 0x80 | len(payload)])
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        with self._send_lock:
-            if not self.sock:
-                raise ConnectionError("socket is not connected")
-            self.sock.sendall(hdr + mask + masked)
+        self.sock.sendall(hdr + mask + masked)
 
     def recv(self):
         b1, b2 = self._recv_exact(2)
@@ -705,7 +757,285 @@ class DatabaseBridge:
             self.log("[DB] room_members query failed:", repr(e))
             return []
 
+# ----------------------- Giant-style local data -----------------------
+def _load_local_json(path, default):
+    try:
+        if Path(path).is_file():
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return default
+
+def _save_local_json(path, data):
+    tmp=Path(str(path)+".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+def _norm_user(name):
+    return str(name or "").strip().lstrip("@").casefold()
+
+def _master_list():
+    data=_load_local_json(MASTERS_FILE, [])
+    return data if isinstance(data,list) else []
+
+def _is_master_name(name):
+    n=_norm_user(name)
+    return bool(n and (n == _norm_user(BOT_MASTER) or n in {_norm_user(x) for x in _master_list()}))
+
+def _verified_data():
+    data=_load_local_json(VERIFIED_FILE,{})
+    return data if isinstance(data,dict) else {}
+
+def _vip_data():
+    data=_load_local_json(VIP_FILE,{})
+    return data if isinstance(data,dict) else {}
+
+def _points_data():
+    data=_load_local_json(POINTS_FILE,{})
+    return data if isinstance(data,dict) else {}
+
+def _add_points(username, amount):
+    amount=int(amount)
+    data=_points_data(); key=_norm_user(username)
+    item=data.get(key,{"username":str(username).strip().lstrip("@"),"points":0})
+    item["username"]=str(username).strip().lstrip("@")
+    item["points"]=int(item.get("points",0) or 0)+amount
+    data[key]=item; _save_local_json(POINTS_FILE,data)
+    return item["points"]
+
+def _get_points(username):
+    if _is_master_name(username): return None
+    item=_points_data().get(_norm_user(username),{})
+    return int(item.get("points",0) or 0)
+
+def _message_template(section,key,default,**kwargs):
+    data=_load_local_json(MESSAGES_FILE,{})
+    value=((data.get(section) or {}).get(key)) if isinstance(data,dict) else None
+    text=value if isinstance(value,str) else default
+    try: return text.format(**kwargs)
+    except Exception: return text
+
+def _command_menu():
+    return (
+        "📚 قوائم أوامر البوت\n"
+        "━━━━━━━━━━━━\n"
+        "help1 — الإدارة\n"
+        "help2 — الموسيقى والتفاعلات\n"
+        "help3 — الألعاب\n"
+        "help4 — الهدايا والنشر\n"
+        "help5 — النقاط\n"
+        "help6 — الغرف\n"
+        "help7 — الماستر والفلتر\n"
+        "━━━━━━━━━━━━\n"
+        "اكتب اسم القائمة مثل: help1"
+    )
+
+
+def _default_help_pages():
+    return {
+        1: '📋 أوامر الإدارة\n━━━━━━━━━━━━\nk@اسم — طرد\nb@اسم — حظر\nub@اسم — فك الحظر\na@اسم — تعيين مشرف\no@اسم — تعيين مالك',
+        2: '🎵 الموسيقى\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل',
+        3: '🎮 الألعاب\n━━━━━━━━━━━━\nالعاب — عرض الألعاب\nحظ — جائزة عشوائية\nنرد — رمي النرد\nتخمين — تخمين رقم\nحجر — حجر ورق مقص\nورق — حجر ورق مقص\nمقص — حجر ورق مقص\nسؤال — مسابقة',
+        4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
+        5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — عرض النقاط\nتوب — المتصدرين\nsb@اسم@عدد — تعديل النقاط',
+        6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
+        7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\ns@اسم — توثيق\nuns@اسم — إزالة التوثيق\nVip@اسم — توثيق VIP\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
+    }
+
+def _help_pages_from_messages():
+    defaults=_default_help_pages()
+    data=_load_local_json(MESSAGES_FILE,{})
+    raw=data.get("help_pages") if isinstance(data,dict) else None
+    if isinstance(raw,list) and raw:
+        pages={}
+        for i,v in enumerate(raw,1):
+            if isinstance(v,str) and v.strip():
+                pages[i]=v.replace("\\n","\n")
+        if pages: return pages
+    return defaults
+
+def _command_help(page=1):
+    try: page=int(page)
+    except Exception: page=1
+    pages=_help_pages_from_messages()
+    page=max(1,min(len(pages),page))
+    return pages.get(page,_default_help_pages()[1])
+
 # ------------------------------ Bot --------------------------------------
+
+def _shape_name(text):
+    # Keep the exact logical username. Do not reverse or normalize decorative Arabic.
+    return str(text or "")
+
+_GIFT_FONT_CACHE = {}
+def _load_font(path, size):
+    key=(str(path),int(size))
+    if key not in _GIFT_FONT_CACHE:
+        _GIFT_FONT_CACHE[key]=ImageFont.truetype(str(path),int(size))
+    return _GIFT_FONT_CACHE[key]
+
+def _gift_font(text,size):
+    # Arabic font for the main text; rare decorative symbols are drawn with fallback fonts.
+    path=BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf"
+    if not path.is_file(): path=BASE_DIR/"assets"/"DejaVuSans.ttf"
+    return _load_font(path,size)
+
+def _fallback_fonts(size):
+    paths=[
+        BASE_DIR/"assets"/"DejaVuSans.ttf",
+        BASE_DIR/"assets"/"Amiri-Bold.ttf",
+        BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
+        BASE_DIR/"assets"/"NotoSansSymbols2-Regular.ttf",
+        BASE_DIR/"assets"/"NotoSansEgyptianHieroglyphs-Regular.ttf",
+        BASE_DIR/"assets"/"NotoMusic-Regular.ttf",
+    ]
+    return [_load_font(p,size) for p in paths if p.is_file()]
+
+def _font_has_glyph(font, ch):
+    try:
+        return font.getmask(ch).getbbox() is not None and font.getlength(ch) > 0
+    except Exception:
+        return False
+
+def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=2, stroke_fill=(0,0,0,220)):
+    """Draw mixed Arabic/decorative Unicode without tofu boxes.
+    Arabic runs use Noto Arabic; missing symbols are drawn from dedicated fallback fonts.
+    The original Unicode string is never transliterated or stripped.
+    """
+    text=_shape_name(raw_text)
+    base=_gift_font(text,size)
+    fallbacks=_fallback_fonts(size)
+    # Build runs by glyph coverage. Keep combining marks with the preceding run where possible.
+    runs=[]
+    cur_font=None; cur=[]
+    for ch in text:
+        chosen=base if _font_has_glyph(base,ch) else next((f for f in fallbacks if _font_has_glyph(f,ch)), base)
+        if cur_font is None or chosen is cur_font:
+            cur.append(ch)
+        else:
+            runs.append((cur_font,''.join(cur))); cur=[ch]
+        cur_font=chosen
+    if cur: runs.append((cur_font,''.join(cur)))
+    x,y=xy
+    for font,run in runs:
+        draw.text((x,y),run,font=font,fill=fill,stroke_width=stroke_width,stroke_fill=stroke_fill)
+        try: x += draw.textlength(run,font=font)
+        except Exception: x += font.getlength(run)
+    return x
+
+def _fit_crop(im,size):
+    im=im.convert("RGB"); tw,th=size; scale=max(tw/im.width,th/im.height); nw,nh=max(tw,int(im.width*scale)),max(th,int(im.height*scale)); im=im.resize((nw,nh),Image.LANCZOS); left=max(0,(nw-tw)//2); top=max(0,(nh-th)//2); return im.crop((left,top,left+tw,top+th))
+
+def _draw_centered(draw,center,raw_text,size,fill,max_width):
+    size=int(size)
+    # Measure using the actual mixed-font renderer; shrink until it fits.
+    while size>14:
+        tmp=_gift_font(raw_text,size)
+        # approximate mixed width from runs
+        x=0
+        for ch in _shape_name(raw_text):
+            f=tmp if _font_has_glyph(tmp,ch) else next((f for f in _fallback_fonts(size) if _font_has_glyph(f,ch)),tmp)
+            x += f.getlength(ch)
+        if x<=max_width: break
+        size-=2
+    # Draw from centered x. For Arabic the exact visual shaping is retained by Noto Arabic runs.
+    tmp=_gift_font(raw_text,size)
+    width=sum((tmp if _font_has_glyph(tmp,ch) else next((f for f in _fallback_fonts(size) if _font_has_glyph(f,ch)),tmp)).getlength(ch) for ch in _shape_name(raw_text))
+    bbox=tmp.getbbox("Hg")
+    x=center[0]-width/2
+    y=center[1]-(bbox[3]-bbox[1])/2-bbox[1]
+    _draw_exact_text(draw,(x,y),raw_text,size,fill,stroke_width=3,stroke_fill=(0,0,0,220))
+
+def render_gift_card(gift_id,sender_name,receiver_name):
+    if not PIL_AVAILABLE: raise RuntimeError("Pillow غير مثبت")
+    files=[p for p in GIFT_IMAGE_FILES.get(str(gift_id),[]) if p.is_file()]
+    if not files: raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
+    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
+    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
+    image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA"); image.alpha_composite(template); d=ImageDraw.Draw(image); w,h=template.size
+    gold=(244,196,92,255); panel=(10,14,28,245); header=(int(w*.27),65,int(w*.73),205)
+    d.rounded_rectangle(header,radius=48,fill=panel,outline=gold,width=4)
+    gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
+    _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
+    box_w=int(w*.64); box_h=int(h*.105); box_x=(w-box_w)//2; top_y=int(h*.705); bottom_y=int(h*.815)
+    for y in (top_y,bottom_y): d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=28,fill=panel,outline=gold,width=4)
+    _draw_centered(d,(w/2,top_y+28),"من",27,(255,224,165,255),box_w-20); _draw_centered(d,(w/2,bottom_y+28),"إلى",27,(255,224,165,255),box_w-20)
+    colors=[(255,130,165,255),(100,220,255,255),(255,211,85,255),(180,135,255,255),(100,235,170,255),(255,150,95,255)]; c1,c2=random.sample(colors,2)
+    _draw_centered(d,(w/2,top_y+box_h*.68),sender_name,39,c1,box_w-42); _draw_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,c2,box_w-42)
+    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.png"; out.parent.mkdir(parents=True,exist_ok=True); image.save(out,"PNG",optimize=True); return out
+
+class _MediaHandler(SimpleHTTPRequestHandler):
+    def _resolve_target(self):
+        path=unquote(urlparse(self.path).path)
+        if path.startswith("/assets/"):
+            rel=path[len("/assets/"):].lstrip("/"); root=ASSETS_DIR.resolve(); target=(ASSETS_DIR/rel).resolve()
+        elif path.startswith("/gifts/"):
+            rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
+        elif path.startswith("/media/"):
+            rel=path[len("/media/"):].lstrip("/"); root=(BASE_DIR/"generated_music").resolve(); target=(BASE_DIR/"generated_music"/rel).resolve()
+        else:
+            return None
+        if root not in target.parents or not target.is_file(): return None
+        return target
+
+    def _ctype(self,target):
+        ctype,_=mimetypes.guess_type(str(target))
+        return ctype or {
+            ".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".gif":"image/gif",
+            ".mp3":"audio/mpeg",".m4a":"audio/mp4",".webm":"audio/webm",".ogg":"audio/ogg"
+        }.get(target.suffix.lower(),"application/octet-stream")
+
+    def _serve(self,head_only=False):
+        target=self._resolve_target()
+        if not target:
+            self.send_error(404); return
+        try:
+            total=target.stat().st_size; start=0; end=total-1; status=200
+            rh=self.headers.get("Range")
+            if rh and rh.startswith("bytes="):
+                spec=rh.split("=",1)[1].split(",",1)[0].strip(); a,_,b=spec.partition("-")
+                if a: start=int(a); end=int(b) if b else total-1
+                elif b:
+                    length=int(b); start=max(0,total-length)
+                if start>=total or end<start:
+                    self.send_response(416); self.send_header("Content-Range",f"bytes */{total}"); self.end_headers(); return
+                end=min(end,total-1); status=206
+            length=end-start+1
+            self.send_response(status)
+            self.send_header("Content-Type",self._ctype(target))
+            self.send_header("Accept-Ranges","bytes")
+            self.send_header("Content-Length",str(length))
+            if status==206: self.send_header("Content-Range",f"bytes {start}-{end}/{total}")
+            self.send_header("Cache-Control","public,max-age=86400")
+            self.send_header("Access-Control-Allow-Origin","*")
+            self.end_headers()
+            if head_only: return
+            with target.open("rb") as fh:
+                fh.seek(start); remaining=length
+                while remaining:
+                    chunk=fh.read(min(1024*1024,remaining))
+                    if not chunk: break
+                    self.wfile.write(chunk); remaining-=len(chunk)
+        except Exception:
+            try: self.send_error(404)
+            except Exception: pass
+
+    def do_HEAD(self): self._serve(True)
+    def do_GET(self): self._serve(False)
+    def log_message(self,fmt,*args):
+        if DEBUG: print("[MEDIA] "+(fmt%args),flush=True)
+
+
+def start_asset_server():
+    if not ASSET_HTTP_ENABLED: return None
+    try:
+        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True)
+        server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
+        threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
+        print(f"[MEDIA] HTTP server listening on :{ASSET_HTTP_PORT}",flush=True)
+        return server
+    except Exception as e:
+        print("[MEDIA] HTTP server failed:",repr(e),flush=True); return None
 
 class TalkinBot:
     def __init__(self):
@@ -729,76 +1059,72 @@ class TalkinBot:
         self.invite_lock = threading.Lock()
         self.invite_message_template = "{sender} يدعوك للغرفة {room}"
         self.known_rooms = set()
-        # Persistent points ledger. The configured master has unlimited points
-        # and is never stored in the ledger. All other balances are integers.
-        self.points_file = Path(os.getenv("POINTS_FILE", str(Path(__file__).resolve().parent / "points.json")))
-        self.points_lock = threading.Lock()
-        self.points = self._load_points()
+        self._join_lock = threading.Lock()
+        self._last_join_sent = {}
+        self._rejoin_attempts = defaultdict(int)
+        self._last_reconnect = 0.0
+        self._pending_reconnect_reason = ""
+        self._had_connection = False
         self.banned_words = set(BANNED_WORDS)
+        self.text_limit = max(80, int(os.getenv("TALKIN_TEXT_LIMIT", "180")))
         self.db = DatabaseBridge(self.log)
         self.db.sign_in()
-        self.media_server = None
+        self.music_last = defaultdict(float)
+        self.music_current = {}
+        self.music_lock = threading.Lock()
+        # Mini-games: free-to-play, no points are deducted.
+        self.game_lock = threading.Lock()
+        self.game_cooldown = defaultdict(float)
+        self.guess_games = {}
+        self.help_pages = {}
+        # Auto replies and per-user custom welcome messages.
+        self.auto_replies_enabled = True
+        self.auto_replies = {}
+        self.custom_welcome_enabled = True
+        self.custom_welcomes = {}
+        self._load_social_features()
+        self.invite_message_template = _message_template("invite", "default", "{sender} يدعوك للغرفة {room}")
+
+    def _load_social_features(self):
+        self.auto_replies_file = BASE_DIR / "auto_replies.json"
+        self.custom_welcomes_file = BASE_DIR / "custom_welcomes.json"
         try:
-            self.media_server = start_media_server(int(os.getenv("PORT", "8080")))
-        except Exception as e:
-            self.log("[MEDIA] server failed:", repr(e))
-
-    def _load_points(self):
+            data = _load_local_json(self.auto_replies_file, {})
+            self.auto_replies_enabled = bool(data.get("enabled", True))
+            raw = data.get("replies", {})
+            self.auto_replies = raw if isinstance(raw, dict) else {}
+        except Exception:
+            self.auto_replies_enabled, self.auto_replies = True, {}
         try:
-            if self.points_file.exists():
-                data = json.loads(self.points_file.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    return {str(k): max(0, int(v)) for k, v in data.items()}
-        except Exception as e:
-            print("[POINTS] load failed:", repr(e), flush=True)
-        return {}
+            data = _load_local_json(self.custom_welcomes_file, {})
+            self.custom_welcome_enabled = bool(data.get("enabled", True))
+            raw = data.get("welcomes", {})
+            self.custom_welcomes = raw if isinstance(raw, dict) else {}
+        except Exception:
+            self.custom_welcome_enabled, self.custom_welcomes = True, {}
 
-    def _save_points(self):
-        try:
-            self.points_file.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.points_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.points, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self.points_file)
-        except Exception as e:
-            print("[POINTS] save failed:", repr(e), flush=True)
-
-    def is_master(self, username):
-        return bool(BOT_MASTER and str(username or "").strip().casefold() == BOT_MASTER.casefold())
-
-    def points_balance(self, username):
-        if self.is_master(username):
-            return None  # unlimited
-        with self.points_lock:
-            return int(self.points.get(str(username).strip(), 0))
-
-    def transfer_points(self, sender, receiver, amount):
-        sender = str(sender or "").strip().lstrip("@")
-        receiver = str(receiver or "").strip().lstrip("@")
-        amount = int(amount)
-        if not sender or not receiver:
-            raise ValueError("اسم المستخدم غير صحيح")
-        if amount <= 0:
-            raise ValueError("كمية النقاط يجب أن تكون أكبر من صفر")
-        if sender.casefold() == receiver.casefold():
-            raise ValueError("لا يمكن تحويل النقاط إلى نفسك")
-        with self.points_lock:
-            if not self.is_master(sender):
-                balance = int(self.points.get(sender, 0))
-                if balance < amount:
-                    raise ValueError(f"رصيدك غير كافٍ. رصيدك: {balance:,} نقطة")
-                self.points[sender] = balance - amount
-            if not self.is_master(receiver):
-                self.points[receiver] = int(self.points.get(receiver, 0)) + amount
-            self._save_points()
-        return self.points_balance(sender), self.points_balance(receiver)
-
-    def points_text(self, username):
-        bal = self.points_balance(username)
-        return "♾️ نقاطك: غير محدودة" if bal is None else f"💰 نقاطك: {bal:,}"
+    def _save_social_features(self):
+        _save_local_json(self.auto_replies_file, {"enabled": self.auto_replies_enabled, "replies": self.auto_replies})
+        _save_local_json(self.custom_welcomes_file, {"enabled": self.custom_welcome_enabled, "welcomes": self.custom_welcomes})
 
     def log(self, *args):
         if DEBUG:
             print(*args, flush=True)
+
+    def report_master_error(self, context: str, error, room: str = ""):
+        """Send the real diagnostic privately without exceeding Talkin's limit."""
+        detail = " ".join(str(error or "خطأ غير معروف").split())
+        location = f" | الغرفة: {room}" if room else ""
+        message = f"❌ خطأ {context}{location}\nالتفاصيل: {detail}"
+        self.log(f"[{context}]", repr(error))
+        # Music/gift failures must remain visible in Railway Logs even when
+        # DEBUG=0; the master also receives the complete diagnostic privately.
+        print(f"[{context}] {detail}", flush=True)
+        if BOT_MASTER and _norm_user(BOT_MASTER) != _norm_user(BOT_ID):
+            try:
+                self.send_private_text(BOT_MASTER, message)
+            except Exception as notify_error:
+                self.log("[MASTER-ERROR] failed:", repr(notify_error))
 
     def authenticate(self):
         body = encode_auth_request(BOT_ID, BOT_PWD)
@@ -879,23 +1205,138 @@ class TalkinBot:
             raise RuntimeError("WebSocket is not connected")
         self.ws.send_binary(payload)
 
-    def join_room(self, room: str):
+    def join_room(self, room: str, force: bool = False):
+        """Join a room without spamming room_join.
+
+        TalkinChat treats room_join as a membership change on a WebSocket.
+        Re-sending it repeatedly can produce the visible leave/join loop.
+        Therefore the bot sends it once per room unless explicitly forced.
+        """
+        room = str(room or "").strip()
+        if not room:
+            return False
+        now = time.time()
+        with self._join_lock:
+            last = self._last_join_sent.get(room, 0.0)
+            if not force and now - last < float(os.getenv("JOIN_DEBOUNCE_SECONDS", "20")):
+                self.log("[ROOM] join suppressed (debounce):", room)
+                return False
+            self._last_join_sent[room] = now
         self.log("[ROOM] joining", room)
-        # APK's room_join sets room and explicitly sets intValue=0.
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
+        self.known_rooms.add(room)
+        return True
+
+    def leave_room(self, room: str):
+        """Leave exactly one Talkin room using the APK's room_leave packet."""
+        room = str(room or "").strip()
+        if not room:
+            return False
+        self.send_query(encode_query("room_leave", room=room))
+        with self._join_lock:
+            self.known_rooms.discard(room)
+            self._last_join_sent.pop(room, None)
+        self.room_users.pop(room, None)
+        self.log("[ROOM] left", room)
+        return True
+
+    def leave_all_rooms(self):
+        """Leave every currently tracked room; no room is automatically rejoined."""
+        rooms = [r for r in self.known_rooms if str(r).strip()]
+        for room in rooms:
+            try:
+                self.leave_room(room)
+            except Exception as e:
+                self.log("[ROOM] leave failed", room, repr(e))
+        return rooms
+
+    def _split_talkin_text(self, text: str, limit: int = None):
+        """Compatibility helper: command menus use their own <=300 splitter."""
+        text = str(text or "")
+        return [text] if text else [""]
+
+    def _send_text_packets(self, packet_type: str, text: str, **kwargs):
+        # All normal results stay in ONE message: games, music, publishing,
+        # points, admin results, etc. Only command-menu pages are split.
+        payload = dict(kwargs)
+        payload["type_"] = "text"
+        payload["body"] = str(text or "")
+        self.send_query(encode_query(packet_type, **payload))
+        return True
+
+    def _send_help_chunks(self, packet_type: str, text: str, limit: int = 300, **kwargs):
+        """Send a command list in ordered chunks, each <= 300 chars."""
+        text = str(text or "")
+        if not text:
+            return True
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        chunks=[]; current=""
+        for line in lines:
+            candidate = line if not current else current + "\n" + line
+            if len(candidate) <= limit:
+                current=candidate
+            else:
+                if current:
+                    chunks.append(current)
+                # A single command should normally fit; hard-split only if needed.
+                while len(line) > limit:
+                    cut=line.rfind(" ",0,limit+1)
+                    if cut < max(20,limit//2): cut=limit
+                    chunks.append(line[:cut].rstrip())
+                    line=line[cut:].lstrip()
+                current=line
+        if current: chunks.append(current)
+        for chunk in chunks:
+            payload=dict(kwargs); payload["type_"]="text"; payload["body"]=chunk
+            self.send_query(encode_query(packet_type, **payload))
+        return True
 
     def send_room_text(self, room: str, text: str):
-        self.send_query(encode_query("room_message", type_="text", room=room, body=text))
+        return self._send_text_packets("room_message", text, room=room)
 
-    def send_room_media(self, room: str, media_type: str, url: str, text: str = "", duration_ms: int = 0):
-        self.send_query(encode_query("room_message", type_=media_type, room=room, body=text, url=url, length=str(int(duration_ms or 0))))
+    def send_room_lines(self, room: str, lines):
+        for line in lines:
+            if line is not None:
+                self.send_room_text(room, str(line))
+        return True
 
     def send_admin(self, room: str, target: str, operation: str):
-        # Exact command forms observed in the APK.
+        """Execute room moderation directly over TalkinChat's native room_admin query.
+
+        The deployment log confirms the native result states:
+          kick -> role_changed with role "kicked", followed by user_left
+          ban  -> role_changed with role "outcast"
+        Therefore kick/ban must NOT depend on Supabase, config.json, or a DB RPC.
+        """
+        room = str(room or "").strip()
+        target = str(target or "").strip().lstrip("@")
+        if not room:
+            raise ValueError("room is required")
+        if not target:
+            raise ValueError("target is required")
+
         if operation == "kick":
-            return self.send_query(encode_query("room_admin", type_="kick", room=room, to=target, value="none"))
+            self.log(f"[MOD] native kick room={room} target=@{target}")
+            payload = encode_query(
+                "room_admin",
+                type_="kick",
+                room=room,
+                to=target,
+                value="none",
+            )
+            return self.send_query(payload)
+
         if operation == "ban":
-            return self.send_query(encode_query("room_admin", type_="ban_ip", room=room, to=target, value="outcast"))
+            self.log(f"[MOD] native ban_ip room={room} target=@{target}")
+            payload = encode_query(
+                "room_admin",
+                type_="ban_ip",
+                room=room,
+                to=target,
+                value="outcast",
+            )
+            return self.send_query(payload)
+
         role_map = {
             "outcast": "outcast",
             "admin": "admin",
@@ -904,7 +1345,15 @@ class TalkinBot:
             "none": "none",
         }
         if operation in role_map:
-            return self.send_query(encode_query("room_admin", type_="change_role", room=room, to=target, value=role_map[operation]))
+            return self.send_query(
+                encode_query(
+                    "room_admin",
+                    type_="change_role",
+                    room=room,
+                    to=target,
+                    value=role_map[operation],
+                )
+            )
         raise ValueError("Unknown admin operation: " + operation)
 
     def ack(self, uid: str):
@@ -912,45 +1361,27 @@ class TalkinBot:
             self.send_query(encode_query("ack_msg", uid=uid))
 
     def send_private_text(self, username: str, text: str):
-        """Send one normal TalkinChat private text message."""
-        username = str(username or "").strip()
-        if not username or username == BOT_ID:
-            return False
-        self.send_query(encode_query("chat_message", type_="text", to=username, body=text))
-        return True
+        """Send the complete private text in safe sequential chunks.
 
-    def send_private_media(self, username: str, media_type: str, url: str, text: str = "", duration_ms: int = 0):
-        """Send media (image/voice) in a private chat, same fields as room media."""
-        username = str(username or "").strip()
-        if not username or username == BOT_ID:
-            return False
-        self.send_query(encode_query("chat_message", type_=media_type, to=username,
-                                     body=text, url=url, length=str(int(duration_ms or 0))))
-        return True
-
-    def report_master_error(self, source: str, exc: Exception):
-        """Send the real exception to the configured master privately.
-        The room only receives the short user-friendly failure message.
+        The private chat may display long reports, but one oversized protobuf
+        can make Talkin close the entire WebSocket with code 1009. Chunking
+        preserves every character while keeping each packet below the safe
+        room/server limit.
         """
-        if not BOT_MASTER:
-            return
-        try:
-            detail = traceback.format_exc().strip()
-            if not detail or detail == "NoneType: None":
-                detail = repr(exc)
-            # Keep private diagnostics readable and bounded.
-            if len(detail) > 3500:
-                detail = detail[-3500:]
-            text = (
-                f"🚨 خطأ فعلي في البوت\n"
-                f"📍 القسم: {source}\n"
-                f"⚠️ النوع: {type(exc).__name__}\n"
-                f"📝 الخطأ: {exc!s}\n"
-                f"```\n{detail}\n```"
-            )
-            self.send_private_text(BOT_MASTER, text)
-        except Exception as report_exc:
-            self.log("[ERROR-REPORT] failed:", repr(report_exc))
+        username = str(username or "").strip()
+        if not username or username == BOT_ID:
+            return False
+        return self._send_text_packets("chat_message", text, to=username)
+
+    def send_private_media(self, username: str, media_url: str, media_type: str, duration: int = 0):
+        """Send audio/image back to the private-chat sender."""
+        return self.send_query(encode_query(
+            "chat_message", type_=media_type, to=username, url=media_url,
+            length=str(max(0, int(duration or 0))) if media_type == "audio" else None
+        ))
+
+    def reply_text(self, room: str, text: str, private_to: str = ""):
+        return self.send_private_text(private_to, text) if private_to else self.send_room_text(room, text)
 
     def request_occupants(self, room: str = ""):
         """Load users from ALL rooms currently joined by the bot.
@@ -973,9 +1404,6 @@ class TalkinBot:
             r = str(r).strip()
             if r and r not in active_rooms:
                 active_rooms.append(r)
-        if self.room and self.room not in active_rooms:
-            active_rooms.insert(0, self.room)
-
         self.log("[INV] loading users from ALL active rooms:", active_rooms)
         try:
             self.send_private_text(
@@ -1250,25 +1678,621 @@ class TalkinBot:
         )
         self.invite_thread.start()
 
-    def _run_music_command(self, room, frm, query):
-        """Download outside the WebSocket reader so slow YouTube requests cannot disconnect the bot."""
-        try:
-            self.send_room_text(room, "⏳ جاري تجهيز الأغنية…")
-            track = search_download_youtube(query)
-            url = music_url(track["path"])
-            self.send_room_text(room, f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{frm}\n🏠 الغرفة: {room}")
-            self.send_room_media(room, "voice", url, f"▶️ {track['title']}", track["duration_ms"])
-        except Exception as e:
-            self.log("[MEDIA] music worker failed:", repr(e))
-            # Report privately first; this worker must never re-raise into the
-            # WebSocket event loop, otherwise one failed search could trigger
-            # a reconnect and make the bot appear to leave the room.
-            self.report_master_error("تشغيل الأغاني", e)
+
+    def send_room_media(self, room: str, media_url: str, media_type: str, duration: int = 0):
+        """Send room media using Query's normal room/url fields.
+
+        Text messages already prove that Query field ``room`` (field 6) is
+        the room identifier. Media uses the same field; ``length`` (field 3)
+        carries the optional audio duration. Putting the room in ``password``
+        made Talkin accept the packet but discard the image/audio payload.
+        """
+        if media_type == "audio":
+            return self.send_query(encode_query(
+                "room_message", type_="audio",
+                length=str(max(0, int(duration or 0))), room=room, url=media_url
+            ))
+        return self.send_query(encode_query(
+            "room_message", type_=media_type, room=room, url=media_url
+        ))
+
+    def _music_download(self,query):
+        """Search/download public audio and return an MP3 ready for TalkinChat.
+
+        Primary source: SoundCloud (public audio, independent of YouTube).
+        Fallback: YouTube through yt-dlp with optional YOUTUBE_COOKIES.
+        Public YouTube/Spotify URLs are first resolved to a title so the
+        SoundCloud route can still be used when YouTube extraction is blocked.
+        """
+        if yt_dlp is None:
+            raise RuntimeError("yt-dlp غير مثبت")
+
+        outdir=BASE_DIR/"generated_music"
+        outdir.mkdir(parents=True,exist_ok=True)
+        stamp=uuid.uuid4().hex
+        out_mp3=outdir/(stamp+".mp3")
+        errors=[]
+
+        def resolve_public_title(value):
+            """Get public page title without downloading media."""
             try:
-                self.send_room_text(room, "❌ لم أجد الأغنية أو تعذر تشغيلها حالياً. جرّب كتابة اسم آخر.")
-            except Exception as send_exc:
-                self.log("[MEDIA] failure notice failed:", repr(send_exc))
-            return
+                u=str(value or "").strip()
+                if not re.match(r"^https?://",u,re.I):
+                    return ""
+                if "youtube.com" in u.lower() or "youtu.be" in u.lower():
+                    r=requests.get("https://www.youtube.com/oembed",params={"url":u,"format":"json"},
+                                   headers={"User-Agent":"Mozilla/5.0"},timeout=15)
+                    if r.ok:
+                        data=r.json()
+                        return str(data.get("title") or "").strip()
+                if "open.spotify.com" in u.lower():
+                    r=requests.get(u,headers={"User-Agent":"Mozilla/5.0"},timeout=15)
+                    if r.ok:
+                        m=re.search(r'<meta[^>]+property=[\"\']og:title[\"\'][^>]+content=[\"\']([^\"\']+)',r.text,re.I)
+                        if not m:
+                            m=re.search(r'<meta[^>]+content=[\"\']([^\"\']+)[\"\'][^>]+property=[\"\']og:title[\"\']',r.text,re.I)
+                        if m:
+                            title=re.sub(r'\s*\|\s*Spotify\s*$','',m.group(1),flags=re.I).strip()
+                            return title
+            except Exception as exc:
+                errors.append(f"Public metadata: {type(exc).__name__}: {exc}")
+            return ""
+
+        def normalize_to_mp3(source, duration=0):
+            if duration and int(duration) > MUSIC_MAX_SECONDS:
+                raise RuntimeError(f"الأغنية أطول من {MUSIC_MAX_SECONDS} ثانية")
+            source=Path(source)
+            if source.suffix.lower()==".mp3":
+                return source
+            ffmpeg_bin=shutil.which("ffmpeg")
+            if not ffmpeg_bin:
+                raise RuntimeError("FFmpeg غير موجود داخل Railway")
+            proc=subprocess.run([
+                ffmpeg_bin,"-y","-hide_banner","-loglevel","error",
+                "-i",str(source),"-vn","-ac","2","-ar","44100",
+                "-codec:a","libmp3lame","-b:a","192k",str(out_mp3)
+            ],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,timeout=180)
+            if proc.returncode!=0 or not out_mp3.is_file() or out_mp3.stat().st_size<=4096:
+                detail=" | ".join((proc.stderr or "").strip().splitlines()[-4:])
+                raise RuntimeError("فشل تحويل الصوت إلى MP3: "+detail[:500])
+            try: source.unlink()
+            except Exception: pass
+            return out_mp3
+
+        def download_with_ydl(target,label,cookies=False):
+            tmpdir=outdir/f".{stamp}_{label}"
+            tmpdir.mkdir(parents=True,exist_ok=True)
+            template=str(tmpdir/"source.%(ext)s")
+            opts={
+                "quiet":True,"no_warnings":True,"noplaylist":True,
+                "format":"bestaudio/best","outtmpl":template,
+                "socket_timeout":45,"retries":5,"fragment_retries":5,
+                "extractor_retries":3,"file_access_retries":3,
+                "cachedir":False,"overwrites":True,
+                "concurrent_fragment_downloads":1,
+                "http_headers":{"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36"},
+                "check_formats":False,
+                "js_runtimes":{"node":{}},
+                "remote_components":{"ejs":"github"},
+            }
+            if cookies and YOUTUBE_COOKIE_FILE:
+                opts["cookiefile"]=YOUTUBE_COOKIE_FILE
+            if label.startswith("youtube_"):
+                client=label.split("_",1)[1]
+                if client != "native_default":
+                    opts["extractor_args"]={"youtube":{"player_client":[client]}}
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info=ydl.extract_info(target,download=True)
+                    if info and info.get("entries"):
+                        info=next((x for x in info["entries"] if x),None)
+                    if not info:
+                        raise RuntimeError("لم يتم العثور على الأغنية")
+                candidates=[x for x in tmpdir.iterdir() if x.is_file() and x.suffix.lower() not in (".part",".ytdl",".temp") and x.stat().st_size>4096]
+                if not candidates:
+                    raise RuntimeError("تم العثور على الأغنية لكن لم يكتمل الملف الصوتي")
+                source=max(candidates,key=lambda x:x.stat().st_mtime)
+                duration=int(info.get("duration") or 0)
+                mp3=normalize_to_mp3(source,duration)
+                return {
+                    "id":str(info.get("id") or ""),
+                    "title":str(info.get("title") or query),
+                    "uploader":str(info.get("uploader") or info.get("channel") or ""),
+                    "duration":duration,
+                },mp3
+            except Exception as exc:
+                errors.append(f"{label}: {type(exc).__name__}: {exc}")
+                shutil.rmtree(tmpdir,ignore_errors=True)
+                return None
+
+        # Resolve URL to a searchable title when possible. This lets a
+        # blocked YouTube/Spotify URL still use SoundCloud as the source.
+        search_query=str(query or "").strip()
+        if re.match(r"^https?://",search_query,re.I):
+            title=resolve_public_title(search_query)
+            if title:
+                search_query=title
+
+        # -------- SoundCloud primary source --------
+        sc_targets=[]
+        if re.match(r"^https?://",query,re.I) and "soundcloud.com" in query.lower():
+            sc_targets=[query]
+        elif search_query:
+            sc_targets=["scsearch1:"+search_query]
+
+        for target in sc_targets:
+            result=download_with_ydl(target,"soundcloud",cookies=False)
+            if result:
+                info,mp3=result
+                for child in outdir.glob(f".{stamp}_*"):
+                    if child.is_dir(): shutil.rmtree(child,ignore_errors=True)
+                return info,mp3
+
+        # -------- YouTube fallback --------
+        youtube_target=query if re.match(r"^https?://",query,re.I) else "ytsearch1:"+query
+        for client in ("web_embedded","default","native_default"):
+            result=download_with_ydl(youtube_target,f"youtube_{client}",cookies=True)
+            if result:
+                info,mp3=result
+                for child in outdir.glob(f".{stamp}_*"):
+                    if child.is_dir(): shutil.rmtree(child,ignore_errors=True)
+                return info,mp3
+
+        detail=" | ".join(errors[-10:])
+        raise RuntimeError("تعذر تنزيل ملف صوت من SoundCloud أو YouTube."+(f" تفاصيل: {detail[:1200]}" if detail else ""))
+
+    def handle_music_command(self,room,text,requester,private_to=""):
+        raw=text.strip()
+        if not raw.lower().startswith(".sa "): return False
+        query=raw[4:].strip()
+        if not query: self.reply_text(room,"❌ اكتب: .sa اسم الأغنية",private_to); return True
+        now=time.time(); last=self.music_last.get(requester,0)
+        if now-last<MUSIC_COOLDOWN: self.reply_text(room,f"⏳ انتظر {int(MUSIC_COOLDOWN-(now-last))+1} ثانية.",private_to); return True
+        self.music_last[requester]=now
+        def worker():
+            try:
+                public_base = _public_base_url()
+                if not public_base: raise RuntimeError("لا يوجد رابط عام للصوت؛ أنشئ Railway Public Domain أو ضع PUBLIC_BASE_URL")
+                info,path=self._music_download(query)
+                title=str(info.get("title") or query)
+                artist=str(info.get("uploader") or info.get("channel") or "YouTube")
+                duration=int(info.get("duration") or 0)
+                url=public_base+"/media/"+path.name
+                # Music posts use the user's messages.json template.  The
+                # reaction code is intentionally limited to 4 characters.
+                code=uuid.uuid4().hex[:4]
+                caption=_message_template(
+                    "music", "broadcast",
+                    "🎵 {title}\n🎤 {requester_name}\n🎶 {title}\n📡 المصدر: {source_label}\n🏠 الغرفة الأصلية: {room}\n━━━━━━━━━━━━━\n👍 lk@{code}\n❤️ lv@{code}\n👎 dl@{code}\n💬 cm@{code} msg\n🚨 report@{code} msg",
+                    requester_name=requester, title=title, artist=artist,
+                    source_label=artist or "Music", room=room, code=code,
+                    url=url, duration=duration
+                )
+                # Music is broadcast to every room currently joined by the bot.
+                # The requester also receives the same post privately.
+                self.reaction_targets[code] = {"publisher": requester, "kind": "music", "title": title, "description": title, "created_at": time.time()}
+                target_rooms=list(self.known_rooms) or ([room] if room else [])
+                for target_room in target_rooms:
+                    self.send_room_text(target_room,caption)
+                    self.send_room_media(target_room,url,"audio",duration)
+                self.send_private_text(requester,caption)
+                self.send_private_media(requester,url,"audio",duration)
+            except Exception as e:
+                self.report_master_error("تشغيل الأغنية", e, room)
+                self.reply_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.", private_to)
+        threading.Thread(target=worker,name="music-request",daemon=True).start(); self.reply_text(room,"⏳ جاري البحث عن الأغنية وتحضير الصوت...",private_to); return True
+
+    def send_gift_native(self, room: str, gift_id: str, target_username: str):
+        """Legacy/native packet kept for diagnostics only. Gift command now sends the real asset image."""
+        kwargs = {"room": room}
+        kwargs[GIFT_TARGET_FIELD] = target_username
+        kwargs[GIFT_ID_FIELD] = gift_id
+        return self.send_query(encode_query("gifts", type_=GIFT_PROTOCOL, **kwargs))
+
+    def gift_help(self, room):
+        lines = ["🎁 الهدايا المتاحة:"]
+        for k, (emoji, name) in GIFT_CATALOG.items():
+            lines.append(f"{k} {emoji} {name}")
+        lines.append("📌 الإرسال: sa@رقم_الهدية@اسم_المستخدم")
+        self.send_room_text(room, "\n".join(lines))
+
+    def _verify_public_media_url(self, url: str, media_kind: str = "image"):
+        try:
+            r=requests.get(url,headers={"Range":"bytes=0-4095","User-Agent":"TalkinBot/22"},timeout=15,stream=True)
+            ctype=(r.headers.get("Content-Type") or "").lower()
+            if r.status_code not in (200,206):
+                raise RuntimeError(f"الرابط العام أعاد HTTP {r.status_code}")
+            if media_kind=="image" and not ctype.startswith("image/"):
+                raise RuntimeError(f"نوع الصورة غير صحيح: {ctype or 'unknown'}")
+            if media_kind=="audio" and not (ctype.startswith("audio/") or "octet-stream" in ctype):
+                raise RuntimeError(f"نوع الصوت غير صحيح: {ctype or 'unknown'}")
+            return True
+        except Exception as exc:
+            self.log("[MEDIA] public URL check failed:",repr(exc))
+            raise RuntimeError(f"الرابط العام للوسائط غير قابل للوصول: {exc}") from exc
+
+    def handle_gift_command(self, room: str, text: str, sender_name: str = "", private_to: str = ""):
+        raw=text.strip(); m=re.match(r"^sa@([^@]+)@(.+)$",raw,re.I)
+        if not m: return False
+        gift_id=m.group(1).strip(); target=m.group(2).strip().lstrip("@"); item=GIFT_CATALOG.get(gift_id)
+        if not item or not target:
+            self.reply_text(room,"❌ الصيغة: sa@رقم_الهدية@اسم_المستخدم",private_to); return True
+        try:
+            sender_name = str(sender_name or BOT_ID).strip()
+            # Giant Chat point costs; owner/masters have unlimited points.
+            cost=int(GIFT_COSTS.get(str(gift_id),0)); charged=False
+            if not _is_master_name(sender_name):
+                balance=_get_points(sender_name)
+                if balance < cost:
+                    self.reply_text(room,f"❌ رصيدك غير كافٍ. الهدية تحتاج {cost} نقطة، ورصيدك {balance}.",private_to); return True
+                _add_points(sender_name,-cost); charged=True
+            # Render and send the real gift card image, then send the gift text.
+            # The image is hosted by the bot media server under /gifts/.
+            public_base = _public_base_url()
+            if not public_base:
+                if charged:
+                    _add_points(sender_name, cost)
+                raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ أنشئ Railway Public Domain أو ضع PUBLIC_BASE_URL")
+            gift_path = render_gift_card(gift_id, sender_name, target)
+            gift_url = public_base + "/gifts/" + gift_path.name
+            self._verify_public_media_url(gift_url, "image")
+            if not gift_path.is_file() or gift_path.stat().st_size < 64:
+                raise RuntimeError(f"ملف صورة الهدية غير صالح: {gift_path}")
+            if private_to:
+                self.send_private_media(private_to, gift_url, "image")
+                self.send_private_text(private_to, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
+            else:
+                self.send_room_media(room, gift_url, "image")
+                self.send_room_text(room, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
+        except Exception as e:
+            self.report_master_error("إرسال صورة الهدية", e, room)
+            self.reply_text(room, "❌ تعذر إرسال صورة الهدية. تم إرسال الخطأ الحقيقي للماستر.", private_to)
+        return True
+
+    # ----------------------------- Mini Games -----------------------------
+    def _game_award(self, username, amount):
+        if not username or _is_master_name(username):
+            return _get_points(username)
+        return _add_points(username, int(amount))
+
+    def _game_ready(self, username, room, cooldown=3.0):
+        key=(str(room or "").casefold(), _norm_user(username))
+        now=time.time()
+        with self.game_lock:
+            last=self.game_cooldown.get(key,0.0)
+            if now-last < cooldown:
+                return False, int(cooldown-(now-last))+1
+            self.game_cooldown[key]=now
+        return True,0
+
+    def game_help(self, room):
+        # Game results/help are one message; only command menus are chunked.
+        self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال — سؤال معلومات عامة بجائزة 15 نقطة.\n📌 لا توجد أي تكلفة أو خصم نقاط عند اللعب.")
+
+    def handle_game_command(self, room, text, sender_name):
+        raw=str(text or "").strip()
+        if not raw or not sender_name: return False
+        low=raw.casefold(); key=(str(room or "").casefold(), _norm_user(sender_name))
+        if low in ("العاب","ألعاب","لعب","games","game"):
+            self.game_help(room); return True
+
+        if re.fullmatch(r"\d{1,2}", raw):
+            with self.game_lock: game=self.guess_games.get(key)
+            if not game: return False
+            guess=int(raw); game["attempts"]+=1; target=game["number"]
+            if not 1<=guess<=10:
+                self.send_room_text(room,f"🎯 @{sender_name} اختر رقماً من 1 إلى 10."); return True
+            if guess==target:
+                reward=max(10,30-(game["attempts"]-1)*5)
+                with self.game_lock: self.guess_games.pop(key,None)
+                balance=self._game_award(sender_name,reward); suffix="♾️" if balance is None else str(balance)
+                self.send_room_text(room,f"🎯 مبروك @{sender_name}! الرقم هو {target} ✅\n🏆 ربحت {reward} نقطة.\n💰 الرصيد: {suffix}"); return True
+            if game["attempts"]>=3:
+                with self.game_lock: self.guess_games.pop(key,None)
+                self.send_room_text(room,f"🎯 انتهت المحاولات يا @{sender_name}. الرقم الصحيح كان {target}. 😄"); return True
+            hint="⬆️ الرقم أكبر" if guess<target else "⬇️ الرقم أصغر"
+            self.send_room_text(room,f"🎯 @{sender_name}: {hint} — بقيت {3-game['attempts']} محاولات."); return True
+
+        if low in ("حظ","الحظ","luck"):
+            ok,wait=self._game_ready(sender_name,room,4.0)
+            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+            label,reward=random.choice((("🍀 حظ ممتاز!",30),("✨ حظ جميل!",20),("🌟 حظ متوسط!",10),("😅 حظك اليوم عادي!",5)))
+            balance=self._game_award(sender_name,reward); suffix="♾️" if balance is None else str(balance)
+            self.send_room_text(room, f"{label}\n👤 @{sender_name}\n🎁 الجائزة: {reward} نقطة\n💰 الرصيد: {suffix}"); return True
+
+        if low in ("نرد","ارم النرد","ارمي النرد","dice"):
+            ok,wait=self._game_ready(sender_name,room,3.0)
+            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+            roll=random.randint(1,6); reward={1:2,2:3,3:5,4:7,5:10,6:20}[roll]
+            balance=self._game_award(sender_name,reward); suffix="♾️" if balance is None else str(balance)
+            self.send_room_text(room,f"🎲 @{sender_name} رمى النرد: {roll}\n🎁 ربحت {reward} نقطة!\n💰 الرصيد: {suffix}"); return True
+
+        if low in ("حجر","ورق","مقص"):
+            ok,wait=self._game_ready(sender_name,room,3.0)
+            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+            bot_choice=random.choice(("حجر","ورق","مقص"))
+            if low==bot_choice: result,reward="🤝 تعادل!",5
+            elif (low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق")): result,reward="🏆 فزت!",12
+            else: result,reward="😄 خسرت الجولة، جرّب مرة أخرى.",2
+            balance=self._game_award(sender_name,reward); suffix="♾️" if balance is None else str(balance)
+            self.send_room_text(room,f"✂️ @{sender_name}: {low}\n🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {suffix}"); return True
+
+        if low in ("تخمين","ابدأ تخمين","تخمين 1-10","guess"):
+            ok,wait=self._game_ready(sender_name,room,3.0)
+            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+            with self.game_lock: self.guess_games[key]={"number":random.randint(1,10),"attempts":0,"started":time.time()}
+            self.send_room_text(room,f"🎯 @{sender_name} بدأت لعبة التخمين!\n🔢 اختر رقماً من 1 إلى 10.\n🎲 لديك 3 محاولات — اكتب الرقم فقط."); return True
+
+        if low in ("سؤال","سوال","quiz","مسابقة"):
+            ok,wait=self._game_ready(sender_name,room,5.0)
+            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+            q,a=random.choice((("ما هو أكبر كوكب في المجموعة الشمسية؟","المشتري"),("كم عدد أيام الأسبوع؟","7"),("ما عاصمة اليمن؟","صنعاء"),("ما لون الموز غالباً عند النضج؟","أصفر")))
+            with self.game_lock: self.guess_games[(str(room or "").casefold(),"__quiz__")]={"answer":a,"expires":time.time()+30}
+            self.send_room_text(room,f"🧠 سؤال سريع!\n❓ {q}\n💬 أول شخص يكتب الإجابة الصحيحة يربح 15 نقطة."); return True
+
+        with self.game_lock: quiz=self.guess_games.get((str(room or "").casefold(),"__quiz__"))
+        if quiz and time.time()<=quiz.get("expires",0) and low==str(quiz.get("answer","")).casefold():
+            with self.game_lock: self.guess_games.pop((str(room or "").casefold(),"__quiz__"),None)
+            balance=self._game_award(sender_name,15); suffix="♾️" if balance is None else str(balance)
+            self.send_room_text(room,f"🧠 إجابة صحيحة يا @{sender_name}! 🎉\n🏆 +15 نقطة\n💰 الرصيد: {suffix}"); return True
+        return False
+
+    def _send_help(self, room=None, private_to=None, page=1):
+        text=_command_help(page)
+        if private_to:
+            self._send_help_chunks("chat_message", text, to=private_to)
+        elif room:
+            self._send_help_chunks("room_message", text, room=room)
+
+    def _handle_management_command(self, room, body, sender, is_private=False):
+        """Giant-style persistent management commands. Returns True if consumed."""
+        text=str(body or "").strip()
+        low=text.casefold()
+        # `اوامر` shows the organized menu only.
+        if low in ("اوامر","الاوامر","help","مساعدة"):
+            target = sender if is_private else None
+            if target:
+                self.send_private_text(target, _command_menu())
+            else:
+                self.send_room_text(room, _command_menu())
+            return True
+        m_help = re.fullmatch(r"help([1-7])", low)
+        if m_help:
+            page=int(m_help.group(1))
+            self.help_pages[(str(room), _norm_user(sender))]=page
+            self._send_help(room=room, private_to=sender if is_private else None, page=page)
+            return True
+        if low in ("ns","n","التالي","القائمة التالية","next"):
+            key=(str(room), _norm_user(sender))
+            page=int(self.help_pages.get(key,1) or 1)+1
+            if page>7: page=1
+            self.help_pages[key]=page
+            self._send_help(room=room, private_to=sender if is_private else None, page=page)
+            return True
+        if low in ("نقاطي","points"):
+            pts=_get_points(sender)
+            self.send_private_text(sender, "♾️ نقاطك: لا محدود" if pts is None else f"💰 نقاطك: {pts}")
+            return True
+        if low in ("توب","top"):
+            data=_points_data(); rows=[]
+            for v in data.values():
+                try: rows.append((int(v.get("points",0)),v.get("username", "")))
+                except Exception: pass
+            rows.sort(reverse=True)
+            msg="🏆 المتصدرين:\n"+"\n".join(f"{i}. @{u} — {p}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
+            if is_private: self.send_private_text(sender,msg)
+            else: self.send_room_text(room,msg)
+            return True
+        if low in ("المسترات", "masters"):
+            masters=_master_list()
+            names=[BOT_MASTER] + [x for x in masters if _norm_user(x)!=_norm_user(BOT_MASTER)]
+            msg="👑 الماسترز:\n"+"\n".join(f"{i}. @{u}" for i,u in enumerate(names,1)) if names and any(names) else "👑 لا يوجد ماستر مسجل."
+            if is_private: self.send_private_text(sender,msg)
+            else: self.send_room_text(room,msg)
+            return True
+        if not _is_master_name(sender):
+            return False
+        # Master commands are accepted from both private chat and rooms.
+        # Room moderation acts on the room where the command was received.
+        # Confirmations and diagnostics are sent privately to the master.
+        # Add/remove master. Only the owner from BOT_MASTER may alter master list.
+        if low.startswith("mas@"):
+            if _norm_user(sender) != _norm_user(BOT_MASTER):
+                self.send_private_text(sender,"🚫 إضافة الماسترز متاحة لصاحب البوت فقط."); return True
+            target=text[4:].strip().lstrip("@");
+            if not target: self.send_private_text(sender,"❌ الصيغة: mas@اسم المستخدم"); return True
+            masters=_master_list()
+            if not any(_norm_user(x)==_norm_user(target) for x in masters): masters.append(target); _save_local_json(MASTERS_FILE,masters)
+            self.send_private_text(sender,f"✅ تم إضافة @{target} كماستر متحكم بالبوت."); return True
+        if low.startswith("umas@") or low.startswith("umas "):
+            if _norm_user(sender) != _norm_user(BOT_MASTER):
+                self.send_private_text(sender,"🚫 إزالة الماسترز متاحة لصاحب البوت فقط."); return True
+            target=text[5:].strip().lstrip("@"); masters=[x for x in _master_list() if _norm_user(x)!=_norm_user(target)]; _save_local_json(MASTERS_FILE,masters)
+            self.send_private_text(sender,f"✅ تم إزالة @{target} من الماسترز."); return True
+        if low.startswith("sb@"):
+            if not _is_master_name(sender):
+                self.send_private_text(sender,"🚫 أمر النقاط للماستر فقط."); return True
+            m=re.match(r"^sb@([^@]+)@(-?\d+)$",text,re.I)
+            if not m: self.send_private_text(sender,"❌ الصيغة: sb@اسم المستخدم@عدد النقاط"); return True
+            target,amount=m.group(1).strip(),int(m.group(2)); new=_add_points(target,amount)
+            action = "تحويل" if amount >= 0 else "خصم"
+            self.send_private_text(sender,f"✅ تم {action} نقاط @{target} بمقدار {abs(amount)}. الرصيد: {new}")
+            if _norm_user(target) != _norm_user(sender):
+                self.send_private_text(target, f"💰 إشعار النقاط: تم {action} {abs(amount)} نقطة لحسابك بواسطة @{sender}. رصيدك الحالي: {new}")
+            return True
+        if low.startswith("s@"):
+            target=text[2:].strip().lstrip("@");
+            if not target: self.send_private_text(sender,"❌ الصيغة: s@اسم المستخدم"); return True
+            data=_verified_data(); data[_norm_user(target)]={"username":target,"verified_by":sender,"created_at":int(time.time())}; _save_local_json(VERIFIED_FILE,data)
+            self.send_private_text(sender,f"✅ تم توثيق @{target} لاستخدام البوت.")
+            if _norm_user(target) != _norm_user(sender):
+                self.send_private_text(target, f"✅ تم توثيق حسابك لاستخدام البوت بواسطة @{sender}.")
+            return True
+        if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
+            prefix="uns@" if low.startswith("uns@") else text.split("@",1)[0]+"@"
+            target=text[len(prefix):].strip().lstrip("@"); data=_verified_data(); data.pop(_norm_user(target),None); _save_local_json(VERIFIED_FILE,data)
+            self.send_private_text(sender,f"✅ تم إزالة توثيق @{target}."); return True
+        if low.startswith("vip@"):
+            target=text[4:].strip().lstrip("@");
+            if not target: self.send_private_text(sender,"❌ الصيغة: Vip@اسم المستخدم"); return True
+            data=_vip_data(); data[_norm_user(target)]={"username":target,"granted_by":sender,"created_at":int(time.time())}; _save_local_json(VIP_FILE,data)
+            self.send_private_text(sender,f"✅ تم توثيق VIP @{target}."); return True
+        if low.startswith("unvip@") or low.startswith("un vip@"):
+            target=text[text.casefold().find("vip@")+4:].strip().lstrip("@"); data=_vip_data(); data.pop(_norm_user(target),None); _save_local_json(VIP_FILE,data)
+            self.send_private_text(sender,f"✅ تم إزالة VIP @{target}."); return True
+        # Room/admin commands accepted in both room and private master chat.
+        m=re.match(r"^(k@|kick\s+)(@?[^\s]+)$", text, re.I)
+        if m:
+            target=m.group(2).lstrip("@").strip()
+            if not room:
+                self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الطرد فيها."); return True
+            self.send_admin(room,target,"kick")
+            self.send_private_text(sender,f"✅ تم طرد @{target} من الغرفة {room}."); return True
+        m=re.match(r"^(b@|ban\s+)(@?[^\s]+)$", text, re.I)
+        if m:
+            target=m.group(2).lstrip("@").strip()
+            if not room:
+                self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الحظر فيها."); return True
+            self.send_admin(room,target,"ban")
+            self.send_private_text(sender,f"✅ تم حظر @{target} من الغرفة {room}."); return True
+        m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
+        if m:
+            target=m.group(2).lstrip("@").strip()
+            if not room:
+                self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ فك الحظر فيها."); return True
+            self.send_admin(room,target,"member")
+            self.send_private_text(sender,f"✅ تم فك الحظر عن @{target} في الغرفة {room}."); return True
+        m=re.match(r"^(a@|admin\s+)(@?[^\s]+)$", text, re.I)
+        if m:
+            target=m.group(2).lstrip("@").strip()
+            if not room:
+                self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المشرف فيها."); return True
+            self.send_admin(room,target,"admin")
+            self.send_private_text(sender,f"✅ تم تعيين @{target} مشرفًا في الغرفة {room}."); return True
+        m=re.match(r"^(o@|owner\s+)(@?[^\s]+)$", text, re.I)
+        if m:
+            target=m.group(2).lstrip("@").strip()
+            if not room:
+                self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المالك فيها."); return True
+            self.send_admin(room,target,"owner")
+            self.send_private_text(sender,f"✅ تم تعيين @{target} مالكًا في الغرفة {room}."); return True
+        if low.startswith(("دخول ","join ","ادخل ","enter ")):
+            parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
+            if not target:
+                self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
+            self.join_room(target)
+            self.send_private_text(sender,f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}"); return True
+        if low in ("خروج","leave","exit") or low.startswith(("خروج ","leave ","exit ")):
+            parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
+            if target:
+                ok=self.leave_room(target)
+                self.send_private_text(sender,f"{'✅ خرجت من الغرفة' if ok else '❌ تعذر الخروج'}: {target}")
+            else:
+                rooms=self.leave_all_rooms()
+                self.send_private_text(sender,f"✅ خرجت من جميع الغرف. العدد: {len(rooms)}")
+            return True
+        if low.startswith("invmsg") or low.startswith("رسالةدعوة"):
+            parts=text.split(None,1); template=parts[1].strip() if len(parts)==2 else "{sender} يدعوك للغرفة {room}"
+            self.invite_message_template=template
+            self.send_private_text(sender,f"✅ تم تغيير نص الدعوة إلى: {template}"); return True
+        if low == "inv" or low.startswith("inv ") or low in ("دعوات","invite") or low.startswith(("دعوات ","invite ")):
+            parts=text.split(None,1); target_room=parts[1].strip() if len(parts)==2 else room
+            if not target_room:
+                self.send_private_text(sender,"❌ استخدم: inv اسم_الغرفة"); return True
+            self.request_occupants(target_room)
+            self.send_private_text(sender,f"📨 بدأت دعوات المستخدمين في: {target_room}"); return True
+        if low.startswith("say ") or low.startswith("قل "):
+            parts=text.split(None,1); msg=parts[1].strip() if len(parts)==2 else ""
+            if room and msg: self.send_room_text(room,msg)
+            else: self.send_private_text(sender,"❌ استخدم say نص داخل غرفة.")
+            return True
+        # Auto replies: +sr@وصف@الرد / Sr@on / Sr@off
+        m_sr = re.match(r"^\+sr@([^@]+)@(.+)$", text.strip(), re.I)
+        if m_sr and _is_master_name(sender):
+            trigger, reply = m_sr.group(1).strip(), m_sr.group(2).strip()
+            if trigger and reply:
+                self.auto_replies[trigger.casefold()] = {"trigger": trigger, "reply": reply}
+                self.auto_replies_enabled = True
+                self._save_social_features()
+                self.send_private_text(sender, f"✅ تمت إضافة الرد التلقائي\n📌 الوصف: {trigger}\n💬 الرد: {reply}")
+            return True
+        if re.match(r"^sr@(?:on|off)$", text.strip(), re.I) and _is_master_name(sender):
+            self.auto_replies_enabled = text.strip().lower() == "sr@on"
+            self._save_social_features()
+            self.send_private_text(sender, "✅ تم تشغيل الردود التلقائية." if self.auto_replies_enabled else "⛔ تم إيقاف الردود التلقائية.")
+            return True
+        # Custom welcome: swc+@اسم@الترحيب and on/off.
+        m_sw = re.match(r"^swc\+@([^@]+)@(.+)$", text.strip(), re.I)
+        if m_sw and _is_master_name(sender):
+            user, welcome = m_sw.group(1).strip().lstrip("@"), m_sw.group(2).strip()
+            if user and welcome:
+                self.custom_welcomes[_norm_user(user)] = {"username": user, "message": welcome}
+                self.custom_welcome_enabled = True
+                self._save_social_features()
+                self.send_private_text(sender, f"✅ تم حفظ الترحيب المخصص لـ @{user}.\n💬 {welcome}")
+            return True
+        if re.match(r"^swc@(?:on|off)$", text.strip(), re.I) and _is_master_name(sender):
+            self.custom_welcome_enabled = text.strip().lower() == "swc@on"
+            self._save_social_features()
+            self.send_private_text(sender, "✅ تم تشغيل الترحيب المخصص." if self.custom_welcome_enabled else "⛔ تم إيقاف الترحيب المخصص.")
+            return True
+        # Publishing: master says `انشر` or `انشر@description`, then sends an image.
+        if low == "انشر" or low.startswith("انشر@"):
+            desc=text[5:].strip() if low.startswith("انشر@") else ""
+            # The image may be sent later in a room or in private chat.
+            # Key the pending publish by sender, not by the command room, so
+            # sending the image from another room still completes the publish.
+            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time()}
+            self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
+            return True
+        return False
+
+    def _handle_publish_media(self, room, sender, media_url, description=""):
+        if not media_url: return False
+        # Accept the pending image from ANY room (or private chat).
+        key=_norm_user(sender); pending=self.publish_pending.get(key)
+        if not pending: return False
+        if time.time()-pending.get("created_at",0)>120:
+            self.publish_pending.pop(key,None); self.send_private_text(sender,"⌛ انتهت مهلة النشر، أرسل أمر انشر من جديد."); return True
+        desc=pending.get("description",description or "")
+        source_room=str(pending.get("source_room") or room or "")
+        self.publish_pending.pop(key,None)
+        rooms=list(self.known_rooms) or ([self.room] if self.room else [])
+        # In rooms, the successful publish message contains ONLY the reaction
+        # controls. The publish status/result is sent privately to the master.
+        base_code=uuid.uuid4().hex[:4]
+        reaction_codes={
+            "like": base_code,
+            "love": uuid.uuid4().hex[:4],
+            "dislike": uuid.uuid4().hex[:4],
+            "comment": uuid.uuid4().hex[:4],
+            "report": uuid.uuid4().hex[:4],
+        }
+        for kind,code in reaction_codes.items():
+            self.reaction_targets[code]={"publisher": sender, "kind": kind, "description": desc or "منشور صورة", "created_at": time.time()}
+        caption=_message_template(
+            "publish", "broadcast",
+            "🖼️ {description}\n👤 {publisher}\n━━━━━━━━━━━━━\n👍 lk@{like}\n❤️ lv@{love}\n👎 dl@{dislike}\n💬 cm@{comment} msg\n🚨 report@{report} msg",
+            publisher=sender, description=desc or "منشور صورة",
+            source_label=source_room, code=base_code,
+            like=reaction_codes["like"], love=reaction_codes["love"], dislike=reaction_codes["dislike"],
+            comment=reaction_codes["comment"], report=reaction_codes["report"], room=source_room
+        )
+        ok=0
+        errors=[]
+        for target in rooms:
+            try:
+                self.send_room_media(target,media_url,"image")
+                self.send_room_text(target,caption)
+                ok+=1
+            except Exception as e:
+                errors.append((target,str(e)))
+                self.log("[PUBLISH] failed",target,repr(e))
+        # Never announce a successful publish in the room; tell the master in PM.
+        self.send_private_text(sender,f"✅ تم نشر الصورة في {ok} غرفة." + (f"\n❌ أخطاء: {len(errors)}" if errors else ""))
+        if errors:
+            self.send_private_text(sender, "❌ أخطاء النشر: " + " | ".join(f"{r}: {e[:60]}" for r,e in errors))
+        return True
 
     def handle_room_event(self, result):
         event = result.get("room_event") or {}
@@ -1284,28 +2308,32 @@ class TalkinBot:
         role = str(event.get(8, "") or "").strip().lower()
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
-        self.log(f"[EVENT] type={event_type} from={frm} user={username!r} room={room} role={role!r} count={count!r} body={body!r}")
+        # Do not log room message contents, usernames, room names, or media events.
 
         # Keep the live membership state in sync.  The APK itself uses these
         # exact event names and RoomEvent fields.
         if event_type == "user_joined" and username:
             self.room_users[room][username] = role or "none"
             self.last_joined_room = room
-            self.log(f"[ROOM] user joined: {username} role={role or 'none'} count={count} reconnected={reconnected}")
+            # Welcome the master using the exact configured BOT_MASTER account.
+            if _norm_user(username) == _norm_user(BOT_MASTER):
+                self.send_room_text(room, f"👑 لقد أتاكم الزعيم\n👤 {username}\n🏠 الغرفة: {room}")
+            elif self.custom_welcome_enabled:
+                cw = self.custom_welcomes.get(_norm_user(username))
+                if isinstance(cw, dict) and cw.get("message"):
+                    self.send_room_text(room, str(cw["message"]).replace("{username}", username).replace("{room}", room))
         elif event_type == "user_left" and username:
             self.room_users[room].pop(username, None)
-            self.log(f"[ROOM] user left: {username} count={count}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
-            self.log(f"[ROOM] BOT is in room: {room} event={event_type}")
         elif event_type in ("room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin", "room_needs_captcha_rejoin", "room_needs_password_rejoin", "room_membership_required_rejoin"):
-            # These are server-side rejoin instructions, not a socket failure.
-            # Rejoin once, without tearing down the WebSocket.
-            self.log(f"[ROOM] server requested rejoin: {event_type}")
-            try:
-                self.join_room(room)
-            except Exception as e:
-                self.log("[ROOM] rejoin request failed:", repr(e))
+            # IMPORTANT: do not immediately send room_join here.  These events
+            # can be emitted repeatedly by the server when a room rejects a
+            # join.  The old code answered every event with another room_join,
+            # creating the visible leave/join loop.  A real reconnect is left
+            # to run_once(), while a rejoin is attempted at most once after a
+            # long cooldown and never recursively from this event handler.
+            self.log("[ROOM] server requested rejoin; delayed reconnect")
 
         if ACK_ROOM_EVENTS and result.get("uid"):
             try:
@@ -1313,207 +2341,91 @@ class TalkinBot:
             except Exception as e:
                 self.log("[ACK] failed:", e)
 
+        # A photo sent in a room arrives as RoomEvent type=image with its
+        # public URL in field 7 (url). If a master previously used `انشر`,
+        # publish that image even when it was sent from a different room.
+        if event_type == "image":
+            media_url = str(event.get(7, "") or "").strip()
+            if frm and frm != BOT_ID and media_url:
+                if self._handle_publish_media(room, frm, media_url):
+                    return
+            return
+
         if event_type != "text" or not body:
             return
         if frm == BOT_ID:
             return
 
+        # Reactions/comments/reports: notify the original publisher privately.
+        reaction=re.match(r"^(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?$", body.strip(), re.I)
+        if reaction:
+            action,code,extra=reaction.group(1).lower(),reaction.group(2).lower(),(reaction.group(3) or "").strip()
+            info=self.reaction_targets.get(code)
+            if info and time.time()-float(info.get("created_at",0)) <= 86400:
+                publisher=str(info.get("publisher") or "").strip()
+                labels={"lk":"👍 إعجاب","lv":"❤️ حب","dl":"👎 عدم إعجاب","cm":"💬 تعليق","report":"🚨 بلاغ"}
+                source_desc = str(info.get("description") or info.get("title") or "").strip()
+                notice=f"{labels.get(action,action)}\n👤 المتفاعل: {frm}\n📌 الناشر: {publisher}"
+                if source_desc: notice += f"\n📝 وصف المنشور: {source_desc}"
+                if extra: notice += f"\n💬 رسالة التفاعل: {extra}"
+                self.send_private_text(publisher,notice)
+                return
+
+        # Music/gifts require verification; masters are always allowed.
+        is_verified = _norm_user(frm) in _verified_data() or _is_master_name(frm)
+        if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
+            if not is_verified:
+                self.send_private_text(frm, f"🔒 @{frm} غير موثّق لاستخدام الهدايا.")
+                return
+            if self.handle_gift_command(room, body, frm):
+                return
+        if body.strip().lower().startswith(".sa "):
+            if not is_verified:
+                self.send_private_text(frm, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.")
+                return
+            if self.handle_music_command(room, body, frm):
+                return
+
         # Keep a small per-room message history for diagnostics.
         self.last_messages[room].append((frm, body, event_id))
         self.last_messages[room] = self.last_messages[room][-50:]
 
-        self.handle_command(body, frm, room=room, private=False)
-
-    # --------------------- unified command router ------------------------
-    # Every reply goes back to the SAME channel the command arrived on:
-    # a room command answers in that room, a private command answers privately.
-
-    def reply_text(self, ctx, text):
-        try:
-            if ctx["private"]:
-                self.send_private_text(ctx["frm"], text)
-            else:
-                self.send_room_text(ctx["room"], text)
-        except Exception as e:
-            self.log("[REPLY] text failed:", repr(e))
-
-    def reply_media(self, ctx, media_type, url, text="", duration_ms=0):
-        try:
-            if ctx["private"]:
-                self.send_private_media(ctx["frm"], media_type, url, text, duration_ms)
-            else:
-                self.send_room_media(ctx["room"], media_type, url, text, duration_ms)
-        except Exception as e:
-            self.log("[REPLY] media failed:", repr(e))
-
-    def _run_music_command_ctx(self, ctx, query):
-        try:
-            self.reply_text(ctx, "⏳ جاري تجهيز الأغنية…")
-            track = search_download_youtube(query)
-            url = music_url(track["path"])
-            self.reply_text(
-                ctx,
-                f"🎵 {track['title']}\n🎤 {track['artist']}\n👤 الطلب: @{ctx['frm']}"
-            )
-            self.reply_media(ctx, "voice", url, f"▶️ {track['title']}", track["duration_ms"])
-        except Exception as e:
-            self.log("[MEDIA] music worker failed:", repr(e))
-            self.report_master_error("تشغيل الأغاني", e)
-            self.reply_text(ctx, "❌ لم أتمكن من تشغيل هذه الأغنية. جرّب اسماً آخر أو رابط يوتيوب مباشر.")
-
-    def _run_gift_command(self, ctx, gid, receiver):
-        emoji, name = GIFTS[gid]
-        sender = ctx["frm"]
-        try:
-            url = gift_card(gid, sender, receiver)
-        except Exception as e:
-            self.log("[GIFT] image failed:", repr(e))
-            self.report_master_error("صور الهدايا", e)
-            self.reply_text(ctx, f"🎁 @{sender} أرسل {emoji} {name} إلى @{receiver}\n⚠️ تعذر تجهيز صورة الهدية.")
-            return
-        caption = f"🎁 {emoji} {name}\n👤 المرسل / Sender: @{sender}\n🎯 المستقبل / Receiver: @{receiver}"
-        # Send the picture first so the gift never appears without its image.
-        self.reply_media(ctx, "image", url, caption)
-        self.reply_text(ctx, caption)
-        if not url_is_reachable(url):
-            self.log("[GIFT] media url not reachable:", url)
-            try:
-                self.send_private_text(
-                    BOT_MASTER,
-                    "⚠️ رابط صورة الهدية غير قابل للفتح من الإنترنت:\n" + url +
-                    "\nتأكد من تفعيل Public Domain في Railway أو ضبط PUBLIC_BASE_URL."
-                )
-            except Exception:
-                pass
-
-    def handle_command(self, body, frm, room="", private=False):
-        raw_body = str(body or "").strip()
-        if not raw_body or not frm or frm == BOT_ID:
-            return
-        ctx = {"frm": frm, "room": (room or self.room or "").strip(), "private": bool(private)}
-        low = raw_body.casefold()
-
-        # ---------------- command menus ----------------
-        if low in ("help", "الاوامر", "الأوامر", "مساعدة", "!help", "اوامر", "أوامر"):
-            self.reply_text(ctx, help_index())
-            return
-        menu = resolve_help(raw_body)
-        if menu:
-            self.reply_text(ctx, menu_text(menu))
-            return
-
-        # ---------------- points ----------------
-        if low.startswith("sa@"):
-            parts_sa = raw_body.split("@")
-            if len(parts_sa) != 3 or not parts_sa[1].strip() or not parts_sa[2].strip():
-                self.reply_text(ctx, "❌ الاستخدام الصحيح: sa@اسم_المستخدم@كمية_النقاط")
+        # Exact-match automatic replies.
+        if self.auto_replies_enabled:
+            ar = self.auto_replies.get(body.strip().casefold())
+            if isinstance(ar, dict) and ar.get("reply"):
+                reply = str(ar["reply"]).replace("{username}", frm).replace("{room}", room)
+                self.send_room_text(room, reply)
                 return
-            receiver = parts_sa[1].strip().lstrip("@")
-            try:
-                amount = int(parts_sa[2].strip().replace(",", ""))
-                sender_balance, receiver_balance = self.transfer_points(frm, receiver, amount)
-                sender_after = "♾️ غير محدودة" if sender_balance is None else f"{sender_balance:,}"
-                receiver_after = "♾️ غير محدودة" if receiver_balance is None else f"{receiver_balance:,}"
-                self.reply_text(ctx, f"✅ تم تحويل {amount:,} نقطة من @{frm} إلى @{receiver}\n💰 رصيد المرسل: {sender_after}\n💰 رصيد المستلم: {receiver_after}")
-            except Exception as e:
-                self.reply_text(ctx, f"❌ تعذر تحويل النقاط: {e}")
-            return
-        if low in ("نقاطي", "رصيدي", "points", "balance"):
-            self.reply_text(ctx, self.points_text(frm))
+
+        if self._handle_management_command(room, body, frm):
             return
 
-        # ---------------- gifts and music ----------------
-        try:
-            if low in ("gv", "الهدايا", "gifts"):
-                self.reply_text(ctx, gifts_catalog())
-                return
-            if low.startswith("gv@"):
-                parts = raw_body.split("@")
-                gid = parts[1].strip() if len(parts) > 1 else ""
-                receiver = parts[2].strip().lstrip("@") if len(parts) > 2 else ""
-                if gid not in GIFTS:
-                    self.reply_text(ctx, "❌ رقم الهدية غير صحيح. أرسل gv لرؤية الهدايا.")
-                    return
-                if not receiver:
-                    self.reply_text(ctx, "❌ استخدم: gv@رقم_الهدية@اسم_المستخدم")
-                    return
-                threading.Thread(target=self._run_gift_command, args=(ctx, gid, receiver),
-                                 name="gift-send", daemon=True).start()
-                return
-            if low.startswith(("اغنية ", "أغنية ", "تشغيل ", "music ")):
-                query = raw_body.split(None, 1)[1].strip()
-                threading.Thread(target=self._run_music_command_ctx, args=(ctx, query),
-                                 name="music-download", daemon=True).start()
-                return
-        except Exception as e:
-            self.log("[MEDIA] command failed:", repr(e))
-            self.report_master_error("الأغاني والهدايا", e)
-            self.reply_text(ctx, "❌ تعذر تنفيذ الطلب حالياً. تم إرسال الخطأ الفعلي للماستر.")
+        if self.handle_game_command(room, body, frm):
             return
 
-        # ---------------- master-only administration ----------------
-        if BOT_MASTER and frm == BOT_MASTER:
-            parts = raw_body.split()
-            if not parts:
-                return
-            cmd = parts[0].lower()
-            target = parts[1].lstrip("@").strip() if len(parts) >= 2 else ""
-            admin_room = ctx["room"] if not ctx["private"] else (self.last_joined_room or self.room)
-            try:
-                if cmd in ("a@", "admin") and target:
-                    self.send_admin(admin_room, target, "admin")
-                elif cmd in ("o@", "owner") and target:
-                    self.send_admin(admin_room, target, "owner")
-                elif cmd in ("k@", "kick") and target:
-                    self.send_admin(admin_room, target, "kick")
-                elif cmd in ("b@", "ban") and target:
-                    self.send_admin(admin_room, target, "ban")
-                elif cmd in ("u@", "unban") and target:
-                    self.send_admin(admin_room, target, "member")
-                elif cmd in ("دخول", "join", "ادخل", "enter") and target:
-                    self.join_room(target)
-                    self.known_rooms.add(target)
-                    self.reply_text(ctx, f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}")
-                elif cmd in ("invmsg", "رسالةدعوة"):
-                    template = raw_body.split(None, 1)[1].strip() if len(parts) >= 2 else "{sender} يدعوك للغرفة {room}"
-                    self.invite_message_template = template
-                    self.reply_text(ctx, f"✅ تم تغيير نص الدعوة إلى: {template}")
-                elif cmd in ("inv", "دعوات", "invite"):
-                    target_room = target or admin_room
-                    if target_room and target_room != BOT_MASTER:
-                        self.request_occupants(target_room)
-                        self.reply_text(ctx, f"📨 بدأت دعوات جميع الغرف النشطة. اسم الدعوة: {target_room}")
-                elif cmd in ("say", "قل") and len(parts) >= 2:
-                    self.send_room_text(admin_room, raw_body.split(None, 1)[1])
-                else:
-                    return
-                self.log("[ADMIN/MASTER]", cmd, target)
-                if cmd in ("k@", "kick", "b@", "ban") and target:
-                    action_ar = "الطرد" if cmd in ("k@", "kick") else "الحظر"
-                    self.reply_text(ctx, f"✅ تم إرسال أمر {action_ar} إلى @{target} في الغرفة {admin_room}.")
-            except Exception as e:
-                self.log("[ADMIN] failed:", repr(e))
-                self.reply_text(ctx, f"❌ تعذر تنفيذ الأمر: {e}")
-            return
-
-        # ---------------- optional word filter ----------------
-        if AUTO_BAN_WORDS and self.banned_words and not ctx["private"]:
+        # Optional automatic word filter. It uses the same room ban operation
+        # already implemented for manual `b@` commands. Enable explicitly in .env.
+        if AUTO_BAN_WORDS and self.banned_words:
+            low = body.casefold()
             hit = next((w for w in self.banned_words if w.casefold() in low), None)
             if hit:
                 try:
-                    self.send_admin(ctx["room"], frm, "ban")
+                    self.send_admin(room, frm, "ban")
                     self.log("[WORD-FILTER] banned", frm, "word=", hit)
                 except Exception as e:
                     self.log("[WORD-FILTER] failed:", repr(e))
+                return
+
+        if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
+            self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، دخول اسم_الغرفة، خروج [اسم_الغرفة]، inv، invmsg نص الدعوة لدعوة مستخدمي الغرفة")
 
     def on_message(self, ws, message):
         try:
             if isinstance(message, str):
-                self.log("[WS] unexpected text frame:", message[:300])
+                self.log("[WS] unexpected text frame received")
                 return
             result = decode_result_message(message)
-            if DEBUG:
-                self.log("[WS] handler=", result.get("handler_id"), "type=", result.get("type"), "uid=", result.get("uid"))
             if "room_event" in result:
                 self.handle_room_event(result)
             if result.get("users") or result.get("room_admin"):
@@ -1523,19 +2435,70 @@ class TalkinBot:
             if result.get("room_admin"):
                 self.log("[ROOM_ADMIN]", result["room_admin"])
             if result.get("chat_message"):
-                self.log("[CHAT_MESSAGE]", result["chat_message"])
+                # Private master commands are also accepted as ChatMessage frames.
                 cm = result["chat_message"]
                 try:
-                    cm_type = str(cm.get(2, "") or "").strip()
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
-                    if body and frm and frm != BOT_ID and cm_type in ("", "text"):
-                        # A command sent privately is answered privately.
-                        self.handle_command(body, frm, room=self.room, private=True)
+                    media_url = str(cm.get(6, "") or "").strip()
+                    if frm and media_url and self._handle_publish_media(self.room, frm, media_url):
+                        return
+                    if _is_master_name(frm) and body:
+                        if self._handle_management_command(self.room, body, frm, is_private=True):
+                            return
+                    if body.strip().lower().startswith(".sa "):
+                        if self.handle_music_command(self.room, body, frm, private_to=frm):
+                            return
+                    if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
+                        if self.handle_gift_command(self.room, body, frm, private_to=frm):
+                            return
+                    if _is_master_name(frm) and body:
+                        # Reuse room command handling with the command-context room.
+                        ctx_room = self.room
+                        parts = body.split(None, 1)
+                        cmd = parts[0].lower() if parts else ""
+                        arg = parts[1].strip() if len(parts) == 2 else ""
+                        if cmd in ("inv", "دعوات", "invite"):
+                            target_room = arg if arg else ctx_room
+                            self.request_occupants(target_room)
+                        elif cmd in ("دخول", "join", "ادخل", "enter") and arg:
+                            target_room = arg
+                            self.join_room(target_room)
+                            self.send_private_text(BOT_MASTER, f"✅ دخلت الغرفة: {target_room} | الغرف الحالية: {len(self.known_rooms)}")
+                        elif cmd in ("خروج", "leave", "exit"):
+                            if arg:
+                                ok = self.leave_room(arg)
+                                self.send_private_text(BOT_MASTER, f"{'✅ خرجت من الغرفة' if ok else '❌ تعذر الخروج'}: {arg}")
+                            else:
+                                rooms = self.leave_all_rooms()
+                                self.send_private_text(BOT_MASTER, f"✅ خرجت من جميع الغرف. العدد: {len(rooms)}")
+                        elif cmd in ("invmsg", "رسالةدعوة") and arg:
+                            self.invite_message_template = arg
+                            self.send_private_text(frm, f"✅ تم تغيير رسالة الدعوة إلى: {arg}")
+                        elif cmd in ("a@", "admin") and arg:
+                            target = arg.lstrip("@").strip()
+                            self.send_admin(ctx_room, target, "admin")
+                            self.send_private_text(frm, f"✅ تم تعيين @{target} مشرفًا في الغرفة {ctx_room}.")
+                        elif cmd in ("o@", "owner") and arg:
+                            target = arg.lstrip("@").strip()
+                            self.send_admin(ctx_room, target, "owner")
+                            self.send_private_text(frm, f"✅ تم تعيين @{target} مالكًا في الغرفة {ctx_room}.")
+                        elif cmd in ("k@", "kick") and arg:
+                            target = arg.lstrip("@").strip()
+                            self.send_admin(ctx_room, target, "kick")
+                            self.send_private_text(frm, f"✅ تم إرسال أمر الطرد إلى @{target} في الغرفة {ctx_room}.")
+                        elif cmd in ("b@", "ban") and arg:
+                            target = arg.lstrip("@").strip()
+                            self.send_admin(ctx_room, target, "ban")
+                            self.send_private_text(frm, f"✅ تم إرسال أمر الحظر إلى @{target} في الغرفة {ctx_room}.")
+                        elif cmd in ("u@", "unban") and arg:
+                            target = arg.lstrip("@").strip()
+                            self.send_admin(ctx_room, target, "member")
+                            self.send_private_text(frm, f"✅ تم إلغاء حظر @{target} في الغرفة {ctx_room}.")
+                        elif cmd in ("say", "قل") and arg:
+                            self.send_room_text(ctx_room, arg)
                 except Exception as e:
                     self.log("[CHAT_MESSAGE] private command handling failed:", repr(e))
-            if result.get("type") or result.get("value"):
-                self.log("[RESULT]", result.get("type"), result.get("value"))
         except Exception as e:
             self.last_error = str(e)
             self.log("[WS] decode error:", repr(e))
@@ -1627,17 +2590,14 @@ class TalkinBot:
             elif kind == "close":
                 raise ConnectionError(f"WebSocket closed during room-list bootstrap: {message}")
 
-        # Rejoin every room known before a socket interruption. This prevents
-        # a reconnect from silently dropping previously joined rooms.
-        self.known_rooms.add(self.room)
-        rooms_to_join = [r for r in self.known_rooms if r]
-        self.log("[ROOM] reconnecting to rooms:", rooms_to_join)
-        for joined_room in rooms_to_join:
-            try:
-                self.join_room(joined_room)
-                time.sleep(0.25)
-            except Exception as e:
-                self.log("[ROOM] rejoin failed:", joined_room, repr(e))
+        # Keep every room selected by the master. A reconnect restores the
+        # existing room set once; room-event handlers never leave/rejoin in a
+        # loop, which avoids the visible leave/join cycle.
+        rooms_to_restore = {str(r).strip() for r in self.known_rooms if str(r).strip()}
+        if self.room:
+            rooms_to_restore.add(str(self.room).strip())
+        for room in sorted(rooms_to_restore):
+            self.join_room(room, force=True)
 
     def run_once(self):
         self.authenticate()
@@ -1681,24 +2641,23 @@ class TalkinBot:
                         self.ws.connect()
                         self.log("[WS] CONNECTED:", url)
                         self.log("[WS] custom headers:", [x.split(":",1)[0] + ": <redacted>" if x.lower().startswith(("username:", "password:")) else x for x in header_lines])
-                        # Short reads allow keepalive while the room is silent.
-                        # Idle timeouts are never treated as disconnects.
-                        self.ws.sock.settimeout(max(1.0, WS_IDLE_READ_TIMEOUT))
-                        last_keepalive = time.monotonic()
                         self.bootstrap_after_connect()
+                        if self._pending_reconnect_reason and BOT_MASTER:
+                            reason = self._pending_reconnect_reason
+                            self._pending_reconnect_reason = ""
+                            self.send_private_text(BOT_MASTER, f"⚠️ انقطع الاتصال ثم عاد. السبب: {reason}")
+                            self.send_private_text(BOT_MASTER, "✅ تم الدخول والعودة للغرفة بنجاح.")
+                        elif not self._had_connection and BOT_MASTER:
+                            self.send_private_text(BOT_MASTER, "✅ تم الدخول للغرفة والاتصال بنجاح.")
+                        self._had_connection = True
 
                         while not self.stop_event.is_set():
                             try:
                                 kind, message = self.ws.recv()
                             except socket.timeout:
-                                # The room may be completely silent. Keep the SAME
-                                # WebSocket alive with a control ping; never reconnect
-                                # merely because no room message arrived.
-                                now = time.monotonic()
-                                if now - last_keepalive >= WS_KEEPALIVE_INTERVAL:
-                                    self.ws.send_control(0x9, b"janit-keepalive")
-                                    last_keepalive = now
-                                    self.log("[WS] keepalive ping sent (idle room)")
+                                # An idle room is normal. Do not reconnect just
+                                # because no WebSocket frame arrived during the
+                                # read timeout.
                                 continue
                             if kind == "binary":
                                 self.on_message(self.ws, message)
@@ -1707,7 +2666,7 @@ class TalkinBot:
                             elif kind == "pong":
                                 continue
                             elif kind == "text":
-                                self.log("[WS] unexpected text frame:", message[:300])
+                                self.log("[WS] unexpected text frame received")
                             elif kind == "close":
                                 raise ConnectionError(f"WebSocket closed by server: {message}")
                         return
@@ -1723,18 +2682,24 @@ class TalkinBot:
         raise last_error
 
     def start(self):
-        print("=== Talkinchat Bot V16 - Master Room Join + Normal Private Invites ===", flush=True)
+        print("=== Talkinchat Bot V22 - Talkin + YouTube Cookies + Giant Gift Cards ===", flush=True)
+        self.asset_server = start_asset_server()
         if not BOT_ID or not BOT_PWD or not self.room:
-            raise SystemExit("Set BOT_USERNAME, BOT_PASSWORD, MASTER_USERNAME and FIRST_ROOM in Railway Variables.")
+            raise SystemExit("Set BOT_ID, BOT_PWD and GROUP_TO_JOIN in .env first.")
         while not self.stop_event.is_set():
             try:
                 self.run_once()
             except Exception as e:
                 self.last_error = str(e)
+                if self._had_connection:
+                    raw_reason = " ".join(str(e).split())
+                    if "code': 1000" in raw_reason or '"code": 1000' in raw_reason:
+                        raw_reason = "الخادم أغلق WebSocket إغلاقًا طبيعيًا (1000)، وسيتم إعادة الاتصال تلقائيًا"
+                    self._pending_reconnect_reason = raw_reason[:1000]
                 print("[BOT] error:", repr(e), flush=True)
             if not self.stop_event.is_set():
-                print("[BOT] reconnecting in 3s...", flush=True)
-                time.sleep(3)
+                print("[BOT] reconnecting in 10s...", flush=True)
+                time.sleep(10)
 
 
 if __name__ == "__main__":
