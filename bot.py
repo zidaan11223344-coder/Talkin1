@@ -1103,50 +1103,102 @@ def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
 def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
-    """Render the username exactly as received from Talkin.
+    """Draw Talkin username exactly as received, preserving Arabic + symbols.
 
-    Important: do NOT force RTL/LTR and do NOT reverse, reshape, strip, or
-    transliterate the username. When Pillow is built with libraqm, leaving
-    direction unset lets the same Unicode bidi/shaping engine handle Arabic,
-    Latin, numbers and mixed usernames naturally.
+    The previous version used NotoSansArabic for the whole username. That font
+    does not contain several decorative Unicode characters (for example chess
+    pieces), so Pillow displayed tofu boxes.  Here Arabic is shaped by Raqm
+    while unsupported symbols are taken from fallback fonts.  The original
+    Unicode string is never reversed, translated, stripped, or transliterated.
     """
     text = str(raw_text if raw_text is not None else "")
     if not text:
         return
 
-    size = int(size)
-    while size > 14:
-        font = _gift_font(text, size)
+    base = _gift_font(text, int(size))
+    fallbacks = _fallback_fonts(int(size))
+
+    def choose(ch, sz):
+        # Do not let NotoSansArabic claim Latin characters: some versions
+        # expose a fallback/tofu glyph for Latin, which produced the squares
+        # seen in the user's screenshot for names such as al-sfeer.
+        if _has_arabic(ch):
+            b = _gift_font(text, sz)
+            if _font_has_glyph(b, ch):
+                return b
+        # ASCII/Latin usernames must use a Latin font.
+        if ch.isascii() and (ch.isalnum() or ch in " ._@-+()[]{}!#$%&*,:;/?=\\|~'"):
+            for f in _fallback_fonts(sz):
+                try:
+                    if 'DejaVuSans' in str(getattr(f, 'path', '')) and _font_has_glyph(f, ch):
+                        return f
+                except Exception:
+                    pass
+        for f in _fallback_fonts(sz):
+            if _font_has_glyph(f, ch):
+                return f
+        return _gift_font(text, sz)
+
+    def make_runs(sz):
+        runs=[]; cur_font=None; cur=[]
+        for ch in text:
+            f=choose(ch, sz)
+            if cur_font is None or f.path == cur_font.path:
+                cur.append(ch)
+            else:
+                runs.append((cur_font, ''.join(cur))); cur=[ch]
+            cur_font=f
+        if cur:
+            runs.append((cur_font, ''.join(cur)))
+        return runs
+
+    def run_width(font, run):
         try:
-            bbox = draw.textbbox((0, 0), text, font=font)
+            # Let libraqm perform normal bidi/shaping for each Arabic run.
+            return draw.textlength(run, font=font)
         except Exception:
-            bbox = font.getbbox(text)
-        width = bbox[2] - bbox[0]
+            return font.getlength(run)
+
+    # Find a size that fits the rectangle.
+    sz = int(size)
+    while sz > 14:
+        runs = make_runs(sz)
+        width = sum(run_width(font, run) for font, run in runs)
         if width <= max_width:
             break
-        size -= 2
+        sz -= 2
+    runs = make_runs(sz)
+    width = sum(run_width(font, run) for font, run in runs)
 
-    font = _gift_font(text, size)
-    try:
-        bbox = draw.textbbox((0, 0), text, font=font)
-    except Exception:
-        bbox = font.getbbox(text)
-    width = bbox[2] - bbox[0]
-    height = bbox[3] - bbox[1]
-    x = center[0] - width / 2 - bbox[0]
-    y = center[1] - height / 2 - bbox[1]
+    # Build a transparent text strip. Arabic runs use RTL shaping; symbol and
+    # Latin runs use their fallback font. This avoids tofu boxes while keeping
+    # the Talkin username's exact characters and natural visual ordering.
+    strip_w = max(1, int(width + sz * 2))
+    strip_h = max(1, int(sz * 1.8))
+    strip = Image.new('RGBA', (strip_w, strip_h), (0,0,0,0))
+    sd = ImageDraw.Draw(strip)
+    x = sz
+    for font, run in runs:
+        is_ar = _has_arabic(run)
+        try:
+            bbox = sd.textbbox((0,0), run, font=font,
+                               direction='rtl' if is_ar else 'ltr')
+            rw = bbox[2]-bbox[0]
+        except Exception:
+            rw = run_width(font, run)
+        y = (strip_h - sz) // 2
+        try:
+            sd.text((x, y), run, font=font, fill=fill,
+                    stroke_width=1, stroke_fill=(0,0,0,170),
+                    direction='rtl' if is_ar else 'ltr')
+        except Exception:
+            sd.text((x, y), run, font=font, fill=fill,
+                    stroke_width=1, stroke_fill=(0,0,0,170))
+        x += rw
 
-    try:
-        # No direction argument: preserve Talkin's Unicode text and let
-        # libraqm perform the normal bidirectional display ordering.
-        draw.text((x, y), text, font=font, fill=fill, stroke_width=1,
-                  stroke_fill=(0, 0, 0, 170))
-    except Exception:
-        # Older Pillow without libraqm: keep the original code points and
-        # draw them without any manual Arabic reversal.
-        draw.text((x, y), text, font=font, fill=fill, stroke_width=1,
-                  stroke_fill=(0, 0, 0, 170))
-
+    px = int(center[0] - strip.width/2)
+    py = int(center[1] - strip.height/2)
+    draw._image.alpha_composite(strip, (px, py))
 
 def _visual_runs(text, size):
     # Kept for compatibility with older helpers.
