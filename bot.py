@@ -1186,71 +1186,64 @@ def _load_sender_avatar(photo_url, size=190):
 def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url=""):
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
-    sender_name = str(sender_name or "").strip()
-    receiver_name = str(receiver_name or "").strip()
+
+    # Keep the usernames exactly as supplied by Talkin/command. Do not
+    # translate, transliterate, or otherwise change their characters.
+    sender_name = str(sender_name or "")
+    receiver_name = str(receiver_name or "")
     files=[p for p in GIFT_IMAGE_FILES.get(str(gift_id),[]) if p.is_file()]
     if not files:
         raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
 
-    # New card layout inspired by the supplied reference: ornate frame,
-    # prominent gift artwork, sender avatar in the card, and clean name bars.
-    W,H = 900, 980
-    bg=(15,10,25,255)
-    image=Image.new("RGBA", (W,H), bg)
-    d=ImageDraw.Draw(image)
-    gold=(244,196,92,255); gold2=(255,226,157,255); panel=(9,16,34,238)
-    # outer and inner ornamented frame
-    d.rounded_rectangle((10,10,W-10,H-10), radius=42, outline=(177,115,42,255), width=12)
-    d.rounded_rectangle((27,27,W-27,H-27), radius=34, outline=gold, width=3)
-    for x,y in ((52,52),(W-52,52),(52,H-52),(W-52,H-52)):
-        d.ellipse((x-13,y-13,x+13,y+13), outline=gold2, width=3)
+    # Revert to the earlier elegant gift template instead of the last ornate
+    # layout. The sender photo is placed on top of the gift artwork when a
+    # public Talkin profile photo is available.
+    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
+    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
+    image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA")
+    image.alpha_composite(template)
+    d=ImageDraw.Draw(image); w,h=template.size
+    gold=(244,196,92,255); panel=(10,14,28,245)
 
+    header=(int(w*.27),65,int(w*.73),205)
+    d.rounded_rectangle(header,radius=48,fill=panel,outline=gold,width=4)
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
-    d.rounded_rectangle((180,45,720,145), radius=30, fill=panel, outline=gold, width=3)
-    _draw_centered(d,(450,95),"هدية "+gift_name,38,gold2,500)
+    _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Main artwork, with a framed window.
-    art_box=(70,170,830,735)
-    d.rounded_rectangle(art_box, radius=34, fill=(4,5,12,255), outline=gold, width=4)
-    art=_fit_crop(Image.open(random.choice(files)), (730,525)).convert("RGB").convert("RGBA")
-    image.alpha_composite(art, (85,185))
-    # Thin inner border over the artwork.
-    d.rounded_rectangle((85,185,815,710), radius=28, outline=(255,255,255,70), width=2)
-
-    # Sender avatar: real profile image from Talkin UserItem field 3.
-    avatar=_load_sender_avatar(sender_photo_url, 170)
+    # Sender avatar overlaps the lower part of the gift image, matching the
+    # requested style. No fake initial is shown when no photo is available.
+    avatar=_load_sender_avatar(sender_photo_url,170)
     if avatar is not None:
-        image.alpha_composite(avatar, (365,645))
-    else:
-        # Elegant fallback if Talkin has not supplied a public photo URL yet.
-        d.ellipse((365,645,535,815), fill=(24,29,49,255), outline=gold, width=6)
-        _draw_centered(d,(450,730),sender_name[:1] or "♥",56,gold2,120)
+        ax=(w-170)//2
+        ay=int(h*.505)
+        image.alpha_composite(avatar,(ax,ay))
+        d=ImageDraw.Draw(image)
 
-    # Name bars: copy the usernames exactly as received from the chat message.
-    # The label is separate; the username itself is rendered inside the rectangle.
-    box_w=700; box_h=104; x=(W-box_w)//2
-    top=750; bottom=864
-    for y in (top,bottom):
-        d.rounded_rectangle((x,y,x+box_w,y+box_h), radius=24, fill=panel, outline=gold, width=3)
-    # Use a Latin-capable font for the small labels so they never become boxes.
-    label_font = _load_font(BASE_DIR/"assets"/"DejaVuSans.ttf", 20) if (BASE_DIR/"assets"/"DejaVuSans.ttf").is_file() else _gift_font("FROM",20)
-    for label, cy in (("FROM:",773),("TO:",887)):
-        bb=d.textbbox((0,0),label,font=label_font)
-        d.text((450-(bb[2]-bb[0])/2, cy-(bb[3]-bb[1])/2-bb[1]), label, font=label_font, fill=gold2)
-    _draw_name_centered(d,(450,818),sender_name,31,(255,238,199,255),box_w-50)
-    _draw_name_centered(d,(450,928),receiver_name,31,(255,238,199,255),box_w-50)
+    # Two rectangles. The username itself is inside its rectangle; the only
+    # extra text is the small Arabic label above it. Names are rendered from
+    # the raw strings received by the bot, with proper Arabic RTL shaping.
+    box_w=int(w*.64); box_h=int(h*.105); box_x=(w-box_w)//2
+    top_y=int(h*.705); bottom_y=int(h*.815)
+    for y in (top_y,bottom_y):
+        d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=28,fill=panel,outline=gold,width=4)
+
+    _draw_centered(d,(w/2,top_y+27),"المرسل",25,(255,224,165,255),box_w-20)
+    _draw_centered(d,(w/2,bottom_y+27),"المستلم",25,(255,224,165,255),box_w-20)
+
+    # Same visual text as the chat username: no @ removal, no transliteration.
+    _draw_name_centered(d,(w/2,top_y+box_h*.68),sender_name,39,(255,238,199,255),box_w-42)
+    _draw_name_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,(255,238,199,255),box_w-42)
 
     out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
-    rgb=image.convert("RGB").resize((620,675),Image.LANCZOS)
-    # Keep final media comfortably below 50 KiB.
+    rgb=image.convert("RGB").resize((620,635),Image.LANCZOS)
     quality=78
     while quality>=30:
         rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
         if out.stat().st_size <= 48*1024:
             return out
         quality-=4
-    for size in ((560,610),(500,545),(440,480),(380,415)):
+    for size in ((560,573),(500,512),(440,451),(380,390)):
         rgb=rgb.resize(size,Image.LANCZOS)
         rgb.save(out,"JPEG",quality=40,optimize=True,progressive=True)
         if out.stat().st_size <= 48*1024:
@@ -2333,11 +2326,11 @@ class TalkinBot:
     def handle_gift_command(self, room: str, text: str, sender_name: str = "", private_to: str = ""):
         raw=text.strip(); m=re.match(r"^sa@([^@]+)@(.+)$",raw,re.I)
         if not m: return False
-        gift_id=m.group(1).strip(); target=m.group(2).strip().lstrip("@"); item=GIFT_CATALOG.get(gift_id)
+        gift_id=m.group(1).strip(); target=m.group(2).strip(); item=GIFT_CATALOG.get(gift_id)
         if not item or not target:
             self.reply_text(room,"❌ الصيغة: sa@رقم_الهدية@اسم_المستخدم",private_to); return True
         try:
-            sender_name = str(sender_name or BOT_ID).strip()
+            sender_name = str(sender_name or BOT_ID)
             # Giant Chat point costs; owner/masters have unlimited points.
             cost=int(GIFT_COSTS.get(str(gift_id),0)); charged=False
             if not _is_master_name(sender_name):
