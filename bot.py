@@ -72,6 +72,15 @@ GIFT_IMAGE_FILES = {
     str(i): [ASSETS_DIR / f"gift_{i:02d}_1.png", ASSETS_DIR / f"gift_{i:02d}_2.png", ASSETS_DIR / f"gift_{i:02d}_3.png"]
     for i in range(1, 15)
 }
+GAME_IMAGE_FILES = {
+    "luck": "game_luck.jpg",
+    "dice": "game_dice.jpg",
+    "rps": "game_cards.jpg",
+    "guess": "game_challenge.jpg",
+    "quiz": "game_million_arabic_clear.jpg",
+    "war": "game_war.jpg",
+    "million": "game_million_luxe.jpg",
+}
 # Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 GIFT_PUBLIC_BASE_URL = os.getenv("GIFT_PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -1124,6 +1133,10 @@ class TalkinBot:
         # was accepted by the room server.
         self.pending_admin_actions = {}
         self.pending_admin_lock = threading.Lock()
+        # Reaction/publish state must exist before any background music or
+        # image-publish worker can write to it.
+        self.reaction_targets = {}
+        self.publish_pending = {}
         self.invite_pending = False
         self.invite_room = ""
         self.invite_sent = set()
@@ -1434,10 +1447,13 @@ class TalkinBot:
             return self.send_query(payload)
 
         if operation == "ban":
-            self.log(f"[MOD] native ban_ip room={room} target=@{target}")
+            # A room ban is represented by the same role transition that the
+            # client reports in `role_changed`.  `ban_ip` was accepted by the
+            # gateway in some versions but did not change room membership.
+            self.log(f"[MOD] room outcast room={room} target=@{target}")
             payload = encode_query(
                 "room_admin",
-                type_="ban_ip",
+                type_="change_role",
                 room=room,
                 to=target,
                 value="outcast",
@@ -1500,11 +1516,13 @@ class TalkinBot:
         with self.pending_admin_lock:
             pending = self.pending_admin_actions.pop(key, None)
         if pending and pending.get("requester"):
-            self.send_private_text(
-                pending["requester"],
+            notice = (
                 f"⚠️ لم يؤكد الخادم تنفيذ العملية على @{pending['target']} "
-                f"في الغرفة {pending['room']} خلال المهلة. لم يتم اعتبارها ناجحة.",
+                f"في الغرفة {pending['room']} خلال المهلة. لم يتم اعتبارها ناجحة."
             )
+            # Confirmation status is room-visible so members can verify that
+            # the server, rather than the bot, accepted the moderation action.
+            self.send_room_text(pending["room"], notice)
             self.log(f"[MOD] confirmation timeout room={pending['room']} target=@{pending['target']}")
 
     def ack(self, uid: str):
@@ -2116,9 +2134,25 @@ class TalkinBot:
             self.game_cooldown[key]=now
         return True,0
 
+    def _send_game_result(self, room, text, game_key):
+        """Send the result text, followed by the matching asset image.
+
+        Images are served by the existing public asset server, so this works
+        on Railway without copying binary files into generated media.
+        """
+        self.send_room_text(room, text)
+        filename = GAME_IMAGE_FILES.get(game_key)
+        base = _public_base_url()
+        image = ASSETS_DIR / filename if filename else None
+        if base and image and image.is_file():
+            try:
+                self.send_room_media(room, f"{base}/assets/{filename}", "image")
+            except Exception as exc:
+                self.log("[GAME] result image failed:", repr(exc))
+
     def game_help(self, room):
         # Game results/help are one message; only command menus are chunked.
-        self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال — سؤال معلومات عامة بجائزة 15 نقطة.\n📌 لا توجد أي تكلفة أو خصم نقاط عند اللعب.")
+        self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال/مليون — سؤال معلومات عامة بجائزة 15 نقطة.\n⚔️ حرب — مواجهة عشوائية واربح حسب النتيجة.\n📌 بعد اكتمال كل لعبة تُرسل صورة نتيجتها تلقائياً. لا توجد تكلفة أو خصم نقاط.")
 
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
@@ -2137,10 +2171,10 @@ class TalkinBot:
                 reward=max(10,30-(game["attempts"]-1)*5)
                 with self.game_lock: self.guess_games.pop(key,None)
                 balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-                self.send_room_text(room,f"🎯 مبروك @{sender_name}! الرقم هو {target} ✅\n🏆 ربحت {reward} نقطة.\n💰 الرصيد: {suffix}"); return True
+                self._send_game_result(room,f"🎯 مبروك @{sender_name}! الرقم هو {target} ✅\n🏆 ربحت {reward} نقطة.\n💰 الرصيد: {suffix}","guess"); return True
             if game["attempts"]>=3:
                 with self.game_lock: self.guess_games.pop(key,None)
-                self.send_room_text(room,f"🎯 انتهت المحاولات يا @{sender_name}. الرقم الصحيح كان {target}. 😄"); return True
+                self._send_game_result(room,f"🎯 انتهت المحاولات يا @{sender_name}. الرقم الصحيح كان {target}. 😄","guess"); return True
             hint="⬆️ الرقم أكبر" if guess<target else "⬇️ الرقم أصغر"
             self.send_room_text(room,f"🎯 @{sender_name}: {hint} — بقيت {3-game['attempts']} محاولات."); return True
 
@@ -2149,14 +2183,14 @@ class TalkinBot:
             if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
             label,reward=random.choice((("🍀 حظ ممتاز!",30),("✨ حظ جميل!",20),("🌟 حظ متوسط!",10),("😅 حظك اليوم عادي!",5)))
             balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self.send_room_text(room, f"{label}\n👤 @{sender_name}\n🎁 الجائزة: {reward} نقطة\n💰 الرصيد: {suffix}"); return True
+            self._send_game_result(room, f"{label}\n👤 @{sender_name}\n🎁 الجائزة: {reward} نقطة\n💰 الرصيد: {suffix}","luck"); return True
 
         if low in ("نرد","ارم النرد","ارمي النرد","dice"):
             ok,wait=self._game_ready(sender_name,room,3.0)
             if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
             roll=random.randint(1,6); reward={1:2,2:3,3:5,4:7,5:10,6:20}[roll]
             balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self.send_room_text(room,f"🎲 @{sender_name} رمى النرد: {roll}\n🎁 ربحت {reward} نقطة!\n💰 الرصيد: {suffix}"); return True
+            self._send_game_result(room,f"🎲 @{sender_name} رمى النرد: {roll}\n🎁 ربحت {reward} نقطة!\n💰 الرصيد: {suffix}","dice"); return True
 
         if low in ("حجر","ورق","مقص"):
             ok,wait=self._game_ready(sender_name,room,3.0)
@@ -2166,7 +2200,20 @@ class TalkinBot:
             elif (low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق")): result,reward="🏆 فزت!",12
             else: result,reward="😄 خسرت الجولة، جرّب مرة أخرى.",2
             balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
-            self.send_room_text(room,f"✂️ @{sender_name}: {low}\n🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {suffix}"); return True
+            self._send_game_result(room,f"✂️ @{sender_name}: {low}\n🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {suffix}","rps"); return True
+
+        if low in ("حرب","الحرب","war"):
+            ok,wait=self._game_ready(sender_name,room,4.0)
+            if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+            player=random.randint(1,100); opponent=random.randint(1,100)
+            if player>opponent:
+                result,reward="🏆 انتصرت في الحرب!",20
+            elif player==opponent:
+                result,reward="🤝 تعادل!",8
+            else:
+                result,reward="🛡️ خسرْت المعركة، لكن حصلت على تعويض.",3
+            balance=self._game_award(sender_name,reward); suffix=_fmt_points(balance)
+            self._send_game_result(room,f"⚔️ حرب @{sender_name}\n🎯 قوتك: {player} | قوة الخصم: {opponent}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {suffix}","war"); return True
 
         if low in ("تخمين","ابدأ تخمين","تخمين 1-10","guess"):
             ok,wait=self._game_ready(sender_name,room,3.0)
@@ -2174,7 +2221,7 @@ class TalkinBot:
             with self.game_lock: self.guess_games[key]={"number":random.randint(1,10),"attempts":0,"started":time.time()}
             self.send_room_text(room,f"🎯 @{sender_name} بدأت لعبة التخمين!\n🔢 اختر رقماً من 1 إلى 10.\n🎲 لديك 3 محاولات — اكتب الرقم فقط."); return True
 
-        if low in ("سؤال","سوال","quiz","مسابقة"):
+        if low in ("سؤال","سوال","quiz","مسابقة","مليون","المليون","million"):
             ok,wait=self._game_ready(sender_name,room,5.0)
             if not ok: self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
             q,a=random.choice((("ما هو أكبر كوكب في المجموعة الشمسية؟","المشتري"),("كم عدد أيام الأسبوع؟","7"),("ما عاصمة اليمن؟","صنعاء"),("ما لون الموز غالباً عند النضج؟","أصفر")))
@@ -2185,7 +2232,7 @@ class TalkinBot:
         if quiz and time.time()<=quiz.get("expires",0) and low==str(quiz.get("answer","")).casefold():
             with self.game_lock: self.guess_games.pop((str(room or "").casefold(),"__quiz__"),None)
             balance=self._game_award(sender_name,15); suffix=_fmt_points(balance)
-            self.send_room_text(room,f"🧠 إجابة صحيحة يا @{sender_name}! 🎉\n🏆 +15 نقطة\n💰 الرصيد: {suffix}"); return True
+            self._send_game_result(room,f"🧠 إجابة صحيحة يا @{sender_name}! 🎉\n🏆 +15 نقطة\n💰 الرصيد: {suffix}","quiz"); return True
         return False
 
     def _send_help(self, room=None, private_to=None, page=1):
@@ -2544,7 +2591,7 @@ class TalkinBot:
                         "admin": f"✅ أكد الخادم ترقية @{changed_user} إلى مشرف في الغرفة {room}.",
                         "owner": f"✅ أكد الخادم ترقية @{changed_user} إلى مالك في الغرفة {room}.",
                     }
-                    self.send_private_text(pending["requester"], labels.get(changed_role, f"✅ أكد الخادم تغيير دور @{changed_user} إلى {changed_role}."))
+                    self.send_room_text(room, labels.get(changed_role, f"✅ أكد الخادم تغيير دور @{changed_user} إلى {changed_role}."))
                     self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room

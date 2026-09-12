@@ -13,12 +13,14 @@ bot.pending_admin_actions = {
 import threading
 bot.pending_admin_lock = threading.Lock()
 bot.sent = []
+bot.room_sent = []
 bot.acks = []
 bot.send_private_text = lambda user, text: bot.sent.append((user, text))
+bot.send_room_text = lambda room, text: bot.room_sent.append((room, text))
 bot.ack = lambda uid: bot.acks.append(uid)
 
 bot.handle_room_event({"room_event": {1: "role_changed", 13: "room1", 17: "target", 31: "outcast"}, "uid": "event-1"})
-assert ("master", "✅ أكد الخادم حظر @target في الغرفة room1.") in bot.sent
+assert ("room1", "✅ أكد الخادم حظر @target في الغرفة room1.") in bot.room_sent
 assert ("room1", "target", "outcast") not in bot.pending_admin_actions
 assert "target" not in bot.room_users["room1"]
 assert bot.acks == ["event-1"]
