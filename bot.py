@@ -72,49 +72,9 @@ GIFT_IMAGE_FILES = {
     str(i): [ASSETS_DIR / f"gift_{i:02d}_1.png", ASSETS_DIR / f"gift_{i:02d}_2.png", ASSETS_DIR / f"gift_{i:02d}_3.png"]
     for i in range(1, 15)
 }
-GAME_IMAGE_FILES = {
-    "ball": "game_ball.jpg",
-    "basket": "game_basket.jpg",
-    "bet": "game_bet.jpg",
-    "bribe": "game_bribe.jpg",
-    "cards": "game_cards.jpg",
-    "challenge": "game_challenge.jpg",
-    "luck": "game_luck.jpg",
-    "dice": "game_dice.jpg",
-    "drone": "game_drone.jpg",
-    "frog": "game_frog.jpg",
-    "ghost": "game_ghost.jpg",
-    "job": "game_job.jpg",
-    "marriage": "game_marriage.jpg",
-    "meet": "game_meet.jpg",
-    "million_arabic": "game_million_arabic_clear.jpg",
-    "million_luxe": "game_million_luxe.jpg",
-    "mine": "game_mine.jpg",
-    "race": "game_race.jpg",
-    "rob": "game_rob.jpg",
-    "volcano": "game_volcano.jpg",
-    "rps": "game_cards.jpg",
-    "guess": "game_challenge.jpg",
-    "quiz": "game_million_arabic_clear.jpg",
-    "war": "game_war.jpg",
-    "million": "game_million_luxe.jpg",
-    "million_game": "million_game.jpg",
-    "slap": "slap_action.jpg",
-    "war_game": "war_game.jpg",
-    "war_game_png": "war_game.png",
-}
-GAME_COMMANDS = {
-    "كرة": ("ball", "كرة القدم"), "سلة": ("basket", "كرة السلة"),
-    "رهان": ("bet", "الرهان"), "رشوة": ("bribe", "الرشوة"),
-    "بطاقات": ("cards", "البطاقات"), "طائرة": ("drone", "الطائرة"),
-    "ضفدع": ("frog", "الضفدع"), "شبح": ("ghost", "الشبح"),
-    "وظيفة": ("job", "الوظيفة"), "زواج": ("marriage", "الزواج"),
-    "تعارف": ("meet", "التعارف"), "مليون فاخر": ("million_luxe", "المليون الفاخر"),
-    "منجم": ("mine", "المنجم"), "سباق": ("race", "السباق"),
-    "سرقة": ("rob", "السرقة"), "بركان": ("volcano", "البركان"),
-    "لعبة المليون": ("million_game", "لعبة المليون"), "كف": ("slap", "الكف"),
-    "حرب 2": ("war_game", "الحرب 2"), "حرب 3": ("war_game_png", "الحرب 3"),
-}
+# الألعاب وصورها معطلة بناءً على إعداد البوت المطلوب؛ لا تُرسل صور ألعاب.
+GAME_IMAGE_FILES = {}
+GAME_COMMANDS = {}
 # Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 GIFT_PUBLIC_BASE_URL = os.getenv("GIFT_PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -852,6 +812,7 @@ def _looks_like_bot_command(text):
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "انشر",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
     )
+    prefixes = prefixes + ("bl@",)
     return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game") or low in {x.casefold() for x in GAME_COMMANDS}
 
 def _looks_like_admin_command(text):
@@ -941,7 +902,7 @@ def _default_help_pages():
     return {
         1: '📋 أوامر الإدارة\n━━━━━━━━━━━━\nk@اسم — طرد\nb@اسم — حظر\nub@اسم — فك الحظر\na@اسم — تعيين مشرف\no@اسم — تعيين مالك',
         2: '🎵 الموسيقى\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل',
-        3: '🎮 الألعاب\n━━━━━━━━━━━━\nالعاب — عرض الألعاب\nحظ — جائزة عشوائية\nنرد — رمي النرد\nتخمين — تخمين رقم\nحجر — حجر ورق مقص\nورق — حجر ورق مقص\nمقص — حجر ورق مقص\nسؤال — مسابقة',
+        3: '🎮 الألعاب\n━━━━━━━━━━━━\nالألعاب والصور معطلة حالياً.',
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — عرض النقاط\nتوب — المتصدرين\nsb@اسم@عدد — تعديل النقاط',
         6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
@@ -1536,8 +1497,16 @@ class TalkinBot:
         with self.pending_admin_lock:
             self.pending_admin_actions[key] = {
                 "room": room, "target": target, "role": expected_role,
-                "requester": requester, "created_at": time.time(),
+                "requester": requester, "created_at": time.time(), "announced": True,
             }
+        labels = {
+            "kicked": "طرد",
+            "outcast": "حظر",
+            "member": "فك الحظر",
+            "admin": "تعيين مشرف",
+            "owner": "تعيين أونر",
+        }
+        self.send_room_text(room, f"✅ تم أمر {labels[expected_role]} @{target} بنجاح.")
         self.log(f"[MOD] awaiting server confirmation room={room} target=@{target} role={expected_role}")
         threading.Thread(
             target=self._admin_confirmation_timeout,
@@ -2187,6 +2156,8 @@ class TalkinBot:
         self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال/مليون — سؤال معلومات عامة بجائزة 15 نقطة.\n⚔️ حرب — مواجهة عشوائية.\n🖼️ ألعاب الصور: " + names + "\n📌 بعد اكتمال كل لعبة تُرسل صورة نتيجتها تلقائياً. لا توجد تكلفة أو خصم نقاط.")
 
     def handle_game_command(self, room, text, sender_name):
+        # Games and their artwork were removed from this bot configuration.
+        return False
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
         low=raw.casefold(); key=(str(room or "").casefold(), _norm_user(sender_name))
@@ -2335,6 +2306,14 @@ class TalkinBot:
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
+        # Joining a room is intentionally available to verified and unverified users.
+        if low.startswith(("دخول ", "join ", "ادخل ", "enter ")):
+            parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
+            if not target:
+                self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
+            self.join_room(target)
+            self.send_private_text(sender,f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}")
+            return True
         if not _is_master_name(sender):
             if _looks_like_admin_command(text):
                 self.send_private_text(sender, "🚫 هذا الأمر مخصص للماستر والإدارة فقط.")
@@ -2426,6 +2405,17 @@ class TalkinBot:
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الحظر فيها."); return True
             self.request_admin_action(room,target,"ban",sender)
+            return True
+        m=re.match(r"^bl@(.+)$", text, re.I)
+        if m:
+            target=m.group(1).strip().lstrip("@")
+            active_rooms={str(r).strip() for r in self.known_rooms if str(r).strip()}
+            if self.room: active_rooms.add(str(self.room).strip())
+            active_rooms.discard("")
+            if not active_rooms:
+                self.send_private_text(sender,"❌ البوت غير موجود في أي غرفة حالياً."); return True
+            for active_room in sorted(active_rooms):
+                self.request_admin_action(active_room,target,"ban",sender)
             return True
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
@@ -2633,7 +2623,10 @@ class TalkinBot:
                         "admin": f"✅ أكد الخادم ترقية @{changed_user} إلى مشرف في الغرفة {room}.",
                         "owner": f"✅ أكد الخادم ترقية @{changed_user} إلى مالك في الغرفة {room}.",
                     }
-                    self.send_room_text(room, labels.get(changed_role, f"✅ أكد الخادم تغيير دور @{changed_user} إلى {changed_role}."))
+                    # The command already reports success immediately. Keep the
+                    # native event only for state synchronization and logging.
+                    if not pending.get("announced"):
+                        self.send_room_text(room, labels.get(changed_role, f"✅ أكد الخادم تغيير دور @{changed_user} إلى {changed_role}."))
                     self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
@@ -2645,6 +2638,11 @@ class TalkinBot:
             # to run_once(), while a rejoin is attempted at most once after a
             # long cooldown and never recursively from this event handler.
             self.log("[ROOM] server requested rejoin; delayed reconnect")
+            if event_type in ("room_unauthorized_rejoin", "room_membership_required_rejoin"):
+                notice=f"🚫 البوت محظور في الغرفة {room}. أعطِ البوت إشرافاً أو أونر في الغرفة ثم أرسل: دخول {room}"
+                recipient=username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER
+                if recipient:
+                    self.send_private_text(recipient, notice)
 
         if ACK_ROOM_EVENTS and result.get("uid"):
             try:
@@ -2658,10 +2656,9 @@ class TalkinBot:
         if event_type == "image":
             media_url = str(event.get(7, "") or "").strip()
             if frm and frm != BOT_ID and media_url:
-                if not _is_verified_user(frm):
-                    self.send_room_text(room, f"🔒 @{frm} لاستخدام النشر يجب توثيق الحساب أولاً. { _verification_notice() }")
-                    return
-                if self._handle_publish_media(room, frm, media_url):
+                # Ignore ordinary room images silently. Only a pending publish
+                # request may consume an image, avoiding verification notices.
+                if _is_verified_user(frm) and self._handle_publish_media(room, frm, media_url):
                     return
             return
 
@@ -2689,7 +2686,7 @@ class TalkinBot:
         # restricted to masters. Unverified command attempts receive one clear
         # notice instead of being silently ignored.
         is_verified = _is_verified_user(frm)
-        if not is_verified and _looks_like_bot_command(body):
+        if not is_verified and _looks_like_bot_command(body) and not body.strip().casefold().startswith(("دخول ", "join ", "ادخل ", "enter ")):
             self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
         # Music/gifts require verification; masters are always allowed.
@@ -2767,7 +2764,7 @@ class TalkinBot:
                             return
                         if self._handle_publish_media(self.room, frm, media_url):
                             return
-                    if body and not _is_verified_user(frm) and _looks_like_bot_command(body):
+                    if body and not _is_verified_user(frm) and _looks_like_bot_command(body) and not body.strip().casefold().startswith(("دخول ", "join ", "ادخل ", "enter ")):
                         self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
                     if body:
