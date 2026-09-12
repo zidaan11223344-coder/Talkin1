@@ -1549,14 +1549,11 @@ class TalkinBot:
         time.sleep(float(os.getenv("ADMIN_CONFIRMATION_TIMEOUT", "8")))
         with self.pending_admin_lock:
             pending = self.pending_admin_actions.pop(key, None)
-        if pending and pending.get("requester"):
-            notice = (
-                f"⚠️ لم يؤكد الخادم تنفيذ العملية على @{pending['target']} "
-                f"في الغرفة {pending['room']} خلال المهلة. لم يتم اعتبارها ناجحة."
-            )
-            # Confirmation status is room-visible so members can verify that
-            # the server, rather than the bot, accepted the moderation action.
-            self.send_room_text(pending["room"], notice)
+        # A timeout is intentionally silent.  Talkin may apply the role
+        # change while delaying or omitting the matching event; showing a
+        # failure message after a successful native room notification is
+        # misleading.  Only role_changed below emits a success message.
+        if pending:
             self.log(f"[MOD] confirmation timeout room={pending['room']} target=@{pending['target']}")
 
     def ack(self, uid: str):
@@ -2421,40 +2418,35 @@ class TalkinBot:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الطرد فيها."); return True
-            if self.request_admin_action(room,target,"kick",sender):
-                self.send_private_text(sender,f"⏳ جارٍ تنفيذ طرد @{target} من الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            self.request_admin_action(room,target,"kick",sender)
             return True
         m=re.match(r"^(b@|ban\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ الحظر فيها."); return True
-            if self.request_admin_action(room,target,"ban",sender):
-                self.send_private_text(sender,f"⏳ جارٍ تنفيذ حظر @{target} في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            self.request_admin_action(room,target,"ban",sender)
             return True
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتنفيذ فك الحظر فيها."); return True
-            if self.request_admin_action(room,target,"member",sender):
-                self.send_private_text(sender,f"⏳ جارٍ تنفيذ فك حظر @{target} في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            self.request_admin_action(room,target,"member",sender)
             return True
         m=re.match(r"^(a@|admin\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المشرف فيها."); return True
-            if self.request_admin_action(room,target,"admin",sender):
-                self.send_private_text(sender,f"⏳ جارٍ ترقية @{target} إلى مشرف في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            self.request_admin_action(room,target,"admin",sender)
             return True
         m=re.match(r"^(o@|owner\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
             if not room:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المالك فيها."); return True
-            if self.request_admin_action(room,target,"owner",sender):
-                self.send_private_text(sender,f"⏳ جارٍ ترقية @{target} إلى مالك في الغرفة {room}، سأرسل النجاح بعد تأكيد الخادم.")
+            self.request_admin_action(room,target,"owner",sender)
             return True
         if low.startswith(("دخول ","join ","ادخل ","enter ")):
             parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
@@ -2814,24 +2806,19 @@ class TalkinBot:
                             self.send_private_text(frm, f"✅ تم تغيير رسالة الدعوة إلى: {arg}")
                         elif cmd in ("a@", "admin") and arg:
                             target = arg.lstrip("@").strip()
-                            if self.request_admin_action(ctx_room, target, "admin", frm):
-                                self.send_private_text(frm, f"⏳ جارٍ ترقية @{target} إلى مشرف في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
+                            self.request_admin_action(ctx_room, target, "admin", frm)
                         elif cmd in ("o@", "owner") and arg:
                             target = arg.lstrip("@").strip()
-                            if self.request_admin_action(ctx_room, target, "owner", frm):
-                                self.send_private_text(frm, f"⏳ جارٍ ترقية @{target} إلى مالك في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
+                            self.request_admin_action(ctx_room, target, "owner", frm)
                         elif cmd in ("k@", "kick") and arg:
                             target = arg.lstrip("@").strip()
-                            if self.request_admin_action(ctx_room, target, "kick", frm):
-                                self.send_private_text(frm, f"⏳ جارٍ تنفيذ طرد @{target} من الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
+                            self.request_admin_action(ctx_room, target, "kick", frm)
                         elif cmd in ("b@", "ban") and arg:
                             target = arg.lstrip("@").strip()
-                            if self.request_admin_action(ctx_room, target, "ban", frm):
-                                self.send_private_text(frm, f"⏳ جارٍ تنفيذ حظر @{target} في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
+                            self.request_admin_action(ctx_room, target, "ban", frm)
                         elif cmd in ("u@", "unban") and arg:
                             target = arg.lstrip("@").strip()
-                            if self.request_admin_action(ctx_room, target, "member", frm):
-                                self.send_private_text(frm, f"⏳ جارٍ تنفيذ فك حظر @{target} في الغرفة {ctx_room}، سأرسل النجاح بعد تأكيد الخادم.")
+                            self.request_admin_action(ctx_room, target, "member", frm)
                         elif cmd in ("say", "قل") and arg:
                             self.send_room_text(ctx_room, arg)
                 except Exception as e:
