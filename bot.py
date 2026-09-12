@@ -73,13 +73,47 @@ GIFT_IMAGE_FILES = {
     for i in range(1, 15)
 }
 GAME_IMAGE_FILES = {
+    "ball": "game_ball.jpg",
+    "basket": "game_basket.jpg",
+    "bet": "game_bet.jpg",
+    "bribe": "game_bribe.jpg",
+    "cards": "game_cards.jpg",
+    "challenge": "game_challenge.jpg",
     "luck": "game_luck.jpg",
     "dice": "game_dice.jpg",
+    "drone": "game_drone.jpg",
+    "frog": "game_frog.jpg",
+    "ghost": "game_ghost.jpg",
+    "job": "game_job.jpg",
+    "marriage": "game_marriage.jpg",
+    "meet": "game_meet.jpg",
+    "million_arabic": "game_million_arabic_clear.jpg",
+    "million_luxe": "game_million_luxe.jpg",
+    "mine": "game_mine.jpg",
+    "race": "game_race.jpg",
+    "rob": "game_rob.jpg",
+    "volcano": "game_volcano.jpg",
     "rps": "game_cards.jpg",
     "guess": "game_challenge.jpg",
     "quiz": "game_million_arabic_clear.jpg",
     "war": "game_war.jpg",
     "million": "game_million_luxe.jpg",
+    "million_game": "million_game.jpg",
+    "slap": "slap_action.jpg",
+    "war_game": "war_game.jpg",
+    "war_game_png": "war_game.png",
+}
+GAME_COMMANDS = {
+    "كرة": ("ball", "كرة القدم"), "سلة": ("basket", "كرة السلة"),
+    "رهان": ("bet", "الرهان"), "رشوة": ("bribe", "الرشوة"),
+    "بطاقات": ("cards", "البطاقات"), "طائرة": ("drone", "الطائرة"),
+    "ضفدع": ("frog", "الضفدع"), "شبح": ("ghost", "الشبح"),
+    "وظيفة": ("job", "الوظيفة"), "زواج": ("marriage", "الزواج"),
+    "تعارف": ("meet", "التعارف"), "مليون فاخر": ("million_luxe", "المليون الفاخر"),
+    "منجم": ("mine", "المنجم"), "سباق": ("race", "السباق"),
+    "سرقة": ("rob", "السرقة"), "بركان": ("volcano", "البركان"),
+    "لعبة المليون": ("million_game", "لعبة المليون"), "كف": ("slap", "الكف"),
+    "حرب 2": ("war_game", "الحرب 2"), "حرب 3": ("war_game_png", "الحرب 3"),
 }
 # Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -2152,7 +2186,8 @@ class TalkinBot:
 
     def game_help(self, room):
         # Game results/help are one message; only command menus are chunked.
-        self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال/مليون — سؤال معلومات عامة بجائزة 15 نقطة.\n⚔️ حرب — مواجهة عشوائية واربح حسب النتيجة.\n📌 بعد اكتمال كل لعبة تُرسل صورة نتيجتها تلقائياً. لا توجد تكلفة أو خصم نقاط.")
+        names = "، ".join(f"{command} ({label})" for command, (_, label) in GAME_COMMANDS.items())
+        self.send_room_text(room, "🎮 ألعاب البوت المجانية:\n━━━━━━━━━━━━\n🍀 حظ — جائزة عشوائية مجانية.\n🎯 تخمين — ابدأ ثم اكتب رقماً من 1 إلى 10.\n🎲 نرد — ارْمِ النرد واربح نقاطاً حسب النتيجة.\n✂️ حجر ورق مقص — اكتب: حجر أو ورق أو مقص.\n🧠 سؤال/مليون — سؤال معلومات عامة بجائزة 15 نقطة.\n⚔️ حرب — مواجهة عشوائية.\n🖼️ ألعاب الصور: " + names + "\n📌 بعد اكتمال كل لعبة تُرسل صورة نتيجتها تلقائياً. لا توجد تكلفة أو خصم نقاط.")
 
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
@@ -2160,6 +2195,21 @@ class TalkinBot:
         low=raw.casefold(); key=(str(room or "").casefold(), _norm_user(sender_name))
         if low in ("العاب","ألعاب","لعب","games","game"):
             self.game_help(room); return True
+
+        # Every artwork in assets has its own command. These lightweight
+        # challenges are intentionally free and always return their matching
+        # image after the result, even when the player loses.
+        for command, (image_key, label) in GAME_COMMANDS.items():
+            if low == command.casefold():
+                ok,wait=self._game_ready(sender_name,room,3.0)
+                if not ok:
+                    self.send_room_text(room,f"⏳ @{sender_name} انتظر {wait} ثوانٍ."); return True
+                player=random.randint(1,6); opponent=random.randint(1,6)
+                reward=20 if player>opponent else (8 if player==opponent else 3)
+                result="🏆 فزت!" if player>opponent else ("🤝 تعادل!" if player==opponent else "😄 جولة ممتعة، حاول مرة أخرى.")
+                balance=self._game_award(sender_name,reward)
+                self._send_game_result(room,f"🎮 لعبة {label} — @{sender_name}\n🎲 نتيجتك: {player} | نتيجة الخصم: {opponent}\n{result}\n🎁 +{reward} نقطة\n💰 الرصيد: {_fmt_points(balance)}",image_key)
+                return True
 
         if re.fullmatch(r"\d{1,2}", raw):
             with self.game_lock: game=self.guess_games.get(key)
