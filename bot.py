@@ -39,7 +39,7 @@ try:
 except Exception:
     yt_dlp = None
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, features
     PIL_AVAILABLE = True
 except Exception:
     Image = ImageDraw = ImageFont = None
@@ -1082,44 +1082,177 @@ def _draw_centered(draw,center,raw_text,size,fill,max_width):
     y=center[1]-(bbox[3]-bbox[1])/2-bbox[1]
     _draw_exact_text(draw,(x,y),raw_text,size,fill,stroke_width=3,stroke_fill=(0,0,0,220))
 
-def render_gift_card(gift_id,sender_name,receiver_name):
-    if not PIL_AVAILABLE: raise RuntimeError("Pillow غير مثبت")
-    # Keep the account names exactly as received; only surrounding whitespace
-    # is removed so the sender/receiver boxes never show a stale previous name.
+def _visual_rtl_text(text):
+    """Return logical text unchanged when Pillow/Raqm can shape Arabic.
+    Older fallback renderers may need reshape+bidi.
+    """
+    text = str(text or "")
+    try:
+        if PIL_AVAILABLE and features.check("raqm"):
+            return text
+    except Exception:
+        pass
+    if arabic_reshaper is not None and get_display is not None:
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            pass
+    return text
+
+def _has_arabic(text):
+    return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
+
+def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
+    """Draw the exact username copied from Talkin, with proper RTL shaping."""
+    text = str(raw_text or "").strip()
+    if not text:
+        return
+    font = _gift_font(text, int(size))
+    direction = "rtl" if _has_arabic(text) else "ltr"
+    # Raqm handles Arabic shaping and bidi itself; do not pre-reshape when it is available.
+    try:
+        while size > 16:
+            bbox = draw.textbbox((0,0), text, font=font, direction=direction)
+            if (bbox[2]-bbox[0]) <= max_width:
+                break
+            size -= 2
+            font = _gift_font(text, int(size))
+        bbox = draw.textbbox((0,0), text, font=font, direction=direction)
+        x = center[0] - (bbox[2]-bbox[0])/2
+        y = center[1] - (bbox[3]-bbox[1])/2 - bbox[1]
+        draw.text((x,y), text, font=font, fill=fill, stroke_width=1, stroke_fill=(0,0,0,170), direction=direction)
+        return
+    except Exception:
+        pass
+    # Fallback for older Pillow builds without direction support.
+    visual = _visual_rtl_text(text)
+    _draw_exact_text(draw, (center[0]-draw.textlength(visual,font=font)/2, center[1]-size/2), visual, size, fill, 1, (0,0,0,170))
+
+def _visual_runs(text, size):
+    # Kept for compatibility with older helpers.
+    visual = _visual_rtl_text(_shape_name(text))
+    base = _gift_font(visual, size)
+    fallbacks = _fallback_fonts(size)
+    runs=[]; cur_font=None; cur=[]
+    for ch in visual:
+        chosen = base if _font_has_glyph(base, ch) else next((f for f in fallbacks if _font_has_glyph(f, ch)), base)
+        if cur_font is None or chosen is cur_font:
+            cur.append(ch)
+        else:
+            runs.append((cur_font,''.join(cur))); cur=[ch]
+        cur_font=chosen
+    if cur: runs.append((cur_font,''.join(cur)))
+    return runs
+
+def _visual_text_width(draw, text, size):
+    try:
+        font=_gift_font(text,size)
+        direction="rtl" if _has_arabic(text) else "ltr"
+        box=draw.textbbox((0,0),str(text),font=font,direction=direction)
+        return box[2]-box[0]
+    except Exception:
+        return sum(draw.textlength(run,font=font) for font,run in _visual_runs(text,size))
+
+def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=1, stroke_fill=(0,0,0,180)):
+    return _draw_name_centered(draw, (xy[0], xy[1]+size/2), raw_text, size, fill, 10000)
+
+def _draw_centered(draw, center, raw_text, size, fill, max_width):
+    return _draw_name_centered(draw, center, raw_text, size, fill, max_width)
+
+
+def _load_sender_avatar(photo_url, size=190):
+    """Download a sender profile photo and crop it to a circular avatar."""
+    if not photo_url or not photo_url.startswith(("http://", "https://")):
+        return None
+    try:
+        r = requests.get(photo_url, headers={"User-Agent":"TalkinBot/22"}, timeout=8)
+        if r.status_code != 200 or not r.content:
+            return None
+        from io import BytesIO
+        av = Image.open(BytesIO(r.content)).convert("RGB")
+        av = _fit_crop(av, (size,size)).convert("RGBA")
+        mask = Image.new("L", (size,size), 0)
+        md = ImageDraw.Draw(mask)
+        md.ellipse((2,2,size-2,size-2), fill=255)
+        out = Image.new("RGBA", (size,size), (0,0,0,0))
+        out.paste(av, (0,0), mask)
+        ring = ImageDraw.Draw(out)
+        ring.ellipse((2,2,size-2,size-2), outline=(248,202,91,255), width=7)
+        return out
+    except Exception:
+        return None
+
+
+def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url=""):
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
     sender_name = str(sender_name or "").strip()
     receiver_name = str(receiver_name or "").strip()
     files=[p for p in GIFT_IMAGE_FILES.get(str(gift_id),[]) if p.is_file()]
-    if not files: raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
-    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
-    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
-    image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA"); image.alpha_composite(template); d=ImageDraw.Draw(image); w,h=template.size
-    gold=(244,196,92,255); panel=(10,14,28,245); header=(int(w*.27),65,int(w*.73),205)
-    d.rounded_rectangle(header,radius=48,fill=panel,outline=gold,width=4)
+    if not files:
+        raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
+
+    # New card layout inspired by the supplied reference: ornate frame,
+    # prominent gift artwork, sender avatar in the card, and clean name bars.
+    W,H = 900, 980
+    bg=(15,10,25,255)
+    image=Image.new("RGBA", (W,H), bg)
+    d=ImageDraw.Draw(image)
+    gold=(244,196,92,255); gold2=(255,226,157,255); panel=(9,16,34,238)
+    # outer and inner ornamented frame
+    d.rounded_rectangle((10,10,W-10,H-10), radius=42, outline=(177,115,42,255), width=12)
+    d.rounded_rectangle((27,27,W-27,H-27), radius=34, outline=gold, width=3)
+    for x,y in ((52,52),(W-52,52),(52,H-52),(W-52,H-52)):
+        d.ellipse((x-13,y-13,x+13,y+13), outline=gold2, width=3)
+
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
-    _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
-    box_w=int(w*.64); box_h=int(h*.105); box_x=(w-box_w)//2; top_y=int(h*.705); bottom_y=int(h*.815)
-    for y in (top_y,bottom_y): d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=28,fill=panel,outline=gold,width=4)
-    _draw_centered(d,(w/2,top_y+28),"من",27,(255,224,165,255),box_w-20); _draw_centered(d,(w/2,bottom_y+28),"إلى",27,(255,224,165,255),box_w-20)
-    colors=[(255,130,165,255),(100,220,255,255),(255,211,85,255),(180,135,255,255),(100,235,170,255),(255,150,95,255)]; c1,c2=random.sample(colors,2)
-    _draw_centered(d,(w/2,top_y+box_h*.68),sender_name,39,c1,box_w-42); _draw_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,c2,box_w-42)
-    # Talkin rejects oversized media packets/remote images.  The source gift
-    # assets are already small, but the personalized card template can expand
-    # dramatically when saved as PNG.  Export the final card as a compact JPEG
-    # and enforce a hard <= 50 KiB limit before returning it.
+    d.rounded_rectangle((180,45,720,145), radius=30, fill=panel, outline=gold, width=3)
+    _draw_centered(d,(450,95),"هدية "+gift_name,38,gold2,500)
+
+    # Main artwork, with a framed window.
+    art_box=(70,170,830,735)
+    d.rounded_rectangle(art_box, radius=34, fill=(4,5,12,255), outline=gold, width=4)
+    art=_fit_crop(Image.open(random.choice(files)), (730,525)).convert("RGB").convert("RGBA")
+    image.alpha_composite(art, (85,185))
+    # Thin inner border over the artwork.
+    d.rounded_rectangle((85,185,815,710), radius=28, outline=(255,255,255,70), width=2)
+
+    # Sender avatar: real profile image from Talkin UserItem field 3.
+    avatar=_load_sender_avatar(sender_photo_url, 170)
+    if avatar is not None:
+        image.alpha_composite(avatar, (365,645))
+    else:
+        # Elegant fallback if Talkin has not supplied a public photo URL yet.
+        d.ellipse((365,645,535,815), fill=(24,29,49,255), outline=gold, width=6)
+        _draw_centered(d,(450,730),sender_name[:1] or "♥",56,gold2,120)
+
+    # Name bars: copy the usernames exactly as received from the chat message.
+    # The label is separate; the username itself is rendered inside the rectangle.
+    box_w=700; box_h=104; x=(W-box_w)//2
+    top=750; bottom=864
+    for y in (top,bottom):
+        d.rounded_rectangle((x,y,x+box_w,y+box_h), radius=24, fill=panel, outline=gold, width=3)
+    # Use a Latin-capable font for the small labels so they never become boxes.
+    label_font = _load_font(BASE_DIR/"assets"/"DejaVuSans.ttf", 20) if (BASE_DIR/"assets"/"DejaVuSans.ttf").is_file() else _gift_font("FROM",20)
+    for label, cy in (("FROM:",773),("TO:",887)):
+        bb=d.textbbox((0,0),label,font=label_font)
+        d.text((450-(bb[2]-bb[0])/2, cy-(bb[3]-bb[1])/2-bb[1]), label, font=label_font, fill=gold2)
+    _draw_name_centered(d,(450,818),sender_name,31,(255,238,199,255),box_w-50)
+    _draw_name_centered(d,(450,928),receiver_name,31,(255,238,199,255),box_w-50)
+
     out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
-    rgb=image.convert("RGB").resize((620,635),Image.LANCZOS)
+    rgb=image.convert("RGB").resize((620,675),Image.LANCZOS)
+    # Keep final media comfortably below 50 KiB.
     quality=78
-    while quality>=35:
+    while quality>=30:
         rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
         if out.stat().st_size <= 48*1024:
             return out
-        quality-=5
-    # If the image is still too large, reduce dimensions while keeping it
-    # readable; this is a final safety net for all gift variants.
-    for size in ((560,573),(500,512),(440,451)):
+        quality-=4
+    for size in ((560,610),(500,545),(440,480),(380,415)):
         rgb=rgb.resize(size,Image.LANCZOS)
-        rgb.save(out,"JPEG",quality=45,optimize=True,progressive=True)
+        rgb.save(out,"JPEG",quality=40,optimize=True,progressive=True)
         if out.stat().st_size <= 48*1024:
             return out
     return out
@@ -1211,6 +1344,9 @@ class TalkinBot:
         # Live room membership cache: username -> role.  This is updated by
         # occupants_list and by user_joined/user_left room events.
         self.room_users = defaultdict(dict)
+        # Live profile photos learned from Talkin UserItem field 3.
+        # username(casefold) -> public photo URL.
+        self.user_photos = {}
         self.last_joined_room = None
         # Moderation commands are confirmed only after the server emits a
         # matching role_changed event.  Sending a packet is not proof that it
@@ -1812,9 +1948,10 @@ class TalkinBot:
                 role = first_text(uf, 6).strip().lower()
                 user_id = first_text(uf, 2).strip()
                 online = first_text(uf, 5).strip()
+                photo = first_text(uf, 3).strip()
                 if username and username != BOT_ID:
                     users.append({"username": username, "role": role or "none",
-                                  "user_id": user_id, "online": online})
+                                  "user_id": user_id, "online": online, "photo": photo})
             except Exception as e:
                 self.log("[INV] UserItem decode failed:", repr(e))
         # De-duplicate by username while preserving server order.
@@ -1864,6 +2001,24 @@ class TalkinBot:
         finally:
             with self.invite_lock:
                 self.invite_pending = False
+
+    def _cache_user_photos_from_result(self, result):
+        """Cache Talkin profile photo URLs from any occupants/users response."""
+        try:
+            for user in (result.get("users") or []):
+                if not isinstance(user, dict):
+                    continue
+                username = str(user.get(1, "") or "").strip()
+                photo = str(user.get(3, "") or "").strip()
+                if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
+                    self.user_photos[username.casefold()] = photo
+            for user in self._users_from_room_admin(result.get("room_admin") or {}):
+                username = str(user.get("username") or "").strip()
+                photo = str(user.get("photo") or "").strip()
+                if username and photo and photo.startswith(("http://", "https://")):
+                    self.user_photos[username.casefold()] = photo
+        except Exception as exc:
+            self.log("[GIFT] photo cache failed:", repr(exc))
 
     def process_occupants_for_invite(self, result):
         if not self.invite_pending:
@@ -2197,7 +2352,8 @@ class TalkinBot:
                 if charged:
                     _add_points(sender_name, cost)
                 raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ أنشئ Railway Public Domain أو ضع PUBLIC_BASE_URL")
-            gift_path = render_gift_card(gift_id, sender_name, target)
+            sender_photo_url = self.user_photos.get(sender_name.casefold(), "")
+            gift_path = render_gift_card(gift_id, sender_name, target, sender_photo_url)
             gift_url = public_base + "/gifts/" + gift_path.name
             self._verify_public_media_url(gift_url, "image")
             if not gift_path.is_file() or gift_path.stat().st_size < 64:
@@ -2519,6 +2675,9 @@ class TalkinBot:
         if low in ("مليون","million"):
             if not self._game_ready(sender_name, room, 3.0)[0]:
                 return True
+            # Restore the first status message used by the original million game.
+            self.send_room_text(room, "🔎 جاري البحث عن مليون...")
+            time.sleep(1.0)
             won=(secrets.randbelow(100)==0)
             reward=1000000 if won else 0
             _record_game(sender_name,"million",reward,0)
@@ -3103,6 +3262,7 @@ class TalkinBot:
                 self.log("[WS] unexpected text frame received")
                 return
             result = decode_result_message(message)
+            self._cache_user_photos_from_result(result)
             if "room_event" in result:
                 self.handle_room_event(result)
             if result.get("users") or result.get("room_admin"):
