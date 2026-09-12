@@ -1103,30 +1103,50 @@ def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
 def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
-    """Draw the exact username copied from Talkin, with proper RTL shaping."""
-    text = str(raw_text or "").strip()
+    """Render the username exactly as received from Talkin.
+
+    Important: do NOT force RTL/LTR and do NOT reverse, reshape, strip, or
+    transliterate the username. When Pillow is built with libraqm, leaving
+    direction unset lets the same Unicode bidi/shaping engine handle Arabic,
+    Latin, numbers and mixed usernames naturally.
+    """
+    text = str(raw_text if raw_text is not None else "")
     if not text:
         return
-    font = _gift_font(text, int(size))
-    direction = "rtl" if _has_arabic(text) else "ltr"
-    # Raqm handles Arabic shaping and bidi itself; do not pre-reshape when it is available.
+
+    size = int(size)
+    while size > 14:
+        font = _gift_font(text, size)
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+        except Exception:
+            bbox = font.getbbox(text)
+        width = bbox[2] - bbox[0]
+        if width <= max_width:
+            break
+        size -= 2
+
+    font = _gift_font(text, size)
     try:
-        while size > 16:
-            bbox = draw.textbbox((0,0), text, font=font, direction=direction)
-            if (bbox[2]-bbox[0]) <= max_width:
-                break
-            size -= 2
-            font = _gift_font(text, int(size))
-        bbox = draw.textbbox((0,0), text, font=font, direction=direction)
-        x = center[0] - (bbox[2]-bbox[0])/2
-        y = center[1] - (bbox[3]-bbox[1])/2 - bbox[1]
-        draw.text((x,y), text, font=font, fill=fill, stroke_width=1, stroke_fill=(0,0,0,170), direction=direction)
-        return
+        bbox = draw.textbbox((0, 0), text, font=font)
     except Exception:
-        pass
-    # Fallback for older Pillow builds without direction support.
-    visual = _visual_rtl_text(text)
-    _draw_exact_text(draw, (center[0]-draw.textlength(visual,font=font)/2, center[1]-size/2), visual, size, fill, 1, (0,0,0,170))
+        bbox = font.getbbox(text)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    x = center[0] - width / 2 - bbox[0]
+    y = center[1] - height / 2 - bbox[1]
+
+    try:
+        # No direction argument: preserve Talkin's Unicode text and let
+        # libraqm perform the normal bidirectional display ordering.
+        draw.text((x, y), text, font=font, fill=fill, stroke_width=1,
+                  stroke_fill=(0, 0, 0, 170))
+    except Exception:
+        # Older Pillow without libraqm: keep the original code points and
+        # draw them without any manual Arabic reversal.
+        draw.text((x, y), text, font=font, fill=fill, stroke_width=1,
+                  stroke_fill=(0, 0, 0, 170))
+
 
 def _visual_runs(text, size):
     # Kept for compatibility with older helpers.
