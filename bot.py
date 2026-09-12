@@ -1102,7 +1102,27 @@ def render_gift_card(gift_id,sender_name,receiver_name):
     _draw_centered(d,(w/2,top_y+28),"من",27,(255,224,165,255),box_w-20); _draw_centered(d,(w/2,bottom_y+28),"إلى",27,(255,224,165,255),box_w-20)
     colors=[(255,130,165,255),(100,220,255,255),(255,211,85,255),(180,135,255,255),(100,235,170,255),(255,150,95,255)]; c1,c2=random.sample(colors,2)
     _draw_centered(d,(w/2,top_y+box_h*.68),sender_name,39,c1,box_w-42); _draw_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,c2,box_w-42)
-    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.png"; out.parent.mkdir(parents=True,exist_ok=True); image.save(out,"PNG",optimize=True); return out
+    # Talkin rejects oversized media packets/remote images.  The source gift
+    # assets are already small, but the personalized card template can expand
+    # dramatically when saved as PNG.  Export the final card as a compact JPEG
+    # and enforce a hard <= 50 KiB limit before returning it.
+    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
+    out.parent.mkdir(parents=True,exist_ok=True)
+    rgb=image.convert("RGB").resize((620,635),Image.LANCZOS)
+    quality=78
+    while quality>=35:
+        rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
+        if out.stat().st_size <= 48*1024:
+            return out
+        quality-=5
+    # If the image is still too large, reduce dimensions while keeping it
+    # readable; this is a final safety net for all gift variants.
+    for size in ((560,573),(500,512),(440,451)):
+        rgb=rgb.resize(size,Image.LANCZOS)
+        rgb.save(out,"JPEG",quality=45,optimize=True,progressive=True)
+        if out.stat().st_size <= 48*1024:
+            return out
+    return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
     def _resolve_target(self):
