@@ -2430,10 +2430,10 @@ class TalkinBot:
     def _handle_master_account_service(self, sender: str, body: str):
         """Private auto-service handled by the master account itself.
 
-        The master account is the service authority. Verification requests are
-        sent to the primary bot using the normal ``vi@username`` command; the
-        primary bot checks/stores verification and replies with the actual
-        result, which the master then relays to the requesting user.
+        Verification is requested through the primary bot with ``vi@username``.
+        The primary bot's reply is then relayed privately to the original user.
+        Duplicate Talkin frames are ignored briefly so a single choice produces
+        a single reply.
         """
         if not MASTER_SERVICE_ENABLED:
             return False
@@ -2450,27 +2450,68 @@ class TalkinBot:
         if not isinstance(pending, dict):
             pending = {}
             self._master_verify_pending = pending
+        recent = getattr(self, "_master_service_recent", None)
+        if not isinstance(recent, dict):
+            recent = {}
+            self._master_service_recent = recent
 
         key = _norm_user(sender)
         low = body.casefold()
+        signature = (key, body)
+        now = time.time()
+        if now - float(recent.get(signature, 0.0) or 0.0) < 15:
+            return True
+        recent[signature] = now
+        # Prevent this cache from growing forever.
+        if len(recent) > 500:
+            cutoff = now - 30
+            for k, ts in list(recent.items()):
+                if ts < cutoff:
+                    recent.pop(k, None)
 
         # Result returned by the primary bot after the master sent vi@target.
-        # Format is intentionally stable so the master can relay the exact
-        # result to the original customer.
+        # Do not depend on extracting the username with a restrictive regex:
+        # Talkin usernames can contain unusual Unicode/combining characters.
         if PRIMARY_BOT_ID and _norm_user(sender) == _norm_user(PRIMARY_BOT_ID):
-            m = re.search(r"(?:@)([^\s.]+).*?(موثق سابقا|موثق سابقًا|توثيق عادي بالفعل|توثيق VIP بالفعل|تم توثيق)", body, re.I)
-            if m:
-                target = m.group(1).strip().lstrip("@")
-                info = pending.pop(_norm_user(target), None)
-                if info:
-                    requester = info.get("requester", "")
-                    if "موثق سابق" in body or "توثيق عادي بالفعل" in body:
-                        self.send_private_text(requester, f"⚠️ @{target} حسابه موثق سابقا.")
-                    elif "VIP" in body:
-                        self.send_private_text(requester, f"⚠️ @{target} لديه توثيق VIP بالفعل.")
+            body_low = body.casefold()
+            matched_key = None
+            matched_info = None
+            for target_key, info in list(pending.items()):
+                target = str(info.get("target", "") or "").strip()
+                if target and _norm_user(target) in _norm_user(body):
+                    matched_key = target_key
+                    matched_info = info
+                    break
+            # Fallback for normal "@username" replies when target matching is
+            # not possible for a particular Unicode username.
+            if matched_info is None and pending:
+                m = re.search(r"@(.+?)(?:\.|\n|$)", body, re.S)
+                if m:
+                    candidate = m.group(1).strip()
+                    for target_key, info in list(pending.items()):
+                        target = str(info.get("target", "") or "").strip()
+                        if _norm_user(candidate) == _norm_user(target):
+                            matched_key = target_key
+                            matched_info = info
+                            break
+
+            if matched_info is not None:
+                pending.pop(matched_key, None)
+                requester = str(matched_info.get("requester", "") or "").strip()
+                target = str(matched_info.get("target", "") or "").strip().lstrip("@")
+                if requester:
+                    if "موثق سابق" in body_low or "توثيق عادي بالفعل" in body_low:
+                        reply = f"⚠️ @{target} حسابه موثق سابقا."
+                    elif "vip" in body_low or "توثيق VIP بالفعل" in body_low:
+                        reply = f"⚠️ @{target} لديه توثيق VIP بالفعل."
+                    elif "تم توثيق" in body_low:
+                        reply = f"✅ تم توثيق @{target} بنجاح."
                     else:
-                        self.send_private_text(requester, f"✅ تم توثيق @{target} بنجاح.")
-                    return True
+                        reply = body
+                    self.send_private_text(requester, reply)
+                return True
+            # Any private message from the primary bot is internal; never show
+            # it to other users and never fall through to the service menu.
             return True
 
         if _norm_user(sender) == _norm_user(BOT_ID):
@@ -2482,13 +2523,20 @@ class TalkinBot:
             if not target_bot:
                 self.send_private_text(sender, "❌ لم يتم ضبط PRIMARY_BOT_ID للبوت الأساسي.")
                 return True
-            pending[_norm_user(sender)] = {"requester": sender, "created_at": time.time()}
+            target_key = _norm_user(sender)
+            pending[target_key] = {
+                "requester": sender,
+                "target": sender,
+                "created_at": now,
+            }
             if not self.send_private_text(target_bot, f"vi@{sender}"):
-                pending.pop(_norm_user(sender), None)
+                pending.pop(target_key, None)
                 self.send_private_text(sender, "❌ تعذر تنفيذ التوثيق الآن، حاول مرة أخرى.")
             return True
 
-        # Option 2: complaint/suggestion.
+        # Option 2: complaint/suggestion. One prompt only; the actual complaint
+        # is sent privately to MASTER_SUPPORT_USERNAME and not to the master
+        # account unless that username is explicitly the same account.
         if low in ("2", "🟦2", "🟦2️⃣", "2️⃣", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
             sessions[key] = "complaint"
             self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
@@ -2496,12 +2544,20 @@ class TalkinBot:
 
         if sessions.get(key) == "complaint":
             if not body:
-                self.send_private_text(sender, "❌ أرسل نص الشكوى أو المقترح.")
+                # Empty frames are silently ignored; do not spam the user.
                 return True
-            if MASTER_SUPPORT_USERNAME and _norm_user(MASTER_SUPPORT_USERNAME) != _norm_user(BOT_ID):
-                self.send_private_text(MASTER_SUPPORT_USERNAME, f"📩 شكوى أو مقترح من @{sender}:\n{body}")
+            support = str(MASTER_SUPPORT_USERNAME or "").strip()
+            sent = False
+            if support and _norm_user(support) != _norm_user(BOT_ID):
+                sent = bool(self.send_private_text(
+                    support,
+                    f"📩 شكوى أو مقترح من @{sender}:\n{body}"
+                ))
             sessions.pop(key, None)
-            self.send_private_text(sender, "✅ تم استلام الشكوى أو المقترح.")
+            if sent:
+                self.send_private_text(sender, "✅ تم استلام الشكوى أو المقترح.")
+            else:
+                self.send_private_text(sender, "❌ تعذر إرسال الشكوى أو المقترح للإدارة الآن.")
             return True
 
         # Option 3: verify another account on behalf of the requester.
@@ -2513,14 +2569,19 @@ class TalkinBot:
         if sessions.get(key) == "verify_other":
             target = body.strip().lstrip("@").split()[0] if body else ""
             if not target:
-                self.send_private_text(sender, "❌ أرسل اسم المستخدم المطلوب توثيقه.")
+                # Empty frames are silently ignored; do not repeat the prompt.
                 return True
             target_bot = PRIMARY_BOT_ID.strip()
             if not target_bot:
+                sessions.pop(key, None)
                 self.send_private_text(sender, "❌ لم يتم ضبط PRIMARY_BOT_ID للبوت الأساسي.")
                 return True
             target_key = _norm_user(target)
-            pending[target_key] = {"requester": sender, "created_at": time.time()}
+            pending[target_key] = {
+                "requester": sender,
+                "target": target,
+                "created_at": now,
+            }
             if not self.send_private_text(target_bot, f"vi@{target}"):
                 pending.pop(target_key, None)
                 self.send_private_text(sender, "❌ تعذر تنفيذ التوثيق الآن، حاول مرة أخرى.")
