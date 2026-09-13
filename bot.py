@@ -3384,7 +3384,11 @@ class TalkinBot:
             if not active_rooms:
                 self.send_private_text(sender,"❌ البوت غير موجود في أي غرفة حالياً."); return True
             for active_room in sorted(active_rooms):
-                self.request_admin_action(active_room,target,"ban",sender,announce_room=True)
+                # The master command is authoritative: announce immediately
+                # in every room, without waiting for a server role_changed
+                # event or confirmation timeout.
+                self.send_room_text(active_room, f"🚫 @{target} تم حظره بسبب الإساءة.")
+                self.request_admin_action(active_room, target, "ban", sender)
             return True
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
@@ -3594,8 +3598,6 @@ class TalkinBot:
                         "admin": f"✅ أكد الخادم ترقية @{changed_user} إلى مشرف في الغرفة {room}.",
                         "owner": f"✅ أكد الخادم ترقية @{changed_user} إلى مالك في الغرفة {room}.",
                     }
-                    if pending.get("announce_room") and changed_role == "outcast":
-                        self.send_room_text(room, f"🚫 @{changed_user} تم حظره للإساءة.")
                     # The command already reports success immediately. Keep the
                     # native event only for state synchronization and logging.
                     # Keep master moderation silent; confirmation is logged only.
