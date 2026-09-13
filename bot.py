@@ -132,6 +132,11 @@ MESSAGES_FILE = DATA_DIR / "messages.json"
 PUBLISHED_FILE = DATA_DIR / "published_posts.json"
 GAME_STATS_FILE = DATA_DIR / "game_stats.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
+# Persistent Talkin state. These files are intentionally separate from runtime
+# caches so replacing/redeploying bot.py does not remove rooms, rosters, or verification.
+TRACKED_ROOMS_FILE = DATA_DIR / "tracked_rooms.json"
+ROOM_USERS_FILE = DATA_DIR / "room_users.json"
+INVITE_HISTORY_FILE = DATA_DIR / "invite_history.json"
 REPLIES_FILE = DATA_DIR / "replies.json"
 MODERATION_FILE = DATA_DIR / "moderation.json"
 
@@ -799,6 +804,70 @@ def _save_local_json(path, data):
 def _norm_user(name):
     return str(name or "").strip().lstrip("@").casefold()
 
+def _norm_room(name):
+    return str(name or "").strip()
+
+def _persistent_rooms():
+    data = _load_local_json(TRACKED_ROOMS_FILE, [])
+    if isinstance(data, dict):
+        data = data.get("rooms", [])
+    return sorted({_norm_room(x) for x in (data if isinstance(data, list) else []) if _norm_room(x)})
+
+def _save_persistent_rooms(rooms):
+    _save_local_json(TRACKED_ROOMS_FILE, {"version": 1, "rooms": sorted({_norm_room(x) for x in rooms if _norm_room(x)})})
+
+def _persistent_rosters():
+    data = _load_local_json(ROOM_USERS_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def _save_persistent_rosters(rosters):
+    _save_local_json(ROOM_USERS_FILE, {"version": 1, "rooms": rosters})
+
+def _persistent_roster_users(room):
+    data = _persistent_rosters()
+    if isinstance(data.get("rooms"), dict):
+        data = data["rooms"]
+    room_data = data.get(_norm_room(room), {}) if isinstance(data, dict) else {}
+    if not isinstance(room_data, dict):
+        return []
+    result = []
+    for key, value in room_data.items():
+        if isinstance(value, dict):
+            username = str(value.get("username") or key).strip()
+        else:
+            username = str(value or key).strip()
+        if username and _norm_user(username) != _norm_user(BOT_ID):
+            result.append(username)
+    return result
+
+def _remember_roster(room, users):
+    room = _norm_room(room)
+    if not room:
+        return
+    all_data = _persistent_rosters()
+    rosters = all_data.get("rooms", all_data) if isinstance(all_data, dict) else {}
+    if not isinstance(rosters, dict):
+        rosters = {}
+    current = rosters.get(room, {})
+    if not isinstance(current, dict):
+        current = {}
+    now = int(time.time())
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        username = str(user.get("username") or "").strip()
+        if not username or _norm_user(username) == _norm_user(BOT_ID):
+            continue
+        current[_norm_user(username)] = {
+            "username": username,
+            "role": str(user.get("role") or "none").strip().lower() or "none",
+            "user_id": str(user.get("user_id") or ""),
+            "last_seen": now,
+        }
+    rosters[room] = current
+    _save_persistent_rosters(rosters)
+
+
 def _master_list():
     data=_load_local_json(MASTERS_FILE, [])
     return data if isinstance(data,list) else []
@@ -823,7 +892,7 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
-        "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top",
+        "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
     )
@@ -999,10 +1068,13 @@ def _load_moderation_config():
     if not isinstance(data, dict):
         data = {}
     words = data.get("words")
+    if isinstance(words, dict):
+        words = list(words.keys())
     if not isinstance(words, list):
         words = sorted(BANNED_WORDS)
     words = [str(w).strip() for w in words if str(w).strip()]
-    enabled = bool(data.get("enabled", AUTO_BAN_WORDS))
+    raw_enabled = data.get("enabled", AUTO_BAN_WORDS)
+    enabled = bool(raw_enabled) if isinstance(raw_enabled, (bool, int)) else AUTO_BAN_WORDS
     return enabled, words
 
 def _save_moderation_config(enabled, words):
@@ -1649,7 +1721,10 @@ class TalkinBot:
         self.invite_thread = None
         self.invite_lock = threading.Lock()
         self.invite_message_template = "{sender} يدعوك للغرفة {room}"
-        self.known_rooms = set()
+        self.known_rooms = set(_persistent_rooms())
+        if self.room:
+            self.known_rooms.add(_norm_room(self.room))
+        _save_persistent_rooms(self.known_rooms)
         self._join_lock = threading.Lock()
         self._last_join_sent = {}
         self._rejoin_attempts = defaultdict(int)
@@ -1862,7 +1937,26 @@ class TalkinBot:
         self.log("[ROOM] joining", room)
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
         self.known_rooms.add(room)
+        _save_persistent_rooms(self.known_rooms)
+        self.request_room_occupants(room)
         return True
+
+    def request_room_occupants(self, room: str):
+        """Refresh and persist one room's roster without sending invitations."""
+        room = _norm_room(room)
+        if not room or not self.ws:
+            return False
+        try:
+            self.send_query(encode_query(
+                "room_admin", type_="occupants_list", room=room,
+                to=BOT_ID, value="none"
+            ))
+            self.last_joined_room = room
+            self.log("[ROOM] occupants refresh requested", room)
+            return True
+        except Exception as exc:
+            self.log("[ROOM] occupants refresh failed", room, repr(exc))
+            return False
 
     def leave_room(self, room: str):
         """Leave exactly one Talkin room using the APK's room_leave packet."""
@@ -1872,6 +1966,7 @@ class TalkinBot:
         self.send_query(encode_query("room_leave", room=room))
         with self._join_lock:
             self.known_rooms.discard(room)
+            _save_persistent_rooms(self.known_rooms)
             self._last_join_sent.pop(room, None)
         self.room_users.pop(room, None)
         self.log("[ROOM] left", room)
@@ -1929,7 +2024,7 @@ class TalkinBot:
         return True
 
     def _active_rooms(self):
-        rooms = {str(r).strip() for r in self.known_rooms if str(r).strip()}
+        rooms = {str(r).strip() for r in getattr(self, "known_rooms", set()) if str(r).strip()}
         if self.room:
             rooms.add(str(self.room).strip())
         rooms.update(str(r).strip() for r in self.room_users.keys() if str(r).strip())
@@ -2147,23 +2242,29 @@ class TalkinBot:
         except Exception as e:
             self.log("[INV] private progress message failed:", repr(e))
 
-        # Collect the persistent roster for every room. This includes members
-        # who are currently offline, not just the live occupants.
+        # Collect the local persistent roster first. This survives bot replacement
+        # and includes users who are currently offline. Merge DB/live users below.
         all_users = []
         seen = set()
         room_counts = {}
         for source_room in active_rooms:
+            saved_users = _persistent_roster_users(source_room)
+            room_counts[source_room] = len(saved_users)
+            for username in saved_users:
+                key = _norm_user(username)
+                if key and key not in seen:
+                    seen.add(key)
+                    all_users.append(username)
             db_users = self.db.room_users(source_room)
-            room_counts[source_room] = len(db_users)
+            room_counts[source_room] = max(room_counts[source_room], len(db_users or []))
             for u in db_users or []:
                 username = str(u.get("username") or "").strip() if isinstance(u, dict) else ""
-                if not username or username == BOT_ID:
+                if not username or _norm_user(username) == _norm_user(BOT_ID):
                     continue
-                key = username.casefold()
-                if key in seen:
-                    continue
-                seen.add(key)
-                all_users.append(username)
+                key = _norm_user(username)
+                if key not in seen:
+                    seen.add(key)
+                    all_users.append(username)
 
         if all_users:
             self.log(f"[INV] ALL rooms loaded: rooms={len(active_rooms)} unique_users={len(all_users)} counts={room_counts}")
@@ -2359,9 +2460,8 @@ class TalkinBot:
             self.log("[GIFT] photo cache failed:", repr(exc))
 
     def process_occupants_for_invite(self, result):
-        if not self.invite_pending:
-            return
-        room = self.invite_room or self.room
+        room = (self.invite_room or result.get("_occupants_room") or
+                self.last_joined_room or self.room)
 
         # Fallback live responses are tagged by the room they came from.
         # Accumulate all room responses before sending the final invitation batch.
@@ -2398,9 +2498,16 @@ class TalkinBot:
         if not users_info and result.get("room_admin"):
             users_info = self._users_from_room_admin(result["room_admin"])
 
-        # Cache the complete room list, including role categories.
+        # Cache the complete room list, including role categories. The disk
+        # roster is append/update-only: a transient leave event never erases history.
         if users_info:
             self.room_users[room] = {u["username"]: u.get("role", "none") for u in users_info}
+            _remember_roster(room, users_info)
+
+        # A roster refresh requested on room entry is only for persistence.
+        # It must never start invitations unless the master explicitly used inv.
+        if not self.invite_pending:
+            return
 
         if not users_info:
             self.log("[INV] occupants response received but no usernames decoded")
@@ -2603,9 +2710,9 @@ class TalkinBot:
         raw=text.strip()
         if not raw.lower().startswith(".sa "): return False
         query=raw[4:].strip()
-        if not query: self.reply_text(room,"❌ اكتب: .sa اسم الأغنية",private_to); return True
+        if not query: self.send_room_text(room,"❌ اكتب: .sa اسم الأغنية"); return True
         now=time.time(); last=self.music_last.get(requester,0)
-        if now-last<MUSIC_COOLDOWN: self.reply_text(room,f"⏳ انتظر {int(MUSIC_COOLDOWN-(now-last))+1} ثانية.",private_to); return True
+        if now-last<MUSIC_COOLDOWN: self.send_room_text(room,f"⏳ انتظر {int(MUSIC_COOLDOWN-(now-last))+1} ثانية."); return True
         self.music_last[requester]=now
         def worker():
             try:
@@ -2616,6 +2723,10 @@ class TalkinBot:
                 artist=str(info.get("uploader") or info.get("channel") or "YouTube")
                 duration=int(info.get("duration") or 0)
                 url=public_base+"/media/"+path.name
+                self.music_current[_norm_user(requester)] = {
+                    "requester": requester, "title": title, "artist": artist,
+                    "url": url, "duration": duration, "created_at": time.time(),
+                }
                 # Music posts use the user's messages.json template.  The
                 # reaction code is intentionally limited to 4 characters.
                 code=uuid.uuid4().hex[:4]
@@ -2627,18 +2738,32 @@ class TalkinBot:
                     url=url, duration=duration
                 )
                 # Music is broadcast to every room currently joined by the bot.
-                # The requester also receives the same post privately.
+                # Do not send a duplicate private song message to the requester.
                 self.reaction_targets[code] = {"publisher": requester, "kind": "music", "title": title, "description": title, "created_at": time.time()}
                 target_rooms=list(self.known_rooms) or ([room] if room else [])
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
                     self.send_room_media(target_room,url,"audio",duration)
-                self.send_private_text(requester,caption)
-                self.send_private_media(requester,url,"audio",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
-                self.reply_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.", private_to)
-        threading.Thread(target=worker,name="music-request",daemon=True).start(); self.reply_text(room,"⏳ جاري البحث عن الأغنية وتحضير الصوت...",private_to); return True
+                self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
+        threading.Thread(target=worker,name="music-request",daemon=True).start(); self.send_room_text(room,"⏳ جاري البحث عن الأغنية وتحضير الصوت..."); return True
+
+    def share_last_music(self, sender: str, target: str, room: str = ""):
+        """Share the sender's latest successfully prepared song privately."""
+        target = str(target or "").strip().lstrip("@")
+        info = self.music_current.get(_norm_user(sender), {})
+        if not target or not info.get("url"):
+            self.send_room_text(room, "⚠️ لا توجد أغنية شغّلها المستخدم بعد لمشاركتها.") if room else self.send_private_text(sender, "⚠️ لا توجد أغنية شغّلتها بعد لمشاركتها.")
+            return True
+        title = str(info.get("title") or "أغنية")
+        self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
+        self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
+        if room:
+            self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
+        else:
+            self.send_private_text(sender, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
+        return True
 
     def send_gift_native(self, room: str, gift_id: str, target_username: str):
         """Legacy/native packet kept for diagnostics only. Gift command now sends the real asset image."""
@@ -3570,6 +3695,7 @@ class TalkinBot:
         # exact event names and RoomEvent fields.
         if event_type == "user_joined" and username:
             self.room_users[room][username] = role or "none"
+            _remember_roster(room, [{"username": username, "role": role or "none"}])
             self.last_joined_room = room
             # Welcome the master using the exact configured BOT_MASTER account.
             if _norm_user(username) == _norm_user(BOT_MASTER):
@@ -3695,6 +3821,13 @@ class TalkinBot:
                 return
             if self.handle_gift_command(room, body, frm):
                 return
+        if body.strip().casefold() in ("هدايا", "gifts", "gv"):
+            self.gift_help(room)
+            return
+        m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
+        if m_share:
+            self.share_last_music(frm, m_share.group(1), room)
+            return
         if body.strip().lower().startswith(".sa "):
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.\n{_verification_notice()}")
@@ -3763,8 +3896,12 @@ class TalkinBot:
                     if body:
                         if self._handle_management_command(self.room, body, frm, is_private=True):
                             return
+                    m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
+                    if m_share:
+                        self.share_last_music(frm, m_share.group(1))
+                        return
                     if body.strip().lower().startswith(".sa "):
-                        if self.handle_music_command(self.room, body, frm, private_to=frm):
+                        if self.handle_music_command(self.room, body, frm):
                             return
                     if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
                         if _is_vip_user(frm):
