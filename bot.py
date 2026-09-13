@@ -290,7 +290,6 @@ def _migrate_legacy_state_files():
 
 _migrate_legacy_state_files()
 # Restore state from GitHub after the data directory and legacy migration are ready.
-_github_restore_or_seed_state()
 
 # Giant Chat gift costs/labels; images remain the local Giant assets.
 GIFT_COSTS = {"1":10,"2":20,"3":30,"4":50,"5":80,"6":150,"7":200,"8":500,"9":800,"10":1000,"11":1500,"12":3000,"13":5000,"14":8000}
@@ -1104,6 +1103,10 @@ def _github_restore_or_seed_state():
                 print(f"[GITHUB] startup sync failed for {name}: {exc}", flush=True)
     finally:
         _GITHUB_RESTORING = False
+
+# Restore persistent state only after the GitHub restore function has been defined.
+_github_restore_or_seed_state()
+
 
 def _github_sync_after_local_save(path, data):
     if not GITHUB_SYNC_ENABLED or _GITHUB_RESTORING:
