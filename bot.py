@@ -289,6 +289,8 @@ def _migrate_legacy_state_files():
                 pass
 
 _migrate_legacy_state_files()
+# Restore state from GitHub after the data directory and legacy migration are ready.
+_github_restore_or_seed_state()
 
 # Giant Chat gift costs/labels; images remain the local Giant assets.
 GIFT_COSTS = {"1":10,"2":20,"3":30,"4":50,"5":80,"6":150,"7":200,"8":500,"9":800,"10":1000,"11":1500,"12":3000,"13":5000,"14":8000}
@@ -977,6 +979,139 @@ def _save_local_json(path, data):
     tmp = Path(str(path) + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+    _github_sync_after_local_save(path, data)
+
+# GitHub-backed persistent state. Set GITHUB_TOKEN and GITHUB_REPO in the
+# hosting environment to make every JSON state file live in the GitHub repo.
+# Never hard-code the token in bot.py. For public repositories, remember that
+# committed member/verification/points data becomes publicly readable.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
+GITHUB_DATA_DIR = os.getenv("GITHUB_DATA_DIR", "bot_data").strip().strip("/")
+GITHUB_SYNC_ENABLED = bool(GITHUB_TOKEN and GITHUB_REPO and os.getenv("GITHUB_SYNC", "1").strip().lower() not in {"0", "false", "no", "off"})
+_GITHUB_SYNC_LOCK = threading.RLock()
+_GITHUB_SYNC_LAST = {}
+_GITHUB_RESTORING = False
+
+def _github_url(path):
+    from urllib.parse import quote
+    return f"https://api.github.com/repos/{GITHUB_REPO}/contents/{quote(path.lstrip('/'), safe='/')}"
+
+def _github_headers():
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "TalkinChat-Bot-Persistent-State",
+    }
+
+def _github_state_path(local_path):
+    name = Path(local_path).name
+    return f"{GITHUB_DATA_DIR}/{name}" if GITHUB_DATA_DIR else name
+
+def _github_get_file(local_path):
+    if not GITHUB_SYNC_ENABLED:
+        return None
+    try:
+        r = requests.get(_github_url(_github_state_path(local_path)), headers=_github_headers(), params={"ref": GITHUB_BRANCH}, timeout=15)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        payload = r.json()
+        content = base64.b64decode(payload.get("content", "").replace("\n", "")).decode("utf-8")
+        return json.loads(content)
+    except Exception as exc:
+        print(f"[GITHUB] read failed for {Path(local_path).name}: {exc}", flush=True)
+        return None
+
+def _github_put_file(local_path, data, sha=None):
+    """Create or update a JSON file in GitHub reliably.
+
+    GitHub requires the current blob SHA when updating an existing file.
+    Therefore we fetch the current SHA before every update when the caller
+    did not provide one, and retry once after a conflict.
+    """
+    if not GITHUB_SYNC_ENABLED:
+        return False
+    name = Path(local_path).name
+    url = _github_url(_github_state_path(local_path))
+    try:
+        raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        payload = {
+            "message": f"chore(bot): update {name}",
+            "content": base64.b64encode(raw).decode("ascii"),
+            "branch": GITHUB_BRANCH,
+        }
+
+        # Existing GitHub files must include their current SHA.
+        if not sha:
+            current = requests.get(
+                url, headers=_github_headers(),
+                params={"ref": GITHUB_BRANCH}, timeout=15
+            )
+            if current.status_code == 200:
+                sha = current.json().get("sha")
+            elif current.status_code != 404:
+                current.raise_for_status()
+        if sha:
+            payload["sha"] = sha
+
+        r = requests.put(url, headers=_github_headers(), json=payload, timeout=20)
+
+        # If another process changed the file between GET and PUT, refresh
+        # the SHA and retry once.
+        if r.status_code in (409, 422):
+            rr = requests.get(
+                url, headers=_github_headers(),
+                params={"ref": GITHUB_BRANCH}, timeout=15
+            )
+            if rr.status_code == 200:
+                new_sha = rr.json().get("sha")
+                if new_sha:
+                    payload["sha"] = new_sha
+                    r = requests.put(
+                        url, headers=_github_headers(), json=payload, timeout=20
+                    )
+
+        r.raise_for_status()
+        print(f"[GITHUB] saved {name}", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[GITHUB] write failed for {name}: {exc}", flush=True)
+        return False
+
+def _github_restore_or_seed_state():
+    global _GITHUB_RESTORING
+    if not GITHUB_SYNC_ENABLED:
+        return
+    print(f"[GITHUB] persistent state enabled: {GITHUB_REPO}@{GITHUB_BRANCH}/{GITHUB_DATA_DIR}", flush=True)
+    _GITHUB_RESTORING = True
+    try:
+        for name in _STATE_FILE_NAMES:
+            local = DATA_DIR / name
+            try:
+                remote = _github_get_file(local)
+                if remote is not None:
+                    # GitHub is the durable source when the deployment has no local state.
+                    if not _json_has_real_data(local):
+                        _save_local_json(local, remote)
+                        print(f"[GITHUB] restored {name}", flush=True)
+                elif _json_has_real_data(local):
+                    _github_put_file(local, _load_local_json(local, None))
+                    print(f"[GITHUB] seeded {name}", flush=True)
+            except Exception as exc:
+                print(f"[GITHUB] startup sync failed for {name}: {exc}", flush=True)
+    finally:
+        _GITHUB_RESTORING = False
+
+def _github_sync_after_local_save(path, data):
+    if not GITHUB_SYNC_ENABLED or _GITHUB_RESTORING:
+        return
+    # Serialize commits so simultaneous command handlers do not race on the same SHA.
+    with _GITHUB_SYNC_LOCK:
+        _github_put_file(path, data)
+
 
 def _norm_user(name):
     return str(name or "").strip().lstrip("@").casefold()
