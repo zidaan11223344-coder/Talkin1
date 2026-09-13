@@ -1107,8 +1107,23 @@ def _message_template(section,key,default,**kwargs):
     except Exception: return text
 
 def _command_menu():
+    return _command_menu_for(False)
+
+def _command_menu_for(is_master=False):
+    if not is_master:
+        return (
+            "📚 أوامر البوت للمستخدمين\n"
+            "━━━━━━━━━━━━\n"
+            "help2 — الموسيقى والتفاعلات (.sa اسم، sher@اسم)\n"
+            "help3 — الألعاب\n"
+            "help4 — الهدايا والنشر\n"
+            "help5 — النقاط\n"
+            "help6 — الغرف\n"
+            "━━━━━━━━━━━━\n"
+            "اكتب: help2 أو help3 أو help4 أو help5 أو help6"
+        )
     return (
-        "📚 قوائم أوامر البوت\n"
+        "📚 جميع أوامر البوت للماستر\n"
         "━━━━━━━━━━━━\n"
         "help1 — الإدارة\n"
         "help2 — الموسيقى والتفاعلات\n"
@@ -1926,6 +1941,10 @@ class TalkinBot:
         """
         room = str(room or "").strip()
         if not room:
+            return False
+        already_known = room in getattr(self, "known_rooms", set())
+        if already_known and not force:
+            self.log("[ROOM] already tracked:", room)
             return False
         now = time.time()
         with self._join_lock:
@@ -3273,10 +3292,11 @@ class TalkinBot:
         # `اوامر` shows the organized menu only.
         if low in ("اوامر","الاوامر","help","مساعدة"):
             target = sender if is_private else None
+            menu = _command_menu_for(_is_master_name(sender))
             if target:
-                self.send_private_text(target, _command_menu())
+                self.send_private_text(target, menu)
             else:
-                self.send_room_text(room, _command_menu())
+                self.send_room_text(room, menu)
             return True
         m_help = re.fullmatch(r"help([1-7])", low)
         if m_help:
@@ -3361,8 +3381,8 @@ class TalkinBot:
             parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
             if not target:
                 self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
-            self.join_room(target)
-            self.send_private_text(sender,f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}")
+            joined = self.join_room(target)
+            self.send_private_text(sender, f"{'✅ دخلت الغرفة' if joined else '⚠️ الغرفة مسجلة بالفعل'}: {target} | الغرف الحالية: {len(self.known_rooms)}")
             return True
         m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
         if m_transfer and _is_verified_user(sender):
@@ -3451,7 +3471,11 @@ class TalkinBot:
             target=text[4:].strip().lstrip("@");
             if not target: self.log("[MASTER] invalid mas@", sender); return True
             masters=_master_list()
-            if not any(_norm_user(x)==_norm_user(target) for x in masters): masters.append(target); _save_local_json(MASTERS_FILE,masters)
+            if any(_norm_user(x)==_norm_user(target) for x in masters) or _norm_user(target) == _norm_user(BOT_MASTER):
+                self.send_private_text(sender, f"⚠️ @{target} لديه صلاحية ماستر بالفعل.")
+                return True
+            masters.append(target); _save_local_json(MASTERS_FILE,masters)
+            self.send_private_text(sender, f"✅ تم إضافة @{target} إلى الماسترز.")
             return True
         if low.startswith("umas@") or low.startswith("umas "):
             if _norm_user(sender) != _norm_user(BOT_MASTER):
@@ -3470,7 +3494,15 @@ class TalkinBot:
         if low.startswith("vi@"):
             target=text[2:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: vi@اسم المستخدم"); return True
-            data=_verified_data(); data[_norm_user(target)]={"username":target,"verified_by":sender,"created_at":int(time.time())}; _save_local_json(VERIFIED_FILE,data)
+            data=_verified_data()
+            key=_norm_user(target)
+            if key in data:
+                self.send_private_text(sender, f"⚠️ @{target} لديه توثيق عادي بالفعل.")
+                return True
+            if key in _vip_data():
+                self.send_private_text(sender, f"⚠️ @{target} لديه توثيق VIP بالفعل.")
+                return True
+            data[key]={"username":target,"verified_by":sender,"created_at":int(time.time())}; _save_local_json(VERIFIED_FILE,data)
             self.send_private_text(sender, f"✅ تم توثيق @{target}.")
             return True
         if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
@@ -3481,7 +3513,11 @@ class TalkinBot:
         if low.startswith("vip@"):
             target=text[4:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: Vip@اسم المستخدم"); return True
-            data=_vip_data(); data[_norm_user(target)]={"username":target,"granted_by":sender,"created_at":int(time.time())}; _save_local_json(VIP_FILE,data)
+            data=_vip_data(); key=_norm_user(target)
+            if key in data:
+                self.send_private_text(sender, f"⚠️ @{target} لديه توثيق VIP بالفعل.")
+                return True
+            data[key]={"username":target,"granted_by":sender,"created_at":int(time.time())}; _save_local_json(VIP_FILE,data)
             self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
