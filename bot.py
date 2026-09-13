@@ -2327,13 +2327,20 @@ class TalkinBot:
         """Return the latest presence state known by this bot connection."""
         return bool(getattr(self, "master_online", False))
 
-    def _offline_support_menu(self):
+    def _master_service_menu(self, username: str):
+        """Greeting/menu shown once per private conversation with the master."""
+        username = str(username or "").strip().lstrip("@")
         return (
+            f"مرحبا عزيزي @{username}\n"
             "الماستر نائم الآن\n"
-            "تفضل كيف يمكنني خدمتك؟\n"
-            "1 توثيق\n"
-            "2 شكاوي أو مقترحات"
+            "كيف يمكنني خدمتك؟\n"
+            "1️⃣ توثيق\n"
+            "2️⃣ شكاوي أو مقترحات\n"
+            "3️⃣ توثيق لحساب اخر"
         )
+
+    def _offline_support_menu(self, username: str = ""):
+        return self._master_service_menu(username)
 
     def _handle_master_process_command(self, sender: str, body: str, is_private: bool = False):
         """Control the standalone master account from the primary bot private chat."""
@@ -2382,7 +2389,7 @@ class TalkinBot:
 
         if not state:
             sessions[key] = "menu"
-            self.send_private_text(sender, self._offline_support_menu())
+            self.send_private_text(sender, self._master_service_menu(sender))
             return True
 
         if state == "complaint":
@@ -2397,12 +2404,12 @@ class TalkinBot:
             sessions.pop(key, None)
             return True
 
-        if low in ("2", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
+        if low in ("2", "🟦2", "🟦2️⃣", "2️⃣", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
             sessions[key] = "complaint"
             self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
             return True
 
-        if low in ("1", "توثيق", "وثق", "التوثيق"):
+        if low in ("1", "🟦1", "🟦1️⃣", "1️⃣", "توثيق", "وثق", "التوثيق"):
             # The primary bot NEVER grants verification while the master is
             # away. Verification is an action performed by the master account.
             # Forward the request to the master/support account and leave the
@@ -2423,43 +2430,66 @@ class TalkinBot:
     def _handle_master_account_service(self, sender: str, body: str):
         """Private auto-service handled by the master account itself.
 
-        Every private message received by the master gets the service menu.
-        Option 1 is intentionally executed by the master account, not by the
-        primary bot, so the master is the authority that grants verification.
+        The master account is the service authority. Verification requests are
+        sent to the primary bot using the normal ``vi@username`` command; the
+        primary bot checks/stores verification and replies with the actual
+        result, which the master then relays to the requesting user.
         """
         if not MASTER_SERVICE_ENABLED:
             return False
         sender = str(sender or "").strip()
         body = str(body or "").strip()
-        if not sender or _norm_user(sender) in {_norm_user(BOT_ID), _norm_user(BOT_MASTER)}:
+        if not sender:
             return False
+
         sessions = getattr(self, "_master_service_sessions", None)
         if not isinstance(sessions, dict):
             sessions = {}
             self._master_service_sessions = sessions
+        pending = getattr(self, "_master_verify_pending", None)
+        if not isinstance(pending, dict):
+            pending = {}
+            self._master_verify_pending = pending
+
         key = _norm_user(sender)
         low = body.casefold()
 
-        # Any first/ordinary private message receives the menu.
-        if low in ("1", "توثيق", "وثق", "التوثيق"):
-            # The master does NOT modify the verification database directly.
-            # It sends the normal master verification command to the primary
-            # bot, so the primary bot remains the single authority/store for
-            # verified users.
+        # Result returned by the primary bot after the master sent vi@target.
+        # Format is intentionally stable so the master can relay the exact
+        # result to the original customer.
+        if PRIMARY_BOT_ID and _norm_user(sender) == _norm_user(PRIMARY_BOT_ID):
+            m = re.search(r"(?:@)([^\s.]+).*?(موثق سابقا|موثق سابقًا|توثيق عادي بالفعل|توثيق VIP بالفعل|تم توثيق)", body, re.I)
+            if m:
+                target = m.group(1).strip().lstrip("@")
+                info = pending.pop(_norm_user(target), None)
+                if info:
+                    requester = info.get("requester", "")
+                    if "موثق سابق" in body or "توثيق عادي بالفعل" in body:
+                        self.send_private_text(requester, f"⚠️ @{target} حسابه موثق سابقا.")
+                    elif "VIP" in body:
+                        self.send_private_text(requester, f"⚠️ @{target} لديه توثيق VIP بالفعل.")
+                    else:
+                        self.send_private_text(requester, f"✅ تم توثيق @{target} بنجاح.")
+                    return True
+            return True
+
+        if _norm_user(sender) == _norm_user(BOT_ID):
+            return False
+
+        # Option 1: verify the sender's own account.
+        if low in ("1", "🟦1", "🟦1️⃣", "1️⃣", "توثيق", "وثق", "التوثيق"):
             target_bot = PRIMARY_BOT_ID.strip()
             if not target_bot:
                 self.send_private_text(sender, "❌ لم يتم ضبط PRIMARY_BOT_ID للبوت الأساسي.")
                 return True
-            command = f"vi@{sender}"
-            sent = self.send_private_text(target_bot, command)
-            if not sent:
-                self.send_private_text(sender, "❌ تعذر إرسال أمر التوثيق إلى البوت الأساسي.")
-                return True
-            sessions.pop(key, None)
-            self.send_private_text(sender, "📩 تم إرسال أمر التوثيق للماستر، وسيتم اعتماد التوثيق من البوت الأساسي.")
+            pending[_norm_user(sender)] = {"requester": sender, "created_at": time.time()}
+            if not self.send_private_text(target_bot, f"vi@{sender}"):
+                pending.pop(_norm_user(sender), None)
+                self.send_private_text(sender, "❌ تعذر تنفيذ التوثيق الآن، حاول مرة أخرى.")
             return True
 
-        if low in ("2", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
+        # Option 2: complaint/suggestion.
+        if low in ("2", "🟦2", "🟦2️⃣", "2️⃣", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
             sessions[key] = "complaint"
             self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
             return True
@@ -2474,7 +2504,34 @@ class TalkinBot:
             self.send_private_text(sender, "✅ تم استلام الشكوى أو المقترح.")
             return True
 
-        self.send_private_text(sender, self._offline_support_menu())
+        # Option 3: verify another account on behalf of the requester.
+        if low in ("3", "🟦3", "🟦3️⃣", "3️⃣", "توثيق لحساب اخر", "توثيق لحساب آخر", "وثق حساب اخر", "وثق حساب آخر"):
+            sessions[key] = "verify_other"
+            self.send_private_text(sender, "👤 أرسل اسم المستخدم الذي تريد توثيقه الآن.")
+            return True
+
+        if sessions.get(key) == "verify_other":
+            target = body.strip().lstrip("@").split()[0] if body else ""
+            if not target:
+                self.send_private_text(sender, "❌ أرسل اسم المستخدم المطلوب توثيقه.")
+                return True
+            target_bot = PRIMARY_BOT_ID.strip()
+            if not target_bot:
+                self.send_private_text(sender, "❌ لم يتم ضبط PRIMARY_BOT_ID للبوت الأساسي.")
+                return True
+            target_key = _norm_user(target)
+            pending[target_key] = {"requester": sender, "created_at": time.time()}
+            if not self.send_private_text(target_bot, f"vi@{target}"):
+                pending.pop(target_key, None)
+                self.send_private_text(sender, "❌ تعذر تنفيذ التوثيق الآن، حاول مرة أخرى.")
+                return True
+            sessions.pop(key, None)
+            return True
+
+        # First message only: show the menu. Do not repeat it on every message.
+        if not sessions.get(key):
+            sessions[key] = "menu"
+            self.send_private_text(sender, self._master_service_menu(sender))
         return True
 
     def reply_text(self, room: str, text: str, private_to: str = ""):
