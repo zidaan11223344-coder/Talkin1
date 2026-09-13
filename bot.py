@@ -1211,6 +1211,36 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
     except Exception:
         return
 
+def _load_sender_avatar(photo_url, size=170):
+    """Download and prepare a sender avatar; missing/bad URLs never break gifts."""
+    if not PIL_AVAILABLE or not photo_url:
+        return None
+    try:
+        url = str(photo_url).strip()
+        if not url.startswith(("http://", "https://")):
+            return None
+        r = requests.get(url, headers={"User-Agent": "TalkinBot/22"}, timeout=8)
+        if r.status_code != 200 or not r.content:
+            return None
+        from io import BytesIO
+        im = Image.open(BytesIO(r.content)).convert("RGBA")
+        im = _fit_crop(im, (int(size), int(size))).convert("RGBA")
+        mask = Image.new("L", im.size, 0)
+        md = ImageDraw.Draw(mask)
+        md.ellipse((0, 0, im.width-1, im.height-1), fill=255)
+        out = Image.new("RGBA", im.size, (0,0,0,0))
+        out.paste(im, (0,0), mask)
+        border = ImageDraw.Draw(out)
+        border.ellipse((1,1,im.width-2,im.height-2), outline=(244,196,92,255), width=max(2, int(size/30)))
+        return out
+    except Exception as exc:
+        # Avatar is optional; gift generation must continue without it.
+        try:
+            print("[GIFT] avatar load failed:", repr(exc), flush=True)
+        except Exception:
+            pass
+        return None
+
 def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url=""):
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
@@ -2426,7 +2456,7 @@ class TalkinBot:
         self.send_room_text(room, "🎮✨ ألعاب البوت\n━━━━━━━━━━━━\n"
             "🎲 رهان@المبلغ — تحدي لاعب ضد لاعب، والفائز عشوائي.\n"
             "⚔️ مضاربة@المبلغ — مواجهة عشوائية عادلة، لا أفضلية للأول أو الثاني.\n"
-            "🍀 حظ أو حظ@المبلغ — لعبة يانصيب مع البوت.\n"
+            "🍀 حظ — لعبة عشوائية مجانية مع البوت.\n💰 حظي@المبلغ — لعبة حظ بالمبلغ.\n"
             "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليون — فرصة عشوائية للفوز بمليون نقطة.\n"
@@ -2436,41 +2466,63 @@ class TalkinBot:
     def _game_balance_ok(self, username, amount):
         return _is_master_name(username) or _get_points(username) >= int(amount)
 
+    def _game_rooms(self, room=""):
+        rooms = []
+        for r in list(self.known_rooms) + [room, self.room]:
+            r = str(r or "").strip()
+            if r and r not in rooms:
+                rooms.append(r)
+        return rooms
+
+    def _broadcast_game_notice(self, game_name, sender, amount, action="waiting"):
+        """Announce PvP game activity in every room currently joined by the bot."""
+        if action == "waiting":
+            text = (f"🎯 {game_name} — تحدي ثنائي\n━━━━━━━━━━━━\n"
+                    f"👤 اللاعب: @{sender}\n"
+                    f"💰 المبلغ: {_fmt_points(amount)} نقطة\n"
+                    f"📢 {game_name} راهن {_fmt_points(amount)} نقطة!\n"
+                    f"🤝 للمشاركة اكتب: {game_name}@{amount}")
+        else:
+            text = (f"🎯 {game_name} — بدأت الجولة\n━━━━━━━━━━━━\n"
+                    f"👤 اللاعب الأول: @{sender['user']}\n"
+                    f"👤 اللاعب الثاني: @{amount['user']}\n"
+                    f"💰 قيمة الجولة: {_fmt_points(action)} نقطة")
+        for target_room in self._game_rooms(room):
+            try:
+                self.send_room_text(target_room, text)
+            except Exception as exc:
+                self.log("[GAME] broadcast failed:", target_room, repr(exc))
+
     def _wager_result(self, first, second, stake, game_name):
-        # The winner is selected independently of arrival/order using a
-        # cryptographically strong random source. The first player never has
-        # an advantage over the second player.
         a, b = first, second
         winner, loser = (a, b) if secrets.randbelow(2) == 0 else (b, a)
-        if _is_master_name(loser):
-            loser_balance = _get_points(loser)
-        else:
-            loser_balance = _add_points(loser, -stake)
+        if not _is_master_name(loser["user"]):
+            _add_points(loser["user"], -stake)
         winner_balance = self._game_award(winner.get("user"), stake)
         game_key = {
             "رهان":"bet", "مراهنة":"bet",
             "مضاربة":"duel", "مضاربه":"duel",
-            "استثمار":"investment", "حظي":"luck"
+            "استثمار":"investment"
         }.get(game_name, game_name.casefold())
         _record_game(loser.get("user"), game_key, -stake, stake)
         _record_game(winner.get("user"), game_key, stake, stake)
-        # Keep the public result clean: only the game + winner + loser.
-        text=(f"🎮 {game_name} 🎲\n"
+        text=(f"🎯✨ {game_name} — النتيجة\n━━━━━━━━━━━━\n"
+              f"👤 اللاعب الأول: @{a['user']}\n"
+              f"👤 اللاعب الثاني: @{b['user']}\n"
+              f"💰 المبلغ: {_fmt_points(stake)} نقطة\n"
               f"🏆 الفائز: @{winner['user']}\n"
-              f"💔 الخاسر: @{loser['user']}")
-        rooms=[]
-        for r in (first.get("room"), second.get("room")):
-            if r and r not in rooms: rooms.append(r)
-        for r in rooms:
-            # Wager results are text-only as requested.
-            self.send_room_text(r, text)
+              f"💔 الخاسر: @{loser['user']}\n"
+              f"🎁 جائزة الفائز: +{_fmt_points(stake)} نقطة")
+        for r in self._game_rooms(first.get("room"),):
+            try: self.send_room_text(r, text)
+            except Exception as exc: self.log("[GAME] result broadcast failed:", r, repr(exc))
 
     def _queue_wager(self, room, sender, game_name, amount):
         try: amount=int(amount)
         except Exception:
-            self.send_room_text(room, "❌ اكتب مبلغاً صحيحاً مثل: مراهنة@100"); return True
+            self.send_room_text(room, f"❌ اكتب المبلغ بهذا الشكل: {game_name}@100"); return True
         if amount <= 0:
-            self.send_room_text(room, "❌ يجب أن يكون مبلغ الرهان أكبر من صفر."); return True
+            self.send_room_text(room, "❌ يجب أن يكون مبلغ اللعبة أكبر من صفر."); return True
         if not _is_master_name(sender) and not self._game_balance_ok(sender, amount):
             self.send_room_text(room, f"❌ رصيدك غير كافٍ. رصيدك الحالي: {_fmt_points(_get_points(sender))}"); return True
         key=game_name.casefold()
@@ -2482,21 +2534,20 @@ class TalkinBot:
                 self.wager_waiting.pop(key, None)
             else:
                 self.wager_waiting[key]={"user":sender,"room":room,"stake":amount,"game":game_name,"created":time.time()}
-                self.send_room_text(room, f"🔎 جاري البحث عن خصم للعبة {game_name} بمبلغ {_fmt_points(amount)} نقطة...")
+                # Tell every joined room how to challenge this player.
+                self._broadcast_game_notice(game_name, sender, amount, "waiting")
                 return True
         if int(waiting["stake"]) != amount:
-            self.send_room_text(room, f"⚠️ مبلغ الخصم يجب أن يساوي {_fmt_points(waiting['stake'])} نقطة.")
+            self.send_room_text(room, f"⚠️ مبلغ اللاعب الأول هو {_fmt_points(waiting['stake'])} نقطة. اكتب: {game_name}@{waiting['stake']}")
             with self.game_lock: self.wager_waiting[key]=waiting
             return True
         if _norm_user(waiting["user"]) == _norm_user(sender): return True
-        # Recheck both balances at the exact moment of matching so a player
-        # cannot enter a wager and spend the same points before the round.
         if not _is_master_name(waiting["user"]) and not self._game_balance_ok(waiting["user"], int(waiting["stake"])):
             self.send_room_text(waiting["room"], "❌ تعذر بدء الجولة: رصيد اللاعب الأول لم يعد كافياً.")
             return True
         if not _is_master_name(sender) and not self._game_balance_ok(sender, amount):
             self.send_room_text(room, "❌ تعذر بدء الجولة: رصيدك لم يعد كافياً.")
-            with self.game_lock: self.wager_waiting[game_name.casefold()]=waiting
+            with self.game_lock: self.wager_waiting[key]=waiting
             return True
         self._wager_result(waiting, {"user":sender,"room":room,"stake":amount,"game":game_name}, amount, game_name)
         return True
@@ -2690,9 +2741,10 @@ class TalkinBot:
         # Plain "استثمار" is a free game against the bot, text only.
         if low == "استثمار":
             return self._investment_bot_game(room, sender_name)
-        m=re.fullmatch(r"حظ@([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"(حظي|حظ)@([0-9]+)", raw, re.I)
         if m:
-            return self._lottery_game(room, sender_name, int(m.group(1)))
+            # حظي@المبلغ = لعبة حظ بالمبلغ، مثل الرهان لكن ضد نتيجة عشوائية.
+            return self._lottery_game(room, sender_name, int(m.group(2)))
         if low in ("مليون","million"):
             if not self._game_ready(sender_name, room, 3.0)[0]:
                 return True
