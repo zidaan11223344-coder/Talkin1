@@ -121,6 +121,10 @@ BOT_PWD = os.getenv("BOT_PWD") or os.getenv("BOT_PASSWORD") or ""
 BOT_MASTER = (os.getenv("BOT_MASTER") or os.getenv("MASTER_USERNAME") or "").strip()
 INVITE_SENDER_NAME = os.getenv("INVITE_SENDER_NAME", "السفير").strip() or "السفير"
 GROUP_TO_JOIN = (os.getenv("GROUP_TO_JOIN") or os.getenv("FIRST_ROOM") or "").strip()
+MASTER_SUPPORT_USERNAME = os.getenv(
+    "MASTER_SUPPORT_USERNAME",
+    "∫♚∫اݪـــۛــ⃮ـاۿــ𓏺𓏺ـيّـــّٰـبــۃ∫♚∫",
+).strip()
 
 # Persistent Giant-style bot data. The owner/master has unlimited points.
 DATA_DIR = Path(__file__).resolve().parent
@@ -1737,6 +1741,16 @@ class TalkinBot:
         self.invite_lock = threading.Lock()
         self.invite_message_template = "{sender} يدعوك للغرفة {room}"
         self.known_rooms = set(_persistent_rooms())
+        # The offline private-service flow is active only while the master is
+        # absent. Presence is updated from room membership and master messages.
+        self.master_online = False
+        self.master_last_seen = 0.0
+        self._master_online_rooms = set()
+        self._offline_support_sessions = {}
+        # Keep rejected rooms tracked for history, but exclude them from
+        # broadcasts and reconnect attempts until the master retries them.
+        self.blocked_rooms = set()
+        self._blocked_room_notices = set()
         if self.room:
             self.known_rooms.add(_norm_room(self.room))
         _save_persistent_rooms(self.known_rooms)
@@ -1942,6 +1956,9 @@ class TalkinBot:
         room = str(room or "").strip()
         if not room:
             return False
+        if _norm_room(room) in getattr(self, "blocked_rooms", set()) and not force:
+            self.log("[ROOM] join suppressed (bot is blocked):", room)
+            return False
         already_known = room in getattr(self, "known_rooms", set())
         if already_known and not force:
             self.log("[ROOM] already tracked:", room)
@@ -2047,7 +2064,8 @@ class TalkinBot:
         if self.room:
             rooms.add(str(self.room).strip())
         rooms.update(str(r).strip() for r in self.room_users.keys() if str(r).strip())
-        return sorted(rooms)
+        blocked = {_norm_room(r) for r in getattr(self, "blocked_rooms", set())}
+        return sorted(r for r in rooms if _norm_room(r) not in blocked)
 
     def broadcast_all_rooms(self, text: str):
         """Send one public game announcement to every room currently tracked by the bot."""
@@ -2225,6 +2243,70 @@ class TalkinBot:
             "chat_message", type_=media_type, to=username, url=media_url,
             length=str(max(0, int(duration or 0))) if media_type == "audio" else None
         ))
+
+    def _master_is_online(self):
+        """Return the latest presence state known by this bot connection."""
+        return bool(getattr(self, "master_online", False))
+
+    def _offline_support_menu(self):
+        return (
+            "الماستر نائم الآن\n"
+            "تفضل كيف يمكنني خدمتك؟\n"
+            "1 توثيق\n"
+            "2 شكاوي أو مقترحات"
+        )
+
+    def _handle_offline_master_service(self, sender: str, body: str):
+        """Handle private service requests only while BOT_MASTER is absent."""
+        sender = str(sender or "").strip()
+        body = str(body or "").strip()
+        if not sender or _norm_user(sender) in {_norm_user(BOT_MASTER), _norm_user(BOT_ID)}:
+            return False
+        if self._master_is_online():
+            return False
+
+        sessions = getattr(self, "_offline_support_sessions", None)
+        if not isinstance(sessions, dict):
+            sessions = {}
+            self._offline_support_sessions = sessions
+        key = _norm_user(sender)
+        state = sessions.get(key, "")
+        low = body.casefold()
+
+        if not state:
+            sessions[key] = "menu"
+            self.send_private_text(sender, self._offline_support_menu())
+            return True
+
+        if state == "complaint":
+            if not body:
+                self.send_private_text(sender, "❌ أرسل نص الشكوى أو المقترح.")
+                return True
+            support = MASTER_SUPPORT_USERNAME or BOT_MASTER
+            self.send_private_text(support, f"📩 شكوى أو مقترح من @{sender}:\n{body}")
+            self.send_private_text(sender, "✅ سيتم إبلاغ الإدارة ونبلغك قريباً.")
+            sessions.pop(key, None)
+            return True
+
+        if low in ("2", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
+            sessions[key] = "complaint"
+            self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
+            return True
+
+        if low in ("1", "توثيق", "وثق", "التوثيق"):
+            data = _verified_data()
+            data[key] = {
+                "username": sender,
+                "verified_by": BOT_MASTER or "offline_master_service",
+                "created_at": int(time.time()),
+            }
+            _save_local_json(VERIFIED_FILE, data)
+            sessions.pop(key, None)
+            self.send_private_text(sender, "✅ تم التوثيق.")
+            return True
+
+        self.send_private_text(sender, self._offline_support_menu())
+        return True
 
     def reply_text(self, room: str, text: str, private_to: str = ""):
         return self.send_private_text(private_to, text) if private_to else self.send_room_text(room, text)
@@ -2759,7 +2841,7 @@ class TalkinBot:
                 # Music is broadcast to every room currently joined by the bot.
                 # Do not send a duplicate private song message to the requester.
                 self.reaction_targets[code] = {"publisher": requester, "kind": "music", "title": title, "description": title, "created_at": time.time()}
-                target_rooms=list(self.known_rooms) or ([room] if room else [])
+                target_rooms=self._active_rooms()
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
                     self.send_room_media(target_room,url,"audio",duration)
@@ -3670,10 +3752,9 @@ class TalkinBot:
         source_room=str(pending.get("source_room") or room or "")
         silent_publish=bool(pending.get("silent"))
         self.publish_pending.pop(key,None)
-        rooms=set(self.known_rooms)
-        if self.room:
-            rooms.add(str(self.room).strip())
-        rooms=sorted(r for r in rooms if str(r).strip())
+        # A room that rejected/banned the bot must not abort or receive this
+        # publication; all other active rooms continue normally.
+        rooms=self._active_rooms()
         # In rooms, the successful publish message contains ONLY the reaction
         # controls. The publish status/result is sent privately to the master.
         base_code=uuid.uuid4().hex[:4]
@@ -3713,6 +3794,10 @@ class TalkinBot:
 
     def handle_room_event(self, result):
         event = result.get("room_event") or {}
+        if not hasattr(self, "blocked_rooms"):
+            self.blocked_rooms = set()
+        if not hasattr(self, "_blocked_room_notices"):
+            self._blocked_room_notices = set()
         event_type = str(event.get(1, ""))
         frm = str(event.get(2, ""))
         to = str(event.get(3, ""))
@@ -3733,6 +3818,10 @@ class TalkinBot:
             self.room_users[room][username] = role or "none"
             _remember_roster(room, [{"username": username, "role": role or "none"}])
             self.last_joined_room = room
+            if _norm_user(username) == _norm_user(BOT_MASTER):
+                self._master_online_rooms.add(_norm_room(room))
+                self.master_online = True
+                self.master_last_seen = time.time()
             # Welcome the master using the exact configured BOT_MASTER account.
             if _norm_user(username) == _norm_user(BOT_MASTER):
                 self.send_room_text(room, f"👑 لقد أتاكم الزعيم\n👤 {username}\n🏠 الغرفة: {room}")
@@ -3742,6 +3831,9 @@ class TalkinBot:
                     self.send_room_text(room, str(cw["message"]).replace("{username}", username).replace("{room}", room))
         elif event_type == "user_left" and username:
             self.room_users[room].pop(username, None)
+            if _norm_user(username) == _norm_user(BOT_MASTER):
+                self._master_online_rooms.discard(_norm_room(room))
+                self.master_online = bool(self._master_online_rooms)
         elif event_type == "role_changed":
             # In native RoomEvent packets the affected user is field 17 and
             # the resulting role is field 31. Field 8 is not reliable here.
@@ -3769,6 +3861,8 @@ class TalkinBot:
                     self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
+            self.blocked_rooms.discard(_norm_room(room))
+            self._blocked_room_notices.discard(_norm_room(room))
         elif event_type in ("room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin", "room_needs_captcha_rejoin", "room_needs_password_rejoin", "room_membership_required_rejoin"):
             # IMPORTANT: do not immediately send room_join here.  These events
             # can be emitted repeatedly by the server when a room rejects a
@@ -3778,10 +3872,13 @@ class TalkinBot:
             # long cooldown and never recursively from this event handler.
             self.log("[ROOM] server requested rejoin; delayed reconnect")
             if event_type in ("room_unauthorized_rejoin", "room_membership_required_rejoin"):
-                notice=f"🚫 البوت محظور في الغرفة {room}. أعطِ البوت إشرافاً أو أونر في الغرفة ثم أرسل: دخول {room}"
+                blocked_room = _norm_room(room)
+                self.blocked_rooms.add(blocked_room)
+                notice=f"🚫 البوت محظور من الغرفة {room}. ارفع البوت إشرافاً أو أونر ثم أعد المحاولة: دخول {room}"
                 recipient=username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER
-                if recipient:
+                if recipient and blocked_room not in self._blocked_room_notices:
                     self.send_private_text(recipient, notice)
+                    self._blocked_room_notices.add(blocked_room)
 
         if ACK_ROOM_EVENTS and result.get("uid"):
             try:
@@ -3914,6 +4011,11 @@ class TalkinBot:
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
                     media_url = str(cm.get(6, "") or "").strip()
+                    if _norm_user(frm) == _norm_user(BOT_MASTER):
+                        self.master_online = True
+                        self.master_last_seen = time.time()
+                    elif self._handle_offline_master_service(frm, body):
+                        return
                     if body and media_url:
                         if not _is_verified_user(frm):
                             self.send_room_text(self.room, f"🔒 @{frm} يحتاج توثيقاً لاستخدام النشر.\n{_verification_notice()}")
@@ -3959,7 +4061,10 @@ class TalkinBot:
                             self.request_occupants(target_room, silent_master=True)
                         elif cmd in ("دخول", "join", "ادخل", "enter") and arg:
                             target_room = arg
-                            self.join_room(target_room)
+                            blocked_room = _norm_room(target_room)
+                            self.blocked_rooms.discard(blocked_room)
+                            self._blocked_room_notices.discard(blocked_room)
+                            self.join_room(target_room, force=True)
                             self.send_private_text(BOT_MASTER, f"✅ دخلت الغرفة: {target_room} | الغرف الحالية: {len(self.known_rooms)}")
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
