@@ -1098,7 +1098,7 @@ def _shape_name(text):
         pass
     if arabic_reshaper is not None and get_display is not None and _has_arabic(raw):
         try:
-            return get_display(arabic_reshaper.reshape(raw))
+            return get_display(arabic_reshaper.reshape(raw), base_dir="R")
         except Exception:
             pass
     return raw
@@ -1261,7 +1261,7 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
     # real fallback fonts. This avoids tofu squares without reversing twice.
     if _has_arabic(raw_text) and arabic_reshaper is not None and get_display is not None:
         try:
-            visual = get_display(arabic_reshaper.reshape(raw_text))
+            visual = get_display(arabic_reshaper.reshape(raw_text), base_dir="R")
         except Exception:
             visual = raw_text
     else:
