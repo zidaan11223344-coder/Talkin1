@@ -838,29 +838,54 @@ class DatabaseBridge:
         return None
 
     def room_users(self, room_name):
-        if not self.client: return []
+        """Return all members of a room using paged DB reads.
+
+        Paging prevents large rooms from being truncated by the provider's
+        default row limit. Profile lookups are also batched in groups of 100.
+        """
+        if not self.client:
+            return []
         rid = self.room_id(room_name)
-        if not rid: return []
+        if not rid:
+            return []
         try:
-            r = self.client.table("room_members").select("user_id, rank, joined_at, is_present").eq("room_id", rid).execute()
-            members = getattr(r, "data", None) or []
+            members = []
+            page_size = 1000
+            offset = 0
+            while True:
+                r = (self.client.table("room_members")
+                     .select("user_id, rank, joined_at, is_present")
+                     .eq("room_id", rid)
+                     .range(offset, offset + page_size - 1)
+                     .execute())
+                rows = getattr(r, "data", None) or []
+                members.extend(rows)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
             self.last_member_count = len(members)
             ids = []
             for row in members:
                 uid = row.get("user_id")
-                if uid and str(uid) not in ids: ids.append(str(uid))
-            if not ids: return []
-            out=[]
+                if uid and str(uid) not in ids:
+                    ids.append(str(uid))
+            if not ids:
+                return []
+            out = []
             for i in range(0, len(ids), 100):
-                batch=ids[i:i+100]
-                pr=self.client.table("profiles").select("id, username").in_("id", batch).execute()
-                for row in (getattr(pr,"data",None) or []):
-                    u=str(row.get("username") or "").strip()
-                    if u: out.append({"username":u,"user_id":str(row.get("id") or "")})
-            seen=set(); final=[]
+                batch = ids[i:i + 100]
+                pr = self.client.table("profiles").select("id, username").in_("id", batch).execute()
+                for row in (getattr(pr, "data", None) or []):
+                    u = str(row.get("username") or "").strip()
+                    if u:
+                        out.append({"username": u, "user_id": str(row.get("id") or "")})
+            seen = set()
+            final = []
             for u in out:
-                k=u["username"].casefold()
-                if k not in seen: seen.add(k); final.append(u)
+                k = u["username"].casefold()
+                if k not in seen:
+                    seen.add(k)
+                    final.append(u)
             self.last_profile_count = len(final)
             self.log(f"[DB] room_members={len(members)} profiles={len(final)} room_id={rid}")
             return final
@@ -2074,11 +2099,11 @@ class TalkinBot:
         self._heartbeat_thread = None
 
     def join_room(self, room: str, force: bool = False):
-        """Join a room without spamming room_join.
+        """Join a room, allowing a previously-left room to be joined again.
 
-        TalkinChat treats room_join as a membership change on a WebSocket.
-        Re-sending it repeatedly can produce the visible leave/join loop.
-        Therefore the bot sends it once per room unless explicitly forced.
+        ``known_rooms`` is persistent history, while ``connected_rooms`` is the
+        current WebSocket session. A room that is only in known_rooms is NOT
+        considered currently joined; this is important after ``خروج``.
         """
         room = str(room or "").strip()
         if not room:
@@ -2086,9 +2111,13 @@ class TalkinBot:
         if _norm_room(room) in getattr(self, "blocked_rooms", set()) and not force:
             self.log("[ROOM] join suppressed (bot is blocked):", room)
             return False
-        already_known = room in getattr(self, "known_rooms", set())
-        if already_known and not force:
-            self.log("[ROOM] already tracked:", room)
+        known_norm = {_norm_room(r) for r in getattr(self, "known_rooms", set())}
+        connected_norm = {_norm_room(r) for r in getattr(self, "connected_rooms", set())}
+        already_known = _norm_room(room) in known_norm
+        already_connected = _norm_room(room) in connected_norm
+        # Being saved in tracked_rooms.json alone must never block a fresh join.
+        if already_connected and not force:
+            self.log("[ROOM] already connected:", room)
             return False
         now = time.time()
         with self._join_lock:
@@ -2105,9 +2134,39 @@ class TalkinBot:
         return True
 
     def request_room_occupants(self, room: str):
-        """Refresh and persist one room's roster without sending invitations."""
+        """Load and persist the complete room roster without a huge WebSocket frame.
+
+        Supabase is used first because it can return the room members in small
+        HTTP batches. Only when the database cannot provide the roster do we fall
+        back to Talkin's occupants_list WebSocket response.
+        """
         room = _norm_room(room)
-        if not room or not self.ws:
+        if not room:
+            return False
+        try:
+            db_users = self.db.room_users(room) if getattr(self, "db", None) else []
+        except Exception as exc:
+            db_users = []
+            self.log("[ROOM] DB roster refresh failed", room, repr(exc))
+        if db_users:
+            users_info = []
+            for user in db_users:
+                if not isinstance(user, dict):
+                    continue
+                username = str(user.get("username") or "").strip()
+                if username and _norm_user(username) != _norm_user(BOT_ID):
+                    users_info.append({
+                        "username": username,
+                        "role": str(user.get("role") or "none").strip().lower() or "none",
+                        "user_id": str(user.get("user_id") or ""),
+                    })
+            if users_info:
+                self.room_users[room] = {u["username"]: u.get("role", "none") for u in users_info}
+                _remember_roster(room, users_info)
+                self.last_joined_room = room
+                self.log("[ROOM] complete roster saved", room, "users=", len(users_info))
+                return True
+        if not self.ws:
             return False
         try:
             self.send_query(encode_query(
@@ -2115,7 +2174,7 @@ class TalkinBot:
                 to=BOT_ID, value="none"
             ))
             self.last_joined_room = room
-            self.log("[ROOM] occupants refresh requested", room)
+            self.log("[ROOM] occupants refresh requested (WebSocket fallback)", room)
             return True
         except Exception as exc:
             self.log("[ROOM] occupants refresh failed", room, repr(exc))
@@ -3945,12 +4004,7 @@ class TalkinBot:
             return True
         if low in ("اعضاء", "أعضاء", "الاعضاء", "الأعضاء", "members"):
             users = _persistent_all_roster_users()
-            if not users:
-                self.send_private_text(sender, "📭 لا يوجد أعضاء محفوظون في room_users.json.")
-            else:
-                lines = [f"👥 الأعضاء المحفوظون ({len(users)}):"]
-                lines.extend(f"{i}. @{username}" for i, username in enumerate(users, 1))
-                self.send_private_text(sender, "\n".join(lines))
+            self.send_private_text(sender, f"👥 عدد الأعضاء المحفوظين: {len(users)}")
             return True
 
         if low.startswith("vi@"):
