@@ -15,7 +15,6 @@ import shutil
 import re
 import queue
 import mimetypes
-import unicodedata
 from urllib.parse import urlparse, unquote
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from collections import defaultdict
@@ -132,8 +131,6 @@ MESSAGES_FILE = DATA_DIR / "messages.json"
 PUBLISHED_FILE = DATA_DIR / "published_posts.json"
 GAME_STATS_FILE = DATA_DIR / "game_stats.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
-REPLIES_FILE = DATA_DIR / "replies.json"
-MODERATION_FILE = DATA_DIR / "moderation.json"
 
 # Giant Chat gift costs/labels; images remain the local Giant assets.
 GIFT_COSTS = {"1":10,"2":20,"3":30,"4":50,"5":80,"6":150,"7":200,"8":500,"9":800,"10":1000,"11":1500,"12":3000,"13":5000,"14":8000}
@@ -235,7 +232,7 @@ RAW_DIAGNOSTIC = os.getenv("RAW_DIAGNOSTIC", "0") == "1"
 ACK_ROOM_EVENTS = os.getenv("ACK_ROOM_EVENTS", "1") == "1"
 AUTO_HELP = os.getenv("AUTO_HELP", "1") == "1"
 BANNED_WORDS = {w.strip().lower() for w in os.getenv("BANNED_WORDS", "").split(",") if w.strip()}
-AUTO_BAN_WORDS = os.getenv("AUTO_BAN_WORDS", "1") == "1"
+AUTO_BAN_WORDS = os.getenv("AUTO_BAN_WORDS", "0") == "1"
 
 # ------------------------- protobuf wire helpers -------------------------
 
@@ -947,83 +944,6 @@ def _fmt_points(value):
         return f"{sign}{text}k"
     return f"{sign}{number}"
 
-DEFAULT_REPLY_MESSAGES = {
-    "master_silent": "",
-    "master_denied": "",
-    "game_invalid_amount": "❌ المبلغ يجب أن يكون أكبر من صفر.",
-    "game_insufficient": "❌ رصيدك غير كافٍ. رصيدك الحالي: {balance} نقطة.",
-    "wager_open": "🎯 {game_label} جديد\n━━━━━━━━━━━━\n👤 {verb}: @{username}\n💰 المبلغ: {amount} نقطة\n\n🤝 للمشاركة ارسل: {command}@{amount}\n━━━━━━━━━━━━",
-    "wager_result": "🏆 انتهى {game}\n━━━━━━━━━━━━\n🥊 @{p1} × @{p2}\n\n👑 الفائز: @{winner}\n💰 مبلغ الجولة: {amount} نقطة\n🎁 مكسب الفائز: +{amount} نقطة\n📉 الخاسر: @{loser} (-{amount} نقطة)\n━━━━━━━━━━━━",
-    "luck_result": "🍀✨ حظ\n━━━━━━━━━━━━\n👤 اللاعب: @{username}\n🎯 النتيجة: {result}\n💰 الرهان: {amount} نقطة\n💵 التغير: {delta} نقطة\n💳 الرصيد: {balance} نقطة",
-}
-
-def _ensure_replies_file():
-    data = _load_local_json(REPLIES_FILE, {})
-    if not isinstance(data, dict):
-        data = {}
-    messages = data.get("messages") if isinstance(data.get("messages"), dict) else {}
-    changed = False
-    for key, value in DEFAULT_REPLY_MESSAGES.items():
-        if key not in messages:
-            messages[key] = value
-            changed = True
-    data["messages"] = messages
-    if not isinstance(data.get("auto_replies"), dict):
-        # Migrate the older auto_replies.json format once.
-        legacy = _load_local_json(BASE_DIR / "auto_replies.json", {})
-        legacy_replies = legacy.get("replies", {}) if isinstance(legacy, dict) else {}
-        data["auto_replies"] = legacy_replies if isinstance(legacy_replies, dict) else {}
-        data["auto_replies_enabled"] = bool(legacy.get("enabled", True)) if isinstance(legacy, dict) else True
-        changed = True
-    if "auto_replies_enabled" not in data:
-        data["auto_replies_enabled"] = True
-        changed = True
-    if changed or not REPLIES_FILE.is_file():
-        _save_local_json(REPLIES_FILE, data)
-    return data
-
-def _reply_template(key, default="", **kwargs):
-    data = _ensure_replies_file()
-    messages = data.get("messages", {}) if isinstance(data, dict) else {}
-    text = messages.get(key, default) if isinstance(messages, dict) else default
-    try:
-        return str(text).format(**kwargs)
-    except Exception:
-        return str(text)
-
-def _load_moderation_config():
-    data = _load_local_json(MODERATION_FILE, {})
-    if not isinstance(data, dict):
-        data = {}
-    words = data.get("words")
-    if not isinstance(words, list):
-        words = sorted(BANNED_WORDS)
-    words = [str(w).strip() for w in words if str(w).strip()]
-    enabled = bool(data.get("enabled", AUTO_BAN_WORDS))
-    return enabled, words
-
-def _save_moderation_config(enabled, words):
-    clean = []
-    seen = set()
-    for word in words or []:
-        word = str(word).strip()
-        if not word:
-            continue
-        key = _norm_filter_text(word)
-        if key and key not in seen:
-            seen.add(key)
-            clean.append(word)
-    _save_local_json(MODERATION_FILE, {"enabled": bool(enabled), "words": clean})
-    return clean
-
-def _norm_filter_text(text):
-    value = str(text or "").casefold()
-    value = re.sub(r"[\u064b-\u065f\u0670\u0640]", "", value)
-    value = value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ٱ", "ا")
-    value = value.replace("ى", "ي")
-    value = re.sub(r"\s+", "", value)
-    return value
-
 def _message_template(section,key,default,**kwargs):
     data=_load_local_json(MESSAGES_FILE,{})
     value=((data.get(section) or {}).get(key)) if isinstance(data,dict) else None
@@ -1051,7 +971,7 @@ def _default_help_pages():
     return {
         1: '📋 أوامر الإدارة\n━━━━━━━━━━━━\nk@اسم — طرد\nb@اسم — حظر\nub@اسم — فك الحظر\na@اسم — تعيين مشرف\no@اسم — تعيين مالك',
         2: '🎵 الموسيقى\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل',
-        3: '🎮 الألعاب\n━━━━━━━━━━━━\nرهان@المبلغ — رهان (للموثقين)\nمضاربة@المبلغ — مضاربة\nاستثمار@المبلغ — استثمار\nحظي@المبلغ — حظي ثنائي\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون',
+        3: '🎮 الألعاب\n━━━━━━━━━━━━\nرهان@المبلغ — رهان (للموثقين)\nمضاربة@المبلغ — مضاربة\nاستثمار@المبلغ — استثمار\nحظي@المبلغ — حظي\nمليون — لعبة المليون',
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
         6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
@@ -1077,294 +997,230 @@ def _command_help(page=1):
     page=max(1,min(len(pages),page))
     return pages.get(page,_default_help_pages()[1])
 
-# ------------------------------ Bot ----------------------
+# ------------------------------ Bot --------------------------------------
 
 def _shape_name(text):
-    """Convert the logical username into visual RTL order exactly once.
-
-    The username is never translated, normalized, stripped of symbols, or
-    otherwise altered.  Only the rendering order is changed so Arabic looks
-    like the same copied text the user sees in Talkin Chat.
-    """
-    raw = str(text or "")
-    if not raw:
-        return ""
-    if arabic_reshaper is not None and get_display is not None and _has_arabic(raw):
-        try:
-            return get_display(arabic_reshaper.reshape(raw))
-        except Exception:
-            pass
-    return raw
+    # Keep the exact logical username. Do not reverse or normalize decorative Arabic.
+    return str(text or "")
 
 _GIFT_FONT_CACHE = {}
-_GLYPH_CACHE = {}
-_FONT_CMAP_CACHE = {}
-
-try:
-    from fontTools.ttLib import TTFont
-    _FONTTOOLS_OK = True
-except Exception:
-    TTFont = None
-    _FONTTOOLS_OK = False
-
 def _load_font(path, size):
     key=(str(path),int(size))
     if key not in _GIFT_FONT_CACHE:
         _GIFT_FONT_CACHE[key]=ImageFont.truetype(str(path),int(size))
     return _GIFT_FONT_CACHE[key]
 
-def _font_cmap(path):
-    """Return a real Unicode cmap so .notdef/tofu glyphs are never mistaken
-    for supported characters.  This fixes square boxes for decorative Unicode.
-    """
-    key=str(path)
-    if key in _FONT_CMAP_CACHE:
-        return _FONT_CMAP_CACHE[key]
-    cmap=set()
-    if _FONTTOOLS_OK:
-        try:
-            ft=TTFont(key, lazy=True)
-            for table in ft['cmap'].tables:
-                cmap.update(table.cmap.keys())
-            ft.close()
-        except Exception:
-            cmap=set()
-    _FONT_CMAP_CACHE[key]=cmap
-    return cmap
-
 def _gift_font(text,size):
-    # Main Arabic font.  Other scripts/symbols are chosen from real Unicode
-    # coverage below; NotoSansArabic must not claim missing glyphs.
-    candidates = [
-        BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
-        BASE_DIR/"assets"/"Amiri-Bold.ttf",
-        Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansArabic-SemiBold.ttf"),
-        BASE_DIR/"assets"/"DejaVuSans.ttf",
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    ]
-    for path in candidates:
-        if path.is_file():
-            return _load_font(path,size)
-    raise RuntimeError("لم أجد خطًا صالحًا لرسم أسماء الهدايا")
-
-def _fallback_font_paths():
-    paths=[
-        BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
-        BASE_DIR/"assets"/"Amiri-Bold.ttf",
-        BASE_DIR/"assets"/"DejaVuSans.ttf",
-        BASE_DIR/"assets"/"NotoSansSymbols2-Regular.ttf",
-        BASE_DIR/"assets"/"NotoSansSymbols-Regular.ttf",
-        BASE_DIR/"assets"/"Symbola.ttf",
-        BASE_DIR/"assets"/"NotoSansEgyptianHieroglyphs-Regular.ttf",
-        BASE_DIR/"assets"/"NotoMusic-Regular.ttf",
-        Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansArabic-SemiBold.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansEgyptianHieroglyphs-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoMusic-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    ]
-    # Also inspect any extra font files already shipped inside the bot assets.
-    try:
-        for root in (BASE_DIR/"assets", Path("/usr/share/fonts")):
-            if root.exists():
-                for ext in ("*.ttf", "*.otf"):
-                    for fp in root.rglob(ext):
-                        paths.append(fp)
-    except Exception:
-        pass
-    out=[]; seen=set()
-    for p in paths:
-        p=Path(p)
-        if p.is_file() and str(p) not in seen:
-            seen.add(str(p)); out.append(p)
-    return out
+    # Arabic font for the main text; rare decorative symbols are drawn with fallback fonts.
+    path=BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf"
+    if not path.is_file(): path=BASE_DIR/"assets"/"DejaVuSans.ttf"
+    return _load_font(path,size)
 
 def _fallback_fonts(size):
-    out=[]
-    for p in _fallback_font_paths():
-        try:
-            out.append(_load_font(p,size))
-        except Exception:
-            continue
-    return out
+    paths=[
+        BASE_DIR/"assets"/"DejaVuSans.ttf",
+        BASE_DIR/"assets"/"Amiri-Bold.ttf",
+        BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
+        BASE_DIR/"assets"/"NotoSansSymbols2-Regular.ttf",
+        BASE_DIR/"assets"/"NotoSansEgyptianHieroglyphs-Regular.ttf",
+        BASE_DIR/"assets"/"NotoMusic-Regular.ttf",
+    ]
+    return [_load_font(p,size) for p in paths if p.is_file()]
+
+_FONT_GLYPH_CACHE = {}
+
 
 def _font_has_glyph(font, ch):
-    """Check Unicode cmap first; never accept a tofu/.notdef box as support."""
+    """Return True only when the font really contains the Unicode codepoint.
+
+    Pillow's getmask() can return the font's .notdef/tofu glyph for a missing
+    character, which is why the previous version could still produce □□□.
+    Prefer fontTools cmap data when available and fall back to Pillow only for
+    fonts that cannot be inspected.
+    """
+    if not ch:
+        return False
+    cp = ord(ch)
     try:
-        path=getattr(font, 'path', None)
+        path = str(getattr(font, 'path', '') or '')
         if path:
-            cmap=_font_cmap(path)
-            if cmap:
-                return ord(ch) in cmap
-        # Compatibility fallback when fontTools is unavailable.
-        mask=font.getmask(ch)
+            cmap = _FONT_GLYPH_CACHE.get(path)
+            if cmap is None:
+                try:
+                    from fontTools.ttLib import TTFont
+                    tt = TTFont(path, lazy=True, fontNumber=0)
+                    cmap = set()
+                    for table in tt['cmap'].tables:
+                        cmap.update(table.cmap.keys())
+                    tt.close()
+                    _FONT_GLYPH_CACHE[path] = cmap
+                except Exception:
+                    cmap = False
+                    _FONT_GLYPH_CACHE[path] = cmap
+            if cmap is not False:
+                return cp in cmap
+    except Exception:
+        pass
+    try:
+        mask = font.getmask(ch)
         return mask.getbbox() is not None and font.getlength(ch) > 0
     except Exception:
         return False
 
-def _pick_font_for_char(base, fallbacks, ch):
-    # Prefer the Arabic/main font only when its cmap really contains the glyph.
-    if _font_has_glyph(base, ch):
-        return base
-    for font in fallbacks:
-        if _font_has_glyph(font, ch):
-            return font
-    return None
 
-def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
-                      stroke_fill=(0,0,0,220), direction="ltr"):
-    """Draw one username from the user's exact command/message text.
+def _bidi_visual_text(raw_text):
+    """Convert one logical Talkin username to the same visual RTL order as chat.
 
-    Arabic is reshaped/bidi-ordered once.  Each Unicode code point is then
-    rendered with a font that genuinely contains that code point.  This is
-    what prevents boxes for names containing 𓆩♛𓆪 and musical symbols.
+    We do this ONCE for the complete username.  The old renderer applied RTL
+    separately to every Arabic run and then placed those runs left-to-right,
+    which made names such as احمد appear as دمحا.  After this conversion every
+    run is drawn left-to-right, so the final bitmap matches normal chat order.
     """
-    visual=_shape_name(raw_text)
-    if not visual:
-        return xy[0]
-    base=_gift_font(visual,int(size))
-    fallbacks=_fallback_fonts(int(size))
-
-    # Keep combining marks attached to the preceding glyph's font where possible.
-    runs=[]; cur_font=None; cur=[]
-    unsupported=[]
-    prev_font=None
-    for ch in visual:
-        font=_pick_font_for_char(base,fallbacks,ch)
-        # Combining marks/variation selectors should follow the previous font.
-        cat=unicodedata.category(ch)
-        if font is None and prev_font is not None and cat.startswith("M"):
-            font=prev_font
-        if font is None:
-            unsupported.append(ch)
-            # Do not draw a fake square. The character is omitted only when no
-            # installed/shipped font can actually render it.
-            continue
-        if cur_font is None or getattr(font,'path',None)==getattr(cur_font,'path',None):
-            cur.append(ch)
-        else:
-            runs.append((cur_font,''.join(cur))); cur=[ch]
-        cur_font=font; prev_font=font
-    if cur:
-        runs.append((cur_font,''.join(cur)))
-
-    x,y=xy
-    for font,run in runs:
-        try:
-            draw.text((x,y),run,font=font,fill=fill,stroke_width=stroke_width,
-                      stroke_fill=stroke_fill,direction="ltr")
-        except Exception:
-            draw.text((x,y),run,font=font,fill=fill,stroke_width=stroke_width,
-                      stroke_fill=stroke_fill)
-        try:
-            x += draw.textlength(run,font=font,direction="ltr")
-        except Exception:
-            x += font.getlength(run)
-    if unsupported:
-        try:
-            # Keep a concise diagnostic in the log without exposing the full name.
-            print("[GIFT-FONT] unsupported Unicode: " + " ".join(f"U+{ord(c):04X}" for c in sorted(set(unsupported))))
-        except Exception:
-            pass
-    return x
-
-def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=2, stroke_fill=(0,0,0,220)):
-    return _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width, stroke_fill)
-
-def _fit_crop(im,size):
-    im=im.convert("RGB"); tw,th=size; scale=max(tw/im.width,th/im.height); nw,nh=max(tw,int(im.width*scale)),max(th,int(im.height*scale)); im=im.resize((nw,nh),Image.LANCZOS); left=max(0,(nw-tw)//2); top=max(0,(nh-th)//2); return im.crop((left,top,left+tw,top+th))
-
-def _draw_centered(draw,center,raw_text,size,fill,max_width):
-    return _draw_name_centered(draw, center, raw_text, size, fill, max_width)
-
-def _visual_rtl_text(text):
-    """Return logical text unchanged when Pillow/Raqm can shape Arabic.
-    Older fallback renderers may need reshape+bidi.
-    """
-    text = str(text or "")
+    text = str(raw_text or "")
+    if not text or not _has_arabic(text):
+        return text
+    try:
+        if arabic_reshaper is not None and get_display is not None:
+            return get_display(arabic_reshaper.reshape(text))
+    except Exception:
+        pass
     try:
         if PIL_AVAILABLE and features.check("raqm"):
+            # Kept only as a fallback; the mixed-font path below needs a visual
+            # string, so this is safer than applying direction to each run.
             return text
     except Exception:
         pass
-    if arabic_reshaper is not None and get_display is not None:
-        try:
-            return get_display(arabic_reshaper.reshape(text))
-        except Exception:
-            pass
     return text
 
-def _has_arabic(text):
-    return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
 def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
-    """Center the username using actual mixed-font glyph widths."""
-    size=int(size)
-    while size>14:
-        visual=_shape_name(raw_text)
-        base=_gift_font(visual,size)
-        fallbacks=_fallback_fonts(size)
-        width=0
-        for ch in visual:
-            font=_pick_font_for_char(base,fallbacks,ch)
-            if font is None:
-                continue
-            try: width += draw.textlength(ch,font=font,direction='ltr')
-            except Exception: width += font.getlength(ch)
-        if width<=max_width:
-            break
-        size-=2
-    visual=_shape_name(raw_text)
-    base=_gift_font(visual,size)
-    fallbacks=_fallback_fonts(size)
-    width=0
-    top=999999; bottom=-999999
-    for ch in visual:
-        font=_pick_font_for_char(base,fallbacks,ch)
-        if font is None: continue
-        try: width += draw.textlength(ch,font=font,direction='ltr')
-        except Exception: width += font.getlength(ch)
-        try:
-            b=font.getbbox(ch)
-            top=min(top,b[1]); bottom=max(bottom,b[3])
-        except Exception:
-            pass
-    if top==999999:
+    """Render a Talkin username without reversing it or creating tofu boxes.
+
+    The source string is kept intact. Arabic shaping/bidi is performed once on
+    the whole string, then the resulting visual text is split only by font
+    coverage. Decorative symbols (♛, 𓆩, 𓆪, musical symbols, etc.) are selected
+    from a font that actually contains them. No per-run RTL operation is used.
+    """
+    text = str(raw_text if raw_text is not None else "")
+    if not text:
         return
-    x=center[0]-width/2
-    y=center[1]-(bottom-top)/2-top
-    _draw_name_visual(draw,(x,y),raw_text,size,fill,stroke_width=2,stroke_fill=(0,0,0,220))
+
+    visual = _bidi_visual_text(text)
+
+    def choose(ch, sz, previous_font=None):
+        import unicodedata
+        # Combining marks belong to the preceding glyph/font. This keeps the
+        # decorative Arabic marks attached instead of turning them into boxes.
+        if unicodedata.category(ch).startswith('M') and previous_font is not None:
+            if _font_has_glyph(previous_font, ch):
+                return previous_font
+        candidates = [_gift_font(visual, sz)] + _fallback_fonts(sz)
+        seen = set()
+        for f in candidates:
+            path = str(getattr(f, 'path', '') or id(f))
+            if path in seen:
+                continue
+            seen.add(path)
+            if _font_has_glyph(f, ch):
+                return f
+        # Last resort: use a broad font; this is preferable to silently
+        # dropping the username character.
+        return candidates[0]
+
+    def make_runs(sz):
+        runs = []
+        cur_font = None
+        cur = []
+        for ch in visual:
+            f = choose(ch, sz, cur_font)
+            fpath = str(getattr(f, 'path', '') or id(f))
+            cpath = str(getattr(cur_font, 'path', '') or id(cur_font)) if cur_font is not None else None
+            if cur_font is None or fpath == cpath:
+                cur.append(ch)
+            else:
+                runs.append((cur_font, ''.join(cur)))
+                cur = [ch]
+            cur_font = f
+        if cur:
+            runs.append((cur_font, ''.join(cur)))
+        return runs
+
+    def run_width(font, run):
+        try:
+            return float(draw.textlength(run, font=font, direction='ltr'))
+        except Exception:
+            try:
+                return float(font.getlength(run))
+            except Exception:
+                return 0.0
+
+    sz = max(14, int(size))
+    while sz > 14:
+        runs = make_runs(sz)
+        width = sum(run_width(font, run) for font, run in runs)
+        if width <= max_width:
+            break
+        sz -= 2
+    runs = make_runs(sz)
+    width = sum(run_width(font, run) for font, run in runs)
+
+    # Extra side padding prevents a long decorated name from touching the box.
+    strip_w = max(1, int(width + sz * 2))
+    strip_h = max(1, int(sz * 1.8))
+    strip = Image.new('RGBA', (strip_w, strip_h), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(strip)
+    x = float(sz)
+    for font, run in runs:
+        try:
+            bbox = sd.textbbox((0, 0), run, font=font, direction='ltr')
+            rw = float(bbox[2] - bbox[0])
+            y = (strip_h - (bbox[3] - bbox[1])) / 2 - bbox[1]
+        except Exception:
+            rw = run_width(font, run)
+            y = (strip_h - sz) / 2
+        sd.text((int(round(x)), int(round(y))), run, font=font, fill=fill,
+                stroke_width=1, stroke_fill=(0, 0, 0, 170), direction='ltr')
+        x += rw
+
+    px = int(round(center[0] - strip.width / 2))
+    py = int(round(center[1] - strip.height / 2))
+    draw._image.alpha_composite(strip, (px, py))
+
 
 def _visual_runs(text, size):
-    # Kept for compatibility with older helpers.
-    visual = _visual_rtl_text(_shape_name(text))
+    # Compatibility helper: unlike the old implementation, bidi is applied to
+    # the complete username before font fallback is selected.
+    visual = _bidi_visual_text(str(text or ""))
     base = _gift_font(visual, size)
     fallbacks = _fallback_fonts(size)
-    runs=[]; cur_font=None; cur=[]
+    runs = []
+    cur_font = None
+    cur = []
     for ch in visual:
         chosen = base if _font_has_glyph(base, ch) else next((f for f in fallbacks if _font_has_glyph(f, ch)), base)
-        if cur_font is None or chosen is cur_font:
+        if cur_font is None or str(getattr(chosen, 'path', '')) == str(getattr(cur_font, 'path', '')):
             cur.append(ch)
         else:
-            runs.append((cur_font,''.join(cur))); cur=[ch]
-        cur_font=chosen
-    if cur: runs.append((cur_font,''.join(cur)))
+            runs.append((cur_font, ''.join(cur)))
+            cur = [ch]
+        cur_font = chosen
+    if cur:
+        runs.append((cur_font, ''.join(cur)))
     return runs
+
 
 def _visual_text_width(draw, text, size):
     try:
-        font=_gift_font(text,size)
-        direction="rtl" if _has_arabic(text) else "ltr"
-        box=draw.textbbox((0,0),str(text),font=font,direction=direction)
-        return box[2]-box[0]
+        visual = _bidi_visual_text(str(text or ""))
+        return sum(float(draw.textlength(run, font=font, direction='ltr')) for font, run in _visual_runs(visual, size))
     except Exception:
-        return sum(draw.textlength(run,font=font) for font,run in _visual_runs(text,size))
+        return 0
+
 
 def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=1, stroke_fill=(0,0,0,180)):
     return _draw_name_centered(draw, (xy[0], xy[1]+size/2), raw_text, size, fill, 10000)
+
 
 def _draw_centered(draw, center, raw_text, size, fill, max_width):
     return _draw_name_centered(draw, center, raw_text, size, fill, max_width)
@@ -1537,14 +1393,12 @@ class TalkinBot:
     def __init__(self):
         self.ws = None
         self.stop_event = threading.Event()
-        self._silent_master_local = threading.local()
         self.http = requests.Session()
         self.port = DEFAULT_PORT
         self.room = GROUP_TO_JOIN
         self.auth = None
         self.last_error = None
         self.banned_words = set()
-        self.moderation_enabled = AUTO_BAN_WORDS
         self.last_messages = defaultdict(list)
         # Live room membership cache: username -> role.  This is updated by
         # occupants_list and by user_joined/user_left room events.
@@ -1563,7 +1417,6 @@ class TalkinBot:
         self.reaction_targets = {}
         self.publish_pending = {}
         self.invite_pending = False
-        self.invite_silent_master = False
         self.invite_room = ""
         self.invite_sent = set()
         self.invite_thread = None
@@ -1578,10 +1431,8 @@ class TalkinBot:
         self._had_connection = False
         self._heartbeat_stop = None
         self._heartbeat_thread = None
-        self.moderation_enabled, moderation_words = _load_moderation_config()
-        self.banned_words = set(moderation_words)
+        self.banned_words = set(BANNED_WORDS)
         self.text_limit = max(80, int(os.getenv("TALKIN_TEXT_LIMIT", "180")))
-        _ensure_replies_file()
         self.db = DatabaseBridge(self.log)
         self.db.sign_in()
         self.music_last = defaultdict(float)
@@ -1607,12 +1458,12 @@ class TalkinBot:
         self.invite_message_template = _message_template("invite", "default", "{sender} يدعوك للغرفة {room}")
 
     def _load_social_features(self):
-        self.auto_replies_file = REPLIES_FILE
+        self.auto_replies_file = BASE_DIR / "auto_replies.json"
         self.custom_welcomes_file = BASE_DIR / "custom_welcomes.json"
         try:
-            data = _ensure_replies_file()
-            self.auto_replies_enabled = bool(data.get("auto_replies_enabled", True))
-            raw = data.get("auto_replies", {})
+            data = _load_local_json(self.auto_replies_file, {})
+            self.auto_replies_enabled = bool(data.get("enabled", True))
+            raw = data.get("replies", {})
             self.auto_replies = raw if isinstance(raw, dict) else {}
         except Exception:
             self.auto_replies_enabled, self.auto_replies = True, {}
@@ -1625,10 +1476,7 @@ class TalkinBot:
             self.custom_welcome_enabled, self.custom_welcomes = True, {}
 
     def _save_social_features(self):
-        data = _ensure_replies_file()
-        data["auto_replies_enabled"] = bool(self.auto_replies_enabled)
-        data["auto_replies"] = self.auto_replies
-        _save_local_json(self.auto_replies_file, data)
+        _save_local_json(self.auto_replies_file, {"enabled": self.auto_replies_enabled, "replies": self.auto_replies})
         _save_local_json(self.custom_welcomes_file, {"enabled": self.custom_welcome_enabled, "welcomes": self.custom_welcomes})
 
     def log(self, *args):
@@ -1848,27 +1696,7 @@ class TalkinBot:
             self.send_query(encode_query(packet_type, **payload))
         return True
 
-    def _active_rooms(self):
-        rooms = {str(r).strip() for r in self.known_rooms if str(r).strip()}
-        if self.room:
-            rooms.add(str(self.room).strip())
-        rooms.update(str(r).strip() for r in self.room_users.keys() if str(r).strip())
-        return sorted(rooms)
-
-    def broadcast_all_rooms(self, text: str):
-        """Send one public game announcement to every room currently tracked by the bot."""
-        sent = 0
-        for target_room in self._active_rooms():
-            try:
-                self.send_room_text(target_room, text)
-                sent += 1
-            except Exception as exc:
-                self.log("[BROADCAST] failed", target_room, repr(exc))
-        return sent
-
     def send_room_text(self, room: str, text: str):
-        if getattr(self._silent_master_local, "active", False):
-            return True
         return self._send_text_packets("room_message", text, room=room)
 
     def send_room_lines(self, room: str, lines):
@@ -1952,14 +1780,14 @@ class TalkinBot:
             self.send_admin(room, target, operation)
         except Exception as exc:
             self.log(f"[MOD] request failed room={room} target=@{target}: {exc!r}")
-            if requester and not _is_master_name(requester):
+            if requester:
                 self.send_private_text(requester, f"❌ تعذر إرسال أمر الإدارة إلى الخادم: {exc}")
             return False
         key = (room.casefold(), target.casefold(), expected_role)
         with self.pending_admin_lock:
             self.pending_admin_actions[key] = {
                 "room": room, "target": target, "role": expected_role,
-                "requester": requester, "created_at": time.time(), "announced": False,
+                "requester": requester, "created_at": time.time(), "announced": True,
             }
         labels = {
             "kicked": "طرد",
@@ -1968,7 +1796,7 @@ class TalkinBot:
             "admin": "تعيين مشرف",
             "owner": "تعيين أونر",
         }
-        # Master moderation commands are intentionally silent in both room and private chat.
+        self.send_room_text(room, f"✅ تم أمر {labels[expected_role]} @{target} بنجاح.")
         self.log(f"[MOD] awaiting server confirmation room={room} target=@{target} role={expected_role}")
         threading.Thread(
             target=self._admin_confirmation_timeout,
@@ -1999,8 +1827,6 @@ class TalkinBot:
         preserves every character while keeping each packet below the safe
         room/server limit.
         """
-        if getattr(self._silent_master_local, "active", False):
-            return True
         username = str(username or "").strip()
         if not username or username == BOT_ID:
             return False
@@ -2016,7 +1842,7 @@ class TalkinBot:
     def reply_text(self, room: str, text: str, private_to: str = ""):
         return self.send_private_text(private_to, text) if private_to else self.send_room_text(room, text)
 
-    def request_occupants(self, room: str = "", silent_master: bool = False):
+    def request_occupants(self, room: str = ""):
         """Load users from ALL rooms currently joined by the bot.
 
         The room argument is only the command-context room: it is used in the
@@ -2028,7 +1854,6 @@ class TalkinBot:
                 self.send_private_text(BOT_MASTER, "⏳ ما زلت أجمع معلومات الغرف، انتظر حتى تكتمل العملية.")
                 return
             self.invite_pending = True
-            self.invite_silent_master = bool(silent_master)
             self.invite_room = str(room or self.room or "").strip()
             self.invite_sent.clear()
 
@@ -2083,7 +1908,6 @@ class TalkinBot:
         if not active_rooms:
             with self.invite_lock:
                 self.invite_pending = False
-                self.invite_silent_master = False
             self.send_private_text(BOT_MASTER, "⚠️ لا توجد غرف نشطة حالياً. استخدم: دخول اسم_الغرفة")
             return
         for source_room in active_rooms:
@@ -2098,7 +1922,6 @@ class TalkinBot:
         if not self._inv_expected_rooms:
             with self.invite_lock:
                 self.invite_pending = False
-                self.invite_silent_master = False
 
     def send_native_system_invite(self, username: str, room: str):
         """Send the platform's native room invitation through its Supabase RPC.
@@ -2205,7 +2028,6 @@ class TalkinBot:
 
     def _finish_invites(self, room, usernames):
         """Send invitations in a worker so the main receive loop stays alive."""
-        silent_master = bool(self.invite_silent_master)
         count = 0
         try:
             for username in usernames:
@@ -2218,28 +2040,26 @@ class TalkinBot:
                     self.log("[INV] failed for", username, repr(e))
 
             self.log(f"[INV] occupants loaded: {len(usernames)}, invitations sent: {count}")
-            if not silent_master:
-                try:
-                    if count == 0:
-                        self.send_private_text(BOT_MASTER,
-                            f"⚠️ لم تُرسل أي دعوة نظام. DB client={'نعم' if self.db.client else 'لا'} | "
-                            f"Supabase room_id={self.db.last_room_id or 'غير موجود'} | "
-                            f"room_members={self.db.last_member_count} | profiles={self.db.last_profile_count} | "
-                            f"آخر خطأ={self.db.last_error or 'راجع سجل Pydroid'}")
-                except Exception:
-                    pass
-                try:
-                    self.send_private_text(
-                        BOT_MASTER,
-                        f"✅ تم جمع معلومات الغرفة. عدد المستخدمين: {len(usernames)}\n"
-                        f"📨 تم إرسال الدعوة العادية على الخاص إلى: {count} مستخدم."
-                    )
-                except Exception as e:
-                    self.log("[INV] final private result failed:", repr(e))
+            try:
+                if count == 0:
+                    self.send_private_text(BOT_MASTER,
+                        f"⚠️ لم تُرسل أي دعوة نظام. DB client={'نعم' if self.db.client else 'لا'} | "
+                        f"Supabase room_id={self.db.last_room_id or 'غير موجود'} | "
+                        f"room_members={self.db.last_member_count} | profiles={self.db.last_profile_count} | "
+                        f"آخر خطأ={self.db.last_error or 'راجع سجل Pydroid'}")
+            except Exception:
+                pass
+            try:
+                self.send_private_text(
+                    BOT_MASTER,
+                    f"✅ تم جمع معلومات الغرفة. عدد المستخدمين: {len(usernames)}\n"
+                    f"📨 تم إرسال الدعوة العادية على الخاص إلى: {count} مستخدم."
+                )
+            except Exception as e:
+                self.log("[INV] final private result failed:", repr(e))
         finally:
             with self.invite_lock:
                 self.invite_pending = False
-                self.invite_silent_master = False
 
     def _cache_user_photos_from_result(self, result):
         """Cache Talkin profile photo URLs from any occupants/users response."""
@@ -2311,7 +2131,6 @@ class TalkinBot:
                 pass
             with self.invite_lock:
                 self.invite_pending = False
-                self.invite_silent_master = False
             return
 
         # Categorize exactly as the room settings list does.
@@ -2645,9 +2464,7 @@ class TalkinBot:
         self.send_room_text(room, "🎮✨ ألعاب البوت\n━━━━━━━━━━━━\n"
             "🎲 رهان@المبلغ — تحدي لاعب ضد لاعب، والفائز عشوائي.\n"
             "⚔️ مضاربة@المبلغ — مواجهة عشوائية عادلة، لا أفضلية للأول أو الثاني.\n"
-            "🍀 حظ — لعبة عشوائية مع البوت.\n"
-            "🎯 حظ@المبلغ — حظ عشوائي بمبلغ ضد البوت.\n"
-            "🎯 حظي@المبلغ — تحدي حظ لاعب ضد لاعب.\n"
+            "🍀 حظ أو حظ@المبلغ — لعبة يانصيب مع البوت.\n"
             "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليون — فرصة عشوائية للفوز بمليون نقطة.\n"
@@ -2657,109 +2474,69 @@ class TalkinBot:
     def _game_balance_ok(self, username, amount):
         return _is_master_name(username) or _get_points(username) >= int(amount)
 
-    def _reserved_stake(self, username, exclude_key=None):
-        key = _norm_user(username)
-        total = 0
-        with self.game_lock:
-            for k, waiting in self.wager_waiting.items():
-                if exclude_key is not None and k == exclude_key:
-                    continue
-                if _norm_user(waiting.get("user")) == key:
-                    total += int(waiting.get("stake", 0) or 0)
-        return total
-
-    def _cleanup_expired_wagers(self):
-        timeout = max(30, int(os.getenv("WAGER_TIMEOUT_SECONDS", "180")))
-        now = time.time()
-        expired = []
-        with self.game_lock:
-            for key, waiting in list(self.wager_waiting.items()):
-                if now - float(waiting.get("created", 0) or 0) >= timeout:
-                    expired.append((key, waiting))
-                    self.wager_waiting.pop(key, None)
-        for _, waiting in expired:
-            self.log("[GAME] expired wager", waiting.get("game"), waiting.get("user"))
-
     def _wager_result(self, first, second, stake, game_name):
-        # The winner is selected independently of arrival/order.
-        winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
-        if not _is_master_name(loser.get("user")):
-            _add_points(loser.get("user"), -stake)
-        if not _is_master_name(winner.get("user")):
-            _add_points(winner.get("user"), stake)
+        # The winner is selected independently of arrival/order using a
+        # cryptographically strong random source. The first player never has
+        # an advantage over the second player.
+        a, b = first, second
+        winner, loser = (a, b) if secrets.randbelow(2) == 0 else (b, a)
+        if _is_master_name(loser):
+            loser_balance = _get_points(loser)
+        else:
+            loser_balance = _add_points(loser, -stake)
+        winner_balance = self._game_award(winner.get("user"), stake)
         game_key = {
-            "رهان":"bet", "مراهنة":"bet", "مضاربة":"duel", "مضاربه":"duel",
+            "رهان":"bet", "مراهنة":"bet",
+            "مضاربة":"duel", "مضاربه":"duel",
             "استثمار":"investment", "حظي":"luck"
         }.get(game_name, game_name.casefold())
         _record_game(loser.get("user"), game_key, -stake, stake)
         _record_game(winner.get("user"), game_key, stake, stake)
-        text = _reply_template(
-            "wager_result",
-            DEFAULT_REPLY_MESSAGES["wager_result"],
-            game=game_name, p1=first["user"], p2=second["user"],
-            winner=winner["user"], loser=loser["user"], amount=_fmt_points(stake)
-        )
-        self.broadcast_all_rooms(text)
+        # Keep the public result clean: only the game + winner + loser.
+        text=(f"🎮 {game_name} 🎲\n"
+              f"🏆 الفائز: @{winner['user']}\n"
+              f"💔 الخاسر: @{loser['user']}")
+        rooms=[]
+        for r in (first.get("room"), second.get("room")):
+            if r and r not in rooms: rooms.append(r)
+        for r in rooms:
+            # Wager results are text-only as requested.
+            self.send_room_text(r, text)
 
     def _queue_wager(self, room, sender, game_name, amount):
-        try:
-            amount = int(amount)
+        try: amount=int(amount)
         except Exception:
-            return True
+            self.send_room_text(room, "❌ اكتب مبلغاً صحيحاً مثل: مراهنة@100"); return True
         if amount <= 0:
-            self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
-            return True
-        self._cleanup_expired_wagers()
-        key = game_name.casefold()
-        waiting = None
-        error = None
+            self.send_room_text(room, "❌ يجب أن يكون مبلغ الرهان أكبر من صفر."); return True
+        if not _is_master_name(sender) and not self._game_balance_ok(sender, amount):
+            self.send_room_text(room, f"❌ رصيدك غير كافٍ. رصيدك الحالي: {_fmt_points(_get_points(sender))}"); return True
+        key=game_name.casefold()
         with self.game_lock:
-            waiting = self.wager_waiting.get(key)
+            waiting=self.wager_waiting.get(key)
             if waiting and _norm_user(waiting["user"]) == _norm_user(sender):
-                return True
-            reserved = sum(
-                int(w.get("stake", 0) or 0) for k, w in self.wager_waiting.items()
-                if k != key and _norm_user(w.get("user")) == _norm_user(sender)
-            )
-            if not _is_master_name(sender):
-                balance = _get_points(sender)
-                if balance < amount + reserved:
-                    error = _reply_template("game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"], balance=_fmt_points(balance))
-            if error is None and waiting and int(waiting["stake"]) != amount:
-                # Never replace another player's open challenge with a different amount.
-                return True
-            if error is None and waiting:
+                self.send_room_text(room, "⏳ أنت في قائمة انتظار هذه اللعبة بالفعل."); return True
+            if waiting:
                 self.wager_waiting.pop(key, None)
-            elif error is None:
-                self.wager_waiting[key] = {
-                    "user": sender, "room": room, "stake": amount,
-                    "game": game_name, "created": time.time()
-                }
-        if error:
-            self.send_room_text(room, error)
+            else:
+                self.wager_waiting[key]={"user":sender,"room":room,"stake":amount,"game":game_name,"created":time.time()}
+                self.send_room_text(room, f"🔎 جاري البحث عن خصم للعبة {game_name} بمبلغ {_fmt_points(amount)} نقطة...")
+                return True
+        if int(waiting["stake"]) != amount:
+            self.send_room_text(room, f"⚠️ مبلغ الخصم يجب أن يساوي {_fmt_points(waiting['stake'])} نقطة.")
+            with self.game_lock: self.wager_waiting[key]=waiting
             return True
-        if waiting:
-            self._wager_result(
-                waiting,
-                {"user": sender, "room": room, "stake": amount, "game": game_name},
-                amount, game_name
-            )
+        if _norm_user(waiting["user"]) == _norm_user(sender): return True
+        # Recheck both balances at the exact moment of matching so a player
+        # cannot enter a wager and spend the same points before the round.
+        if not _is_master_name(waiting["user"]) and not self._game_balance_ok(waiting["user"], int(waiting["stake"])):
+            self.send_room_text(waiting["room"], "❌ تعذر بدء الجولة: رصيد اللاعب الأول لم يعد كافياً.")
             return True
-        game_labels = {
-            "رهان": ("رهان", "راهن", "رهان"),
-            "مراهنة": ("رهان", "راهن", "رهان"),
-            "مضاربة": ("مضاربة", "ضارب", "مضاربة"),
-            "مضاربه": ("مضاربة", "ضارب", "مضاربة"),
-            "استثمار": ("استثمار", "استثمر", "استثمار"),
-            "حظي": ("حظي", "راهن", "حظي"),
-        }
-        game_label, verb, command = game_labels.get(game_name, (game_name, "لاعب", game_name))
-        opening = _reply_template(
-            "wager_open", DEFAULT_REPLY_MESSAGES["wager_open"],
-            game_label=game_label, verb=verb, command=command,
-            username=sender, amount=_fmt_points(amount)
-        )
-        self.broadcast_all_rooms(opening)
+        if not _is_master_name(sender) and not self._game_balance_ok(sender, amount):
+            self.send_room_text(room, "❌ تعذر بدء الجولة: رصيدك لم يعد كافياً.")
+            with self.game_lock: self.wager_waiting[game_name.casefold()]=waiting
+            return True
+        self._wager_result(waiting, {"user":sender,"room":room,"stake":amount,"game":game_name}, amount, game_name)
         return True
 
     def _fruit_match(self, room, sender, emoji):
@@ -2867,47 +2644,40 @@ class TalkinBot:
         return True
 
     def _lottery_game(self, room, sender, amount=0):
-        amount = int(amount or 0)
+        amount=int(amount or 0)
         if amount < 0:
             self.send_room_text(room, "❌ المبلغ غير صحيح.")
             return True
-        with self.game_lock:
-            if amount and not _is_master_name(sender):
-                balance_before = _get_points(sender)
-                if balance_before < amount:
-                    self.send_room_text(room, f"❌ رصيدك غير كافٍ. رصيدك: {_fmt_points(balance_before)}")
-                    return True
-                # The stake is charged exactly once before the random draw.
-                _add_points(sender, -amount)
-            # Cryptographically strong random draw; the amount is never used as
-            # the random seed and cannot force a matching payout.
-            roll = secrets.randbelow(1000) + 1
-            if roll <= 60:
-                multiplier = 5
-            elif roll <= 180:
-                multiplier = 3
-            elif roll <= 400:
-                multiplier = 2
-            elif roll <= 650:
-                multiplier = 1
-            else:
-                multiplier = 0
-            reward = amount * multiplier if amount else secrets.choice((10, 20, 30, 50, 100))
-            if reward:
-                balance = self._game_award(sender, reward)
-                result = f"🎉 ربحت: +{_fmt_points(reward)} نقطة"
-            else:
-                balance = _get_points(sender)
-                result = "🍀 هذه الجولة لم تكن رابحة."
-            delta = reward - amount if amount else reward
-            _record_game(sender, "luck_free" if not amount else "luck", delta, amount)
-        text = _reply_template(
-            "luck_result", DEFAULT_REPLY_MESSAGES["luck_result"],
-            username=sender, result=result, amount=_fmt_points(amount),
-            delta=("+" if delta >= 0 else "") + _fmt_points(delta),
-            balance=_fmt_points(balance)
-        )
-        self.send_room_text(room, text)
+        if amount and not self._game_balance_ok(sender, amount):
+            self.send_room_text(room, f"❌ رصيدك غير كافٍ. رصيدك: {_fmt_points(_get_points(sender))}")
+            return True
+        if amount and not _is_master_name(sender):
+            _add_points(sender, -amount)
+        # Real lottery-style randomness; neither command order nor timing
+        # determines the result.
+        roll=secrets.randbelow(1000)+1
+        if roll <= 80:
+            multiplier=5
+        elif roll <= 220:
+            multiplier=3
+        elif roll <= 500:
+            multiplier=2
+        elif roll <= 800:
+            multiplier=1
+        else:
+            multiplier=0
+        reward=amount*multiplier if amount else secrets.choice((10,20,30,50,100))
+        if reward:
+            balance=self._game_award(sender,reward)
+            result=f"🎉 ربحك: +{_fmt_points(reward)} نقطة"
+        else:
+            balance=_get_points(sender)
+            result="🍀 هذه الجولة لم تكن رابحة."
+        _record_game(sender,"luck_free" if not amount else "luck", reward-amount if amount else reward, amount)
+        self.send_room_text(room,
+            f"🍀✨ لعبة الحظ\n━━━━━━━━━━━━\n"
+            f"👤 اللاعب: @{sender}\n{result}\n"
+            f"💰 الرصيد: {_fmt_points(balance)}")
         return True
 
     def _investment_bot_game(self, room, sender):
@@ -2948,7 +2718,7 @@ class TalkinBot:
             return self._fruit_match(room, sender_name, m.group(1).strip() if m else "")
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.
-        m=re.fullmatch(r"(مراهنة|رهان|مضاربة|مضاربه|حظي)@([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"(مراهنة|رهان|مضاربة|مضاربه)@([0-9]+)", raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, m.group(1), int(m.group(2)))
         # Investment with a stake is PvP, exactly like the wager games.
@@ -3007,16 +2777,6 @@ class TalkinBot:
             self._send_help_chunks("room_message", text, room=room)
 
     def _handle_management_command(self, room, body, sender, is_private=False):
-        # Master/admin commands execute silently: no private acknowledgement and
-        # no public command-result message. The action itself still executes.
-        old = getattr(self._silent_master_local, "active", False)
-        self._silent_master_local.active = _is_master_name(sender)
-        try:
-            return self._handle_management_command_impl(room, body, sender, is_private=is_private)
-        finally:
-            self._silent_master_local.active = old
-
-    def _handle_management_command_impl(self, room, body, sender, is_private=False):
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
         low=text.casefold()
@@ -3073,39 +2833,6 @@ class TalkinBot:
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
-        # Word-filter controls are master-only and persist in moderation.json.
-        if low == "mf@on" or low == "mf@off" or low.startswith("+mf@") or low.startswith("-mf@") or low == "l@mf" or low == "clear@mf":
-            if not _is_master_name(sender):
-                return True
-            if low == "mf@on":
-                self.moderation_enabled = True
-                _save_moderation_config(True, sorted(self.banned_words))
-                return True
-            if low == "mf@off":
-                self.moderation_enabled = False
-                _save_moderation_config(False, sorted(self.banned_words))
-                return True
-            if low.startswith("+mf@"):
-                word = text[4:].strip()
-                if word:
-                    self.banned_words.add(word)
-                    _save_moderation_config(self.moderation_enabled, sorted(self.banned_words))
-                return True
-            if low.startswith("-mf@"):
-                word = text[4:].strip()
-                target_norm = _norm_filter_text(word)
-                self.banned_words = {w for w in self.banned_words if _norm_filter_text(w) != target_norm}
-                _save_moderation_config(self.moderation_enabled, sorted(self.banned_words))
-                return True
-            if low == "clear@mf":
-                self.banned_words.clear()
-                _save_moderation_config(self.moderation_enabled, [])
-                return True
-            if low == "l@mf":
-                # Deliberately silent for master commands; list is available in moderation.json.
-                self.log("[FILTER] words=", sorted(self.banned_words))
-                return True
-
         # Joining a room is intentionally available to verified and unverified users.
         if low.startswith(("دخول ", "join ", "ادخل ", "enter ")):
             parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
@@ -3123,7 +2850,8 @@ class TalkinBot:
             if not _is_master_name(sender):
                 balance = _get_points(sender)
                 if balance < amount:
-                            return True
+                    self.send_private_text(sender, f"❌ رصيدك غير كافٍ. رصيدك الحالي: {_fmt_points(balance)}")
+                    return True
                 _add_points(sender, -amount)
             new = _add_points(target, amount)
             self.send_private_text(sender, f"✅ تم تحويل {_fmt_points(amount)} نقطة إلى @{target}. رصيدك: {_fmt_points(_get_points(sender))}")
@@ -3134,7 +2862,7 @@ class TalkinBot:
         # VIP users may publish images; the actual image is handled by _handle_publish_media.
         if (low == "انشر" or low.startswith("انشر@")) and _is_vip_user(sender):
             desc=text[5:].strip() if low.startswith("انشر@") else ""
-            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":_is_master_name(sender)}
+            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time()}
             self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
             return True
 
@@ -3166,7 +2894,7 @@ class TalkinBot:
             for username in users.values():
                 _add_points(username, amount)
                 self.send_private_text(username, f"💰 إشعار تحويل جماعي: استلمت {_fmt_points(amount)} نقطة من الماستر @{sender}. رصيدك الحالي: {_fmt_points(_get_points(username))}")
-            return True
+            self.send_private_text(sender, f"✅ تم تحويل {_fmt_points(amount)} نقطة لكل المستخدمين الموجودين حالياً في {len(active_rooms)} غرفة. العدد: {len(users)} مستخدم.")
             return True
         # Master commands are accepted from both private chat and rooms.
         # Room moderation acts on the room where the command was received.
@@ -3193,23 +2921,23 @@ class TalkinBot:
                 data[_norm_user(username)] = {"username": username, "verified_by": sender, "created_at": now}
             _save_local_json(VERIFIED_FILE, data)
             for username in users.values():
-                pass
-            return True
+                self.send_private_text(username, f"✅ نجح التوثيق. تم توثيق حسابك من قبل @{sender}.")
+            self.send_private_text(sender, f"✅ اكتمل توثيق الكل. تم توثيق {len(users)} مستخدم في {len(active_rooms)} غرفة.")
             return True
         # Add/remove master. Only the owner from BOT_MASTER may alter master list.
         if low.startswith("mas@"):
             if _norm_user(sender) != _norm_user(BOT_MASTER):
-                self.log("[MASTER] add-master denied", sender); return True
+                self.send_private_text(sender,"🚫 إضافة الماسترز متاحة لصاحب البوت فقط."); return True
             target=text[4:].strip().lstrip("@");
-            if not target: self.log("[MASTER] invalid mas@", sender); return True
+            if not target: self.send_private_text(sender,"❌ الصيغة: mas@اسم المستخدم"); return True
             masters=_master_list()
             if not any(_norm_user(x)==_norm_user(target) for x in masters): masters.append(target); _save_local_json(MASTERS_FILE,masters)
-            return True
+            self.send_private_text(sender,f"✅ تم إضافة @{target} كماستر متحكم بالبوت."); return True
         if low.startswith("umas@") or low.startswith("umas "):
             if _norm_user(sender) != _norm_user(BOT_MASTER):
-                self.log("[MASTER] remove-master denied", sender); return True
+                self.send_private_text(sender,"🚫 إزالة الماسترز متاحة لصاحب البوت فقط."); return True
             target=text[5:].strip().lstrip("@"); masters=[x for x in _master_list() if _norm_user(x)!=_norm_user(target)]; _save_local_json(MASTERS_FILE,masters)
-            return True
+            self.send_private_text(sender,f"✅ تم إزالة @{target} من الماسترز."); return True
         if low.startswith("sb@"):
             if not _is_master_name(sender):
                 self.send_private_text(sender,"🚫 أمر النقاط للماستر فقط."); return True
@@ -3217,26 +2945,30 @@ class TalkinBot:
             if not m: self.send_private_text(sender,"❌ الصيغة: sb@اسم المستخدم@عدد النقاط"); return True
             target,amount=m.group(1).strip(),int(m.group(2)); new=_add_points(target,amount)
             action = "تحويل" if amount >= 0 else "خصم"
-            return True
+            self.send_private_text(sender,f"✅ تم {action} نقاط @{target} بمقدار {_fmt_points(abs(amount))}. الرصيد: {_fmt_points(new)}")
+            if _norm_user(target) != _norm_user(sender):
+                self.send_private_text(target, f"💰 إشعار النقاط: تم {action} {_fmt_points(abs(amount))} نقطة لحسابك بواسطة @{sender}. رصيدك الحالي: {_fmt_points(new)}")
             return True
         if low.startswith("vi@"):
             target=text[2:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: vi@اسم المستخدم"); return True
             data=_verified_data(); data[_norm_user(target)]={"username":target,"verified_by":sender,"created_at":int(time.time())}; _save_local_json(VERIFIED_FILE,data)
-            return True
+            self.send_private_text(sender,f"✅ تم توثيق @{target} لاستخدام البوت.")
+            if _norm_user(target) != _norm_user(sender):
+                self.send_private_text(target, f"✅ تم توثيق حسابك لاستخدام البوت بواسطة @{sender}.")
             return True
         if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
             prefix="uns@" if low.startswith("uns@") else text.split("@",1)[0]+"@"
             target=text[len(prefix):].strip().lstrip("@"); data=_verified_data(); data.pop(_norm_user(target),None); _save_local_json(VERIFIED_FILE,data)
-            return True
+            self.send_private_text(sender,f"✅ تم إزالة توثيق @{target}."); return True
         if low.startswith("vip@"):
             target=text[4:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: Vip@اسم المستخدم"); return True
             data=_vip_data(); data[_norm_user(target)]={"username":target,"granted_by":sender,"created_at":int(time.time())}; _save_local_json(VIP_FILE,data)
-            return True
+            self.send_private_text(sender,f"✅ تم توثيق VIP @{target}."); return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
             target=text[text.casefold().find("vip@")+4:].strip().lstrip("@"); data=_vip_data(); data.pop(_norm_user(target),None); _save_local_json(VIP_FILE,data)
-            return True
+            self.send_private_text(sender,f"✅ تم إزالة VIP @{target}."); return True
         # Room/admin commands accepted in both room and private master chat.
         m=re.match(r"^(k@|kick\s+)(@?[^\s]+)$", text, re.I)
         if m:
@@ -3307,8 +3039,8 @@ class TalkinBot:
             parts=text.split(None,1); target_room=parts[1].strip() if len(parts)==2 else room
             if not target_room:
                 self.send_private_text(sender,"❌ استخدم: inv اسم_الغرفة"); return True
-            self.request_occupants(target_room, silent_master=True)
-            return True
+            self.request_occupants(target_room)
+            self.send_private_text(sender,f"📨 بدأت دعوات المستخدمين في: {target_room}"); return True
         m_single_invite = re.fullmatch(r"i@(.+)", text.strip(), re.I)
         if m_single_invite:
             target = m_single_invite.group(1).strip().lstrip("@")
@@ -3363,7 +3095,7 @@ class TalkinBot:
             # The image may be sent later in a room or in private chat.
             # Key the pending publish by sender, not by the command room, so
             # sending the image from another room still completes the publish.
-            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":_is_master_name(sender)}
+            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time()}
             self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
             return True
         return False
@@ -3377,7 +3109,6 @@ class TalkinBot:
             self.publish_pending.pop(key,None); self.send_private_text(sender,"⌛ انتهت مهلة النشر، أرسل أمر انشر من جديد."); return True
         desc=pending.get("description",description or "")
         source_room=str(pending.get("source_room") or room or "")
-        silent_publish=bool(pending.get("silent"))
         self.publish_pending.pop(key,None)
         rooms=set(self.known_rooms)
         if self.room:
@@ -3413,11 +3144,10 @@ class TalkinBot:
             except Exception as e:
                 errors.append((target,str(e)))
                 self.log("[PUBLISH] failed",target,repr(e))
-        # Master publish commands may be silent; public publication itself remains active.
-        if not silent_publish:
-            self.send_private_text(sender,f"✅ تم نشر الصورة في {ok} غرفة." + (f"\n❌ أخطاء: {len(errors)}" if errors else ""))
-            if errors:
-                self.send_private_text(sender, "❌ أخطاء النشر: " + " | ".join(f"{r}: {e[:60]}" for r,e in errors))
+        # Never announce a successful publish in the room; tell the master in PM.
+        self.send_private_text(sender,f"✅ تم نشر الصورة في {ok} غرفة." + (f"\n❌ أخطاء: {len(errors)}" if errors else ""))
+        if errors:
+            self.send_private_text(sender, "❌ أخطاء النشر: " + " | ".join(f"{r}: {e[:60]}" for r,e in errors))
         return True
 
     def handle_room_event(self, result):
@@ -3473,7 +3203,8 @@ class TalkinBot:
                     }
                     # The command already reports success immediately. Keep the
                     # native event only for state synchronization and logging.
-                    # Keep master moderation silent; confirmation is logged only.
+                    if not pending.get("announced"):
+                        self.send_room_text(room, labels.get(changed_role, f"✅ أكد الخادم تغيير دور @{changed_user} إلى {changed_role}."))
                     self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
@@ -3513,19 +3244,6 @@ class TalkinBot:
             return
         if frm == BOT_ID:
             return
-
-        # Word filter runs before games/normal commands. It uses the same native
-        # room ban operation as b@, with Arabic normalization and no public reply.
-        if self.moderation_enabled and self.banned_words and not _is_master_name(frm):
-            normalized_body = _norm_filter_text(body)
-            hit = next((w for w in self.banned_words if _norm_filter_text(w) and _norm_filter_text(w) in normalized_body), None)
-            if hit:
-                try:
-                    self.send_admin(room, frm, "ban")
-                    self.log("[WORD-FILTER] native room ban", frm, "word=", hit, "room=", room)
-                except Exception as exc:
-                    self.log("[WORD-FILTER] failed:", repr(exc))
-                return
 
         # Reactions/comments/reports: notify the original publisher privately.
         reaction=re.match(r"^(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?$", body.strip(), re.I)
@@ -3580,6 +3298,19 @@ class TalkinBot:
 
         if self.handle_game_command(room, body, frm):
             return
+
+        # Optional automatic word filter. It uses the same room ban operation
+        # already implemented for manual `b@` commands. Enable explicitly in .env.
+        if AUTO_BAN_WORDS and self.banned_words:
+            low = body.casefold()
+            hit = next((w for w in self.banned_words if w.casefold() in low), None)
+            if hit:
+                try:
+                    self.send_admin(room, frm, "ban")
+                    self.log("[WORD-FILTER] banned", frm, "word=", hit)
+                except Exception as e:
+                    self.log("[WORD-FILTER] failed:", repr(e))
+                return
 
         if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
             self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، دخول اسم_الغرفة، خروج [اسم_الغرفة]، inv، invmsg نص الدعوة لدعوة مستخدمي الغرفة")
@@ -3638,7 +3369,7 @@ class TalkinBot:
                         arg = parts[1].strip() if len(parts) == 2 else ""
                         if cmd in ("inv", "دعوات", "invite"):
                             target_room = arg if arg else ctx_room
-                            self.request_occupants(target_room, silent_master=True)
+                            self.request_occupants(target_room)
                         elif cmd in ("دخول", "join", "ادخل", "enter") and arg:
                             target_room = arg
                             self.join_room(target_room)
