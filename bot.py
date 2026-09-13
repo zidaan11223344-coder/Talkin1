@@ -44,42 +44,6 @@ try:
 except Exception:
     Image = ImageDraw = ImageFont = None
     PIL_AVAILABLE = False
-
-
-def _fit_contain(im, size, background=(0, 0, 0, 0)):
-    """Resize an image to fit completely inside size without cropping."""
-    if not PIL_AVAILABLE:
-        raise RuntimeError("Pillow غير مثبت")
-    tw, th = int(size[0]), int(size[1])
-    if tw <= 0 or th <= 0:
-        raise ValueError("حجم الصورة غير صالح")
-    src = im.convert("RGBA")
-    scale = min(tw / src.width, th / src.height)
-    nw = max(1, int(round(src.width * scale)))
-    nh = max(1, int(round(src.height * scale)))
-    src = src.resize((nw, nh), Image.LANCZOS)
-    canvas = Image.new("RGBA", (tw, th), background)
-    x = (tw - nw) // 2
-    y = (th - nh) // 2
-    canvas.alpha_composite(src, (x, y))
-    return canvas
-
-
-def _fit_crop(im, size):
-    """Resize an image to fill size and crop the excess."""
-    if not PIL_AVAILABLE:
-        raise RuntimeError("Pillow غير مثبت")
-    tw, th = int(size[0]), int(size[1])
-    if tw <= 0 or th <= 0:
-        raise ValueError("حجم القص غير صالح")
-    im = im.convert("RGB")
-    scale = max(tw / im.width, th / im.height)
-    nw = max(tw, int(round(im.width * scale)))
-    nh = max(th, int(round(im.height * scale)))
-    im = im.resize((nw, nh), Image.LANCZOS)
-    left = max(0, (nw - tw) // 2)
-    top = max(0, (nh - th) // 2)
-    return im.crop((left, top, left + tw, top + th))
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -1095,6 +1059,9 @@ def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=2, stroke_fill
         except Exception: x += font.getlength(run)
     return x
 
+def _fit_crop(im,size):
+    im=im.convert("RGB"); tw,th=size; scale=max(tw/im.width,th/im.height); nw,nh=max(tw,int(im.width*scale)),max(th,int(im.height*scale)); im=im.resize((nw,nh),Image.LANCZOS); left=max(0,(nw-tw)//2); top=max(0,(nh-th)//2); return im.crop((left,top,left+tw,top+th))
+
 def _draw_centered(draw,center,raw_text,size,fill,max_width):
     size=int(size)
     # Measure using the actual mixed-font renderer; shrink until it fits.
@@ -1136,63 +1103,62 @@ def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
 def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
-    """Draw Talkin username exactly as received, preserving Arabic + symbols.
+    """Render a Talkin username in its natural visual direction.
 
-    The previous version used NotoSansArabic for the whole username. That font
-    does not contain several decorative Unicode characters (for example chess
-    pieces), so Pillow displayed tofu boxes.  Here Arabic is shaped by Raqm
-    while unsupported symbols are taken from fallback fonts.  The original
-    Unicode string is never reversed, translated, stripped, or transliterated.
+    IMPORTANT: ``raw_text`` is the logical Unicode string received from Talkin.
+    We do NOT reverse the string ourselves and we do not run bidi separately on
+    each font run.  First the COMPLETE string is shaped/reordered once with the
+    Unicode Arabic shaper + bidi algorithm; only then do we split the resulting
+    visual string into font runs.  This keeps decorations such as 𓆩♛𓆪, tatweel,
+    Arabic combining marks and musical symbols in the same order as the chat.
     """
     text = str(raw_text if raw_text is not None else "")
     if not text:
         return
 
-    base = _gift_font(text, int(size))
-    fallbacks = _fallback_fonts(int(size))
+    # One bidi pass over the complete username.  This is the key fix for the
+    # previous version, which drew independent Arabic runs and made the name
+    # appear backwards.  The logical source string itself is never modified.
+    visual = text
+    if arabic_reshaper is not None and get_display is not None:
+        try:
+            visual = get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            visual = text
 
     def choose(ch, sz):
-        # Do not let NotoSansArabic claim Latin characters: some versions
-        # expose a fallback/tofu glyph for Latin, which produced the squares
-        # seen in the user's screenshot for names such as al-sfeer.
-        if _has_arabic(ch):
-            b = _gift_font(text, sz)
-            if _font_has_glyph(b, ch):
-                return b
-        # ASCII/Latin usernames must use a Latin font.
-        if ch.isascii() and (ch.isalnum() or ch in " ._@-+()[]{}!#$%&*,:;/?=\\|~'"):
-            for f in _fallback_fonts(sz):
-                try:
-                    if 'DejaVuSans' in str(getattr(f, 'path', '')) and _font_has_glyph(f, ch):
-                        return f
-                except Exception:
-                    pass
+        base = _gift_font(visual, sz)
+        if _font_has_glyph(base, ch):
+            return base
         for f in _fallback_fonts(sz):
             if _font_has_glyph(f, ch):
                 return f
-        return _gift_font(text, sz)
+        return base
 
     def make_runs(sz):
-        runs=[]; cur_font=None; cur=[]
-        for ch in text:
-            f=choose(ch, sz)
+        runs = []
+        cur_font = None
+        cur = []
+        for ch in visual:
+            f = choose(ch, sz)
+            # Keep combining marks attached to the previous run when possible;
+            # otherwise they can be separated from their base glyph.
             if cur_font is None or f.path == cur_font.path:
                 cur.append(ch)
             else:
-                runs.append((cur_font, ''.join(cur))); cur=[ch]
-            cur_font=f
+                runs.append((cur_font, ''.join(cur)))
+                cur = [ch]
+            cur_font = f
         if cur:
             runs.append((cur_font, ''.join(cur)))
         return runs
 
     def run_width(font, run):
         try:
-            # Let libraqm perform normal bidi/shaping for each Arabic run.
             return draw.textlength(run, font=font)
         except Exception:
             return font.getlength(run)
 
-    # Find a size that fits the rectangle.
     sz = int(size)
     while sz > 14:
         runs = make_runs(sz)
@@ -1200,37 +1166,33 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
         if width <= max_width:
             break
         sz -= 2
+
     runs = make_runs(sz)
     width = sum(run_width(font, run) for font, run in runs)
-
-    # Build a transparent text strip. Arabic runs use RTL shaping; symbol and
-    # Latin runs use their fallback font. This avoids tofu boxes while keeping
-    # the Talkin username's exact characters and natural visual ordering.
     strip_w = max(1, int(width + sz * 2))
     strip_h = max(1, int(sz * 1.8))
-    strip = Image.new('RGBA', (strip_w, strip_h), (0,0,0,0))
+    strip = Image.new('RGBA', (strip_w, strip_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(strip)
+
     x = sz
     for font, run in runs:
-        is_ar = _has_arabic(run)
         try:
-            bbox = sd.textbbox((0,0), run, font=font,
-                               direction='rtl' if is_ar else 'ltr')
-            rw = bbox[2]-bbox[0]
+            rw = sd.textlength(run, font=font)
         except Exception:
-            rw = run_width(font, run)
+            rw = font.getlength(run)
         y = (strip_h - sz) // 2
+        # ``visual`` is already in display order, so draw every run LTR.
+        # Applying direction='rtl' here would reverse the name a second time.
         try:
             sd.text((x, y), run, font=font, fill=fill,
-                    stroke_width=1, stroke_fill=(0,0,0,170),
-                    direction='rtl' if is_ar else 'ltr')
+                    stroke_width=1, stroke_fill=(0, 0, 0, 170), direction='ltr')
         except Exception:
             sd.text((x, y), run, font=font, fill=fill,
-                    stroke_width=1, stroke_fill=(0,0,0,170))
+                    stroke_width=1, stroke_fill=(0, 0, 0, 170))
         x += rw
 
-    px = int(center[0] - strip.width/2)
-    py = int(center[1] - strip.height/2)
+    px = int(center[0] - strip.width / 2)
+    py = int(center[1] - strip.height / 2)
     draw._image.alpha_composite(strip, (px, py))
 
 def _visual_runs(text, size):
@@ -1305,10 +1267,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url=""):
     # public Talkin profile photo is available.
     template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
     template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
-    # Keep the complete gift artwork visible. Unlike the avatar crop, the gift
-    # artwork must never be cropped or enlarged beyond its original aspect ratio.
-    # It is contained inside the template canvas with transparent padding.
-    image=_fit_contain(Image.open(random.choice(files)),template.size)
+    image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA")
     image.alpha_composite(template)
     d=ImageDraw.Draw(image); w,h=template.size
     gold=(244,196,92,255); panel=(10,14,28,245)
