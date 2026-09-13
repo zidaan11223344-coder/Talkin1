@@ -2015,7 +2015,7 @@ class TalkinBot:
             )
         raise ValueError("Unknown admin operation: " + operation)
 
-    def request_admin_action(self, room: str, target: str, operation: str, requester: str):
+    def request_admin_action(self, room: str, target: str, operation: str, requester: str, announce_room: bool = False):
         """Send moderation request and report success only after server confirmation."""
         role_by_operation = {
             "kick": "kicked", "ban": "outcast", "member": "member",
@@ -2039,6 +2039,7 @@ class TalkinBot:
             self.pending_admin_actions[key] = {
                 "room": room, "target": target, "role": expected_role,
                 "requester": requester, "created_at": time.time(), "announced": False,
+                "announce_room": bool(announce_room),
             }
         labels = {
             "kicked": "طرد",
@@ -2078,7 +2079,20 @@ class TalkinBot:
         preserves every character while keeping each packet below the safe
         room/server limit.
         """
-        if getattr(self._master_reply_local, "tracking", False):
+        tracking = getattr(self._master_reply_local, "tracking", False)
+        # Management responses addressed to the master follow the channel
+        # where the command arrived: room command -> room reply, private
+        # command -> private reply. Notifications addressed to other users
+        # remain private and are not rerouted.
+        if (tracking and not getattr(self._master_reply_local, "command_private", True)
+                and _norm_user(username) == _norm_user(getattr(self._master_reply_local, "command_sender", ""))
+                and not getattr(self._master_reply_local, "rerouting", False)):
+            self._master_reply_local.rerouting = True
+            try:
+                return self.send_room_text(getattr(self._master_reply_local, "command_room", ""), text)
+            finally:
+                self._master_reply_local.rerouting = False
+        if tracking:
             self._master_reply_local.replied = True
             self._master_reply_local.private_replied = True
         if getattr(self._silent_master_local, "active", False):
@@ -3099,18 +3113,30 @@ class TalkinBot:
         old_tracking = getattr(self._master_reply_local, "tracking", False)
         old_replied = getattr(self._master_reply_local, "replied", False)
         old_private_replied = getattr(self._master_reply_local, "private_replied", False)
+        old_command_private = getattr(self._master_reply_local, "command_private", True)
+        old_command_sender = getattr(self._master_reply_local, "command_sender", "")
+        old_command_room = getattr(self._master_reply_local, "command_room", "")
         self._master_reply_local.tracking = True
         self._master_reply_local.replied = False
         self._master_reply_local.private_replied = False
+        self._master_reply_local.command_private = bool(is_private)
+        self._master_reply_local.command_sender = sender
+        self._master_reply_local.command_room = room
         try:
             handled = self._handle_management_command_impl(room, body, sender, is_private=is_private)
-            if handled and _is_master_name(sender) and not self._master_reply_local.private_replied:
-                self.send_private_text(sender, f"✅ تم تنفيذ الأمر: {str(body or '').strip()}")
+            if handled and _is_master_name(sender):
+                if is_private and not self._master_reply_local.private_replied:
+                    self.send_private_text(sender, f"✅ تم تنفيذ الأمر: {str(body or '').strip()}")
+                elif not is_private and not self._master_reply_local.replied:
+                    self.send_room_text(room, f"✅ تم تنفيذ الأمر: {str(body or '').strip()}")
             return handled
         finally:
             self._master_reply_local.tracking = old_tracking
             self._master_reply_local.replied = old_replied
             self._master_reply_local.private_replied = old_private_replied
+            self._master_reply_local.command_private = old_command_private
+            self._master_reply_local.command_sender = old_command_sender
+            self._master_reply_local.command_room = old_command_room
 
     def _handle_management_command_impl(self, room, body, sender, is_private=False):
         """Giant-style persistent management commands. Returns True if consumed."""
@@ -3358,7 +3384,7 @@ class TalkinBot:
             if not active_rooms:
                 self.send_private_text(sender,"❌ البوت غير موجود في أي غرفة حالياً."); return True
             for active_room in sorted(active_rooms):
-                self.request_admin_action(active_room,target,"ban",sender)
+                self.request_admin_action(active_room,target,"ban",sender,announce_room=True)
             return True
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
@@ -3568,6 +3594,8 @@ class TalkinBot:
                         "admin": f"✅ أكد الخادم ترقية @{changed_user} إلى مشرف في الغرفة {room}.",
                         "owner": f"✅ أكد الخادم ترقية @{changed_user} إلى مالك في الغرفة {room}.",
                     }
+                    if pending.get("announce_room") and changed_role == "outcast":
+                        self.send_room_text(room, f"🚫 @{changed_user} تم حظره للإساءة.")
                     # The command already reports success immediately. Keep the
                     # native event only for state synchronization and logging.
                     # Keep master moderation silent; confirmation is logged only.
