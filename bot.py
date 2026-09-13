@@ -1261,11 +1261,15 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
     # real fallback fonts. This avoids tofu squares without reversing twice.
     if _has_arabic(raw_text) and arabic_reshaper is not None and get_display is not None:
         try:
-            visual = get_display(arabic_reshaper.reshape(raw_text), base_dir="R")
+            # Keep the logical string and lay out its font runs from the
+            # right edge to the left.  Using get_display here reverses the
+            # already RTL name once more for mixed decorative usernames.
+            logical = raw_text
         except Exception:
-            visual = raw_text
+            logical = raw_text
     else:
-        visual = raw_text
+        logical = raw_text
+    visual = logical
     if not visual:
         return xy[0]
     base=_gift_font(visual,int(size))
@@ -1293,6 +1297,31 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
         cur_font=font; prev_font=font
     if cur:
         runs.append((cur_font,''.join(cur)))
+
+    # Mixed decorative names need RTL run placement. Arabic runs are shaped
+    # natively by Raqm; symbol runs use their fallback font and retain order.
+    if _has_arabic(raw_text) and native_rtl:
+        y = xy[1]
+        widths=[]
+        for font,run in runs:
+            try:
+                direction = "rtl" if _has_arabic(run) else "ltr"
+                width = draw.textlength(run, font=font, direction=direction, language="ar" if direction == "rtl" else None)
+            except Exception:
+                width = font.getlength(run)
+            widths.append(width)
+        x_right = xy[0] + sum(widths)
+        for (font,run), width in reversed(list(zip(runs, widths))):
+            x_right -= width
+            direction = "rtl" if _has_arabic(run) else "ltr"
+            try:
+                draw.text((x_right,y),run,font=font,fill=fill,stroke_width=stroke_width,
+                          stroke_fill=stroke_fill,direction=direction,
+                          language="ar" if direction == "rtl" else None)
+            except Exception:
+                draw.text((x_right,y),run,font=font,fill=fill,stroke_width=stroke_width,
+                          stroke_fill=stroke_fill)
+        return xy[0] + sum(widths)
 
     x,y=xy
     for font,run in runs:
@@ -1585,6 +1614,7 @@ class TalkinBot:
         self.ws = None
         self.stop_event = threading.Event()
         self._silent_master_local = threading.local()
+        self._master_reply_local = threading.local()
         self.http = requests.Session()
         self.port = DEFAULT_PORT
         self.room = GROUP_TO_JOIN
@@ -1914,6 +1944,8 @@ class TalkinBot:
         return sent
 
     def send_room_text(self, room: str, text: str):
+        if getattr(self._master_reply_local, "tracking", False):
+            self._master_reply_local.replied = True
         if getattr(self._silent_master_local, "active", False):
             return True
         return self._send_text_packets("room_message", text, room=room)
@@ -2046,6 +2078,9 @@ class TalkinBot:
         preserves every character while keeping each packet below the safe
         room/server limit.
         """
+        if getattr(self._master_reply_local, "tracking", False):
+            self._master_reply_local.replied = True
+            self._master_reply_local.private_replied = True
         if getattr(self._silent_master_local, "active", False):
             return True
         username = str(username or "").strip()
@@ -3061,7 +3096,21 @@ class TalkinBot:
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
         if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)):
             return False
-        return self._handle_management_command_impl(room, body, sender, is_private=is_private)
+        old_tracking = getattr(self._master_reply_local, "tracking", False)
+        old_replied = getattr(self._master_reply_local, "replied", False)
+        old_private_replied = getattr(self._master_reply_local, "private_replied", False)
+        self._master_reply_local.tracking = True
+        self._master_reply_local.replied = False
+        self._master_reply_local.private_replied = False
+        try:
+            handled = self._handle_management_command_impl(room, body, sender, is_private=is_private)
+            if handled and _is_master_name(sender) and not self._master_reply_local.private_replied:
+                self.send_private_text(sender, f"✅ تم تنفيذ الأمر: {str(body or '').strip()}")
+            return handled
+        finally:
+            self._master_reply_local.tracking = old_tracking
+            self._master_reply_local.replied = old_replied
+            self._master_reply_local.private_replied = old_private_replied
 
     def _handle_management_command_impl(self, room, body, sender, is_private=False):
         """Giant-style persistent management commands. Returns True if consumed."""
@@ -3239,9 +3288,7 @@ class TalkinBot:
             for username in users.values():
                 data[_norm_user(username)] = {"username": username, "verified_by": sender, "created_at": now}
             _save_local_json(VERIFIED_FILE, data)
-            for username in users.values():
-                pass
-            return True
+            self.send_private_text(sender, f"✅ تم توثيق {len(users)} مستخدم.")
             return True
         # Add/remove master. Only the owner from BOT_MASTER may alter master list.
         if low.startswith("mas@"):
@@ -3270,19 +3317,22 @@ class TalkinBot:
             target=text[2:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: vi@اسم المستخدم"); return True
             data=_verified_data(); data[_norm_user(target)]={"username":target,"verified_by":sender,"created_at":int(time.time())}; _save_local_json(VERIFIED_FILE,data)
-            return True
+            self.send_private_text(sender, f"✅ تم توثيق @{target}.")
             return True
         if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
             prefix="uns@" if low.startswith("uns@") else text.split("@",1)[0]+"@"
             target=text[len(prefix):].strip().lstrip("@"); data=_verified_data(); data.pop(_norm_user(target),None); _save_local_json(VERIFIED_FILE,data)
+            self.send_private_text(sender, f"✅ تم إلغاء توثيق @{target}.")
             return True
         if low.startswith("vip@"):
             target=text[4:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: Vip@اسم المستخدم"); return True
             data=_vip_data(); data[_norm_user(target)]={"username":target,"granted_by":sender,"created_at":int(time.time())}; _save_local_json(VIP_FILE,data)
+            self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
             target=text[text.casefold().find("vip@")+4:].strip().lstrip("@"); data=_vip_data(); data.pop(_norm_user(target),None); _save_local_json(VIP_FILE,data)
+            self.send_private_text(sender, f"✅ تم إلغاء VIP عن @{target}.")
             return True
         # Room/admin commands accepted in both room and private master chat.
         m=re.match(r"^(k@|kick\s+)(@?[^\s]+)$", text, re.I)
