@@ -995,6 +995,7 @@ _GITHUB_RESTORING = False
 _GITHUB_PENDING = {}
 _GITHUB_PENDING_CONDITION = threading.Condition()
 _GITHUB_WORKER_STARTED = False
+_GITHUB_BACKUP_REQUESTS = []
 
 def _github_url(path):
     from urllib.parse import quote
@@ -1134,6 +1135,30 @@ def _github_sync_after_local_save(path, data):
         _GITHUB_PENDING_CONDITION.notify()
 
 
+def _queue_github_full_backup():
+    """Queue every existing JSON state file for a non-blocking full backup."""
+    if not GITHUB_SYNC_ENABLED:
+        return 0
+    queued = 0
+    for name in _STATE_FILE_NAMES:
+        path = DATA_DIR / name
+        data = _load_local_json(path, None)
+        if path.is_file() and data is not None:
+            _github_sync_after_local_save(path, data)
+            queued += 1
+    return queued
+
+
+def _request_github_full_backup(bot, sender):
+    """Queue a full backup and remember who should receive its result."""
+    queued = _queue_github_full_backup()
+    if queued:
+        with _GITHUB_PENDING_CONDITION:
+            _GITHUB_BACKUP_REQUESTS.append((bot, str(sender or "").strip()))
+            _GITHUB_PENDING_CONDITION.notify()
+    return queued
+
+
 def _github_sync_worker():
     while True:
         with _GITHUB_PENDING_CONDITION:
@@ -1143,12 +1168,28 @@ def _github_sync_worker():
             _GITHUB_PENDING_CONDITION.wait(timeout=0.75)
             pending = dict(_GITHUB_PENDING)
             _GITHUB_PENDING.clear()
+        backup_ok = True
         for path, data in pending.items():
             try:
                 with _GITHUB_SYNC_LOCK:
-                    _github_put_file(path, data)
+                    if not _github_put_file(path, data):
+                        backup_ok = False
             except Exception as exc:
+                backup_ok = False
                 print(f"[GITHUB] background sync failed for {Path(path).name}: {exc}", flush=True)
+        with _GITHUB_PENDING_CONDITION:
+            requests_to_notify = list(_GITHUB_BACKUP_REQUESTS)
+            _GITHUB_BACKUP_REQUESTS.clear()
+        for bot, sender in requests_to_notify:
+            try:
+                notice = (
+                    "✅ تم النسخ الاحتياطي بنجاح إلى GitHub (Talkin4)."
+                    if backup_ok else
+                    "❌ اكتمل النسخ الاحتياطي جزئياً؛ تعذر رفع ملف أو أكثر. راجع سجل Railway."
+                )
+                bot.send_private_text(sender, notice)
+            except Exception as exc:
+                print(f"[GITHUB] backup completion notice failed: {exc}", flush=True)
 
 
 if GITHUB_SYNC_ENABLED and not _GITHUB_WORKER_STARTED:
@@ -2114,6 +2155,7 @@ class TalkinBot:
         # This cache prevents a duplicate event from executing a command again.
         self._incoming_seen = {}
         self._incoming_seen_lock = threading.Lock()
+        self._management_command_seen = {}
         # Live room membership cache: username -> role.  This is updated by
         # occupants_list and by user_joined/user_left room events.
         self.room_users = defaultdict(dict)
@@ -3999,6 +4041,17 @@ class TalkinBot:
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
         if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)):
             return False
+        # A private command can be replayed by the Talkin transport with a new
+        # frame/uid. Do not answer the same account-list request twice in a row.
+        command_key = str(body or "").strip().casefold()
+        if command_key in ("vi", "الموثقين", "الموثقون", "الموثقين؟"):
+            now = time.time()
+            seen_key = (_norm_user(sender), command_key, bool(is_private))
+            previous = getattr(self, "_management_command_seen", {}).get(seen_key, 0.0)
+            self._management_command_seen[seen_key] = now
+            if previous and now - previous < 20.0:
+                self.log("[DEDUP] ignored repeated account-list command")
+                return True
         old_tracking = getattr(self._master_reply_local, "tracking", False)
         old_replied = getattr(self._master_reply_local, "replied", False)
         old_private_replied = getattr(self._master_reply_local, "private_replied", False)
@@ -4031,6 +4084,16 @@ class TalkinBot:
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
         low=text.casefold()
+        if low in ("نسخ احتياطي", "نسخه احتياطيه", "backup", "full backup"):
+            queued = _request_github_full_backup(self, sender)
+            if queued:
+                self.send_private_text(
+                    sender,
+                    f"⏳ بدأ النسخ الاحتياطي في الخلفية. سيتم تأكيد النجاح بعد رفع {queued} ملفاً إلى GitHub (Talkin4)."
+                )
+            else:
+                self.send_private_text(sender, "⚠️ تعذر بدء النسخ الاحتياطي؛ تأكد من تفعيل GITHUB_SYNC وإعداد مستودع Talkin4.")
+            return True
         # `اوامر` shows the organized menu only.
         if low in ("اوامر","الاوامر","help","مساعدة"):
             target = sender if is_private else None
