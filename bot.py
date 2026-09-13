@@ -1236,23 +1236,36 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
         native_rtl = False
     # Raqm expects logical Arabic text and performs shaping plus bidi itself.
     # Do not pre-reverse it, otherwise the generated card shows mirrored text.
-    if native_rtl:
-        font = _gift_font(raw_text, int(size))
-        if all(_font_has_glyph(font, ch) or unicodedata.category(ch).startswith("M")
-               for ch in raw_text if not ch.isspace()):
-            try:
-                draw.text(xy, raw_text, font=font, fill=fill,
-                          stroke_width=stroke_width, stroke_fill=stroke_fill,
-                          direction="rtl", language="ar")
-            except Exception:
-                draw.text(xy, raw_text, font=font, fill=fill,
-                          stroke_width=stroke_width, stroke_fill=stroke_fill)
-            try:
-                return xy[0] + draw.textlength(raw_text, font=font,
-                                               direction="rtl", language="ar")
-            except Exception:
-                return xy[0] + font.getlength(raw_text)
-    visual=_shape_name(raw_text)
+    base_font = _gift_font(raw_text, int(size))
+    native_complete = native_rtl and all(
+        _font_has_glyph(base_font, ch) or unicodedata.category(ch).startswith("M")
+        for ch in raw_text if not ch.isspace()
+    )
+    if native_complete:
+        try:
+            draw.text(xy, raw_text, font=base_font, fill=fill,
+                      stroke_width=stroke_width, stroke_fill=stroke_fill,
+                      direction="rtl", language="ar")
+        except Exception:
+            draw.text(xy, raw_text, font=base_font, fill=fill,
+                      stroke_width=stroke_width, stroke_fill=stroke_fill)
+        try:
+            return xy[0] + draw.textlength(raw_text, font=base_font,
+                                           direction="rtl", language="ar")
+        except Exception:
+            return xy[0] + base_font.getlength(raw_text)
+
+    # Decorative names often mix Arabic with Egyptian glyphs, chess symbols,
+    # musical symbols, and tatweel.  No single font contains all of them, so
+    # shape/bidi the complete logical string once, then draw visual runs with
+    # real fallback fonts. This avoids tofu squares without reversing twice.
+    if _has_arabic(raw_text) and arabic_reshaper is not None and get_display is not None:
+        try:
+            visual = get_display(arabic_reshaper.reshape(raw_text))
+        except Exception:
+            visual = raw_text
+    else:
+        visual = raw_text
     if not visual:
         return xy[0]
     base=_gift_font(visual,int(size))
