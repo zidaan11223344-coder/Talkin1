@@ -1819,6 +1819,10 @@ class TalkinBot:
         self.invite_lock = threading.Lock()
         self.invite_message_template = "{sender} يدعوك للغرفة {room}"
         self.known_rooms = set(_persistent_rooms())
+        # Live rooms are session-only: unlike known_rooms (history on disk),
+        # this set contains only rooms for which the current WebSocket session
+        # has received a room/occupants response. It is cleared on disconnect.
+        self.connected_rooms = set()
         # The offline private-service flow is active only while the master is
         # absent. Presence is updated from room membership and master messages.
         self.master_online = False
@@ -2084,6 +2088,7 @@ class TalkinBot:
             _save_persistent_rooms(self.known_rooms)
             self._last_join_sent.pop(room, None)
         self.room_users.pop(room, None)
+        self.connected_rooms.discard(room)
         self.log("[ROOM] left", room)
         return True
 
@@ -2517,6 +2522,47 @@ class TalkinBot:
         if _norm_user(sender) == _norm_user(BOT_ID):
             return False
 
+        # Master-only private reports: `vi` / `vip` show the saved verified
+        # accounts from the project JSON files. These commands are handled by
+        # the master service, so they never leak to normal users or rooms.
+        if low in ("vi", "التوثيق", "الموثقين", "الحسابات الموثقة", "الحسابات الموثقه"):
+            data = _verified_data()
+            rows = []
+            for item in data.values():
+                if isinstance(item, dict):
+                    username = str(item.get("username") or "").strip()
+                else:
+                    username = str(item or "").strip()
+                if username:
+                    rows.append(username.lstrip("@"))
+            rows = list(dict.fromkeys(rows))
+            if not rows:
+                self.send_private_text(sender, "📋 لا توجد حسابات موثقة محفوظة.")
+            else:
+                lines = [f"📋 الحسابات الموثقة: {len(rows)}"]
+                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
+                self.send_private_text(sender, "\n".join(lines))
+            return True
+
+        if low in ("vip", "في اي بي", "الحسابات vip", "حسابات vip"):
+            data = _vip_data()
+            rows = []
+            for item in data.values():
+                if isinstance(item, dict):
+                    username = str(item.get("username") or "").strip()
+                else:
+                    username = str(item or "").strip()
+                if username:
+                    rows.append(username.lstrip("@"))
+            rows = list(dict.fromkeys(rows))
+            if not rows:
+                self.send_private_text(sender, "👑 لا توجد حسابات VIP محفوظة.")
+            else:
+                lines = [f"👑 حسابات VIP: {len(rows)}"]
+                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
+                self.send_private_text(sender, "\n".join(lines))
+            return True
+
         # Option 1: verify the sender's own account.
         if low in ("1", "🟦1", "🟦1️⃣", "1️⃣", "توثيق", "وثق", "التوثيق"):
             target_bot = PRIMARY_BOT_ID.strip()
@@ -2850,6 +2896,12 @@ class TalkinBot:
     def process_occupants_for_invite(self, result):
         room = (self.invite_room or result.get("_occupants_room") or
                 self.last_joined_room or self.room)
+        room = str(room or "").strip()
+        # A successful occupants response proves that this room is reachable
+        # in the current WebSocket session. Keep it out of the persisted
+        # history logic: connected_rooms is intentionally session-only.
+        if room:
+            self.connected_rooms.add(room)
 
         # Fallback live responses are tagged by the room they came from.
         # Accumulate all room responses before sending the final invitation batch.
@@ -3782,6 +3834,19 @@ class TalkinBot:
                 self.send_private_text(sender, "🚫 هذا الأمر مخصص للماستر والإدارة فقط.")
             return False
 
+        # "غرفي" must show only rooms that are actually connected in the
+        # current WebSocket session. known_rooms is historical and may contain
+        # rooms saved from an earlier run, so it must NOT be used here.
+        if low in ("غرفي", "غرفيّ", "myrooms", "my rooms"):
+            live = sorted({str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip()})
+            if not live:
+                self.send_private_text(sender, "📭 لا توجد غرف متصلة فعلياً حالياً.")
+            else:
+                lines = [f"🏠 الغرف المتصلة فعلياً ({len(live)}):"]
+                lines.extend(f"{i}. {room}" for i, room in enumerate(live, 1))
+                self.send_private_text(sender, "\n".join(lines))
+            return True
+
         m_all = re.fullmatch(r"تحويل للكل@(\d+)", text, re.I)
         if m_all:
             amount = int(m_all.group(1))
@@ -3872,6 +3937,10 @@ class TalkinBot:
                 self.send_private_text(sender, f"⚠️ @{target} لديه توثيق VIP بالفعل.")
                 return True
             data[key]={"username":target,"verified_by":sender,"created_at":int(time.time())}; _save_local_json(VERIFIED_FILE,data)
+            # Keep the bot's normal verification notice for the verified user,
+            # while the master process separately relays the result to whoever
+            # requested the verification.
+            self.send_private_text(target, f"✅ تم توثيق حسابك @{target} بنجاح.\n🎉 يمكنك الآن استخدام أوامر البوت.")
             self.send_private_text(sender, f"✅ تم توثيق @{target}.")
             return True
         if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
@@ -4092,6 +4161,8 @@ class TalkinBot:
         room = str(event.get(13, self.room))
         if room and room != BOT_MASTER:
             self.known_rooms.add(room)
+            self.connected_rooms.add(room)
+            _save_persistent_rooms(self.known_rooms)
         event_id = str(event.get(41, ""))
         username = str(event.get(22, "") or "").strip()
         role = str(event.get(8, "") or "").strip().lower()
@@ -4409,6 +4480,10 @@ class TalkinBot:
         self.log("[WS] error:", error)
 
     def on_close(self, ws, code, msg):
+        # These are rooms connected to THIS WebSocket session. Once it closes,
+        # none of them may be reported by "غرفي" until the server confirms
+        # them again after reconnect. The historical list remains on disk.
+        self.connected_rooms.clear()
         self.log("[WS] closed:", code, msg)
 
     def bootstrap_after_connect(self):
@@ -4493,6 +4568,8 @@ class TalkinBot:
             self.join_room(room, force=True)
 
     def run_once(self):
+        # Start a fresh live-room view for this WebSocket session.
+        self.connected_rooms.clear()
         self.authenticate()
         # Android saves AuthResult.server into SharedPreferences and then
         # Client uses that saved server for the WebSocket. Do the same:
