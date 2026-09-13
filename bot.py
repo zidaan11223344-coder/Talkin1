@@ -204,8 +204,33 @@ def _stop_master_process():
     except Exception as exc:
         return False, f"❌ تعذر إيقاف الماستر: {exc}"
 
-# Persistent Giant-style bot data. The owner/master has unlimited points.
-DATA_DIR = Path(__file__).resolve().parent
+# Persistent bot data. Runtime code is replaceable; these JSON files are not.
+# The data directory can be set once with BOT_DATA_DIR/PERSISTENT_DATA_DIR.
+# On Railway, /data/chatbuz_bot is preferred so a mounted volume can keep all
+# bot state across deployments. When no volume is mounted, the code falls back
+# to a local data/ directory beside bot.py and migrates any old JSON files there.
+def _select_persistent_data_dir():
+    configured = (os.getenv("BOT_DATA_DIR") or os.getenv("PERSISTENT_DATA_DIR") or "").strip()
+    candidates = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    # Railway volume mount /data is the recommended permanent location.
+    candidates.append(Path("/data/chatbuz_bot"))
+    candidates.append(BASE_DIR / "data")
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return candidate
+        except Exception:
+            continue
+    return BASE_DIR / "data"
+
+DATA_DIR = _select_persistent_data_dir()
+
+# Every mutable bot record lives in its own dedicated JSON file.
 MASTERS_FILE = DATA_DIR / "masters.json"
 VIP_FILE = DATA_DIR / "vip_users.json"
 VERIFIED_FILE = DATA_DIR / "verified_users.json"
@@ -214,13 +239,56 @@ MESSAGES_FILE = DATA_DIR / "messages.json"
 PUBLISHED_FILE = DATA_DIR / "published_posts.json"
 GAME_STATS_FILE = DATA_DIR / "game_stats.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
-# Persistent Talkin state. These files are intentionally separate from runtime
-# caches so replacing/redeploying bot.py does not remove rooms, rosters, or verification.
 TRACKED_ROOMS_FILE = DATA_DIR / "tracked_rooms.json"
 ROOM_USERS_FILE = DATA_DIR / "room_users.json"
 INVITE_HISTORY_FILE = DATA_DIR / "invite_history.json"
 REPLIES_FILE = DATA_DIR / "replies.json"
 MODERATION_FILE = DATA_DIR / "moderation.json"
+
+# Known legacy state files used by older releases. This migration runs once and
+# NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
+_STATE_FILE_NAMES = (
+    "masters.json", "vip_users.json", "verified_users.json", "points.json",
+    "messages.json", "published_posts.json", "game_stats.json", "crop_plots.json",
+    "tracked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
+    "moderation.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
+    "custom_commands.json", "repair_state.json",
+)
+
+def _json_has_real_data(path):
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict):
+            return bool(value)
+        if isinstance(value, list):
+            return bool(value)
+        return value not in (None, "", 0, False)
+    except Exception:
+        return False
+
+def _migrate_legacy_state_files():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for name in _STATE_FILE_NAMES:
+        target = DATA_DIR / name
+        legacy_candidates = [BASE_DIR / name, BASE_DIR / "data" / name]
+        # Copy only when the persistent copy is missing/empty. Existing data is
+        # never overwritten by a newer bot.py.
+        if _json_has_real_data(target):
+            continue
+        for legacy in legacy_candidates:
+            if legacy.resolve() == target.resolve() or not legacy.is_file():
+                continue
+            try:
+                if legacy.stat().st_size <= 0:
+                    continue
+                shutil.copy2(legacy, target)
+                break
+            except Exception:
+                pass
+
+_migrate_legacy_state_files()
 
 # Giant Chat gift costs/labels; images remain the local Giant assets.
 GIFT_COSTS = {"1":10,"2":20,"3":30,"4":50,"5":80,"6":150,"7":200,"8":500,"9":800,"10":1000,"11":1500,"12":3000,"13":5000,"14":8000}
@@ -1944,7 +2012,7 @@ class TalkinBot:
 
     def _load_social_features(self):
         self.auto_replies_file = REPLIES_FILE
-        self.custom_welcomes_file = BASE_DIR / "custom_welcomes.json"
+        self.custom_welcomes_file = DATA_DIR / "custom_welcomes.json"
         try:
             data = _ensure_replies_file()
             self.auto_replies_enabled = bool(data.get("auto_replies_enabled", True))
