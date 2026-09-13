@@ -1095,8 +1095,15 @@ def _github_restore_or_seed_state():
             try:
                 remote = _github_get_file(local)
                 if remote is not None:
-                    # GitHub is the durable source when the deployment has no local state.
-                    if not _json_has_real_data(local):
+                    # GitHub is the durable source. Always restore a non-empty
+                    # remote record when the local copy is empty or differs;
+                    # this also repairs a stale empty file left on Railway.
+                    local_data = _load_local_json(local, None)
+                    local_has_data = bool(local_data) if isinstance(local_data, (dict, list)) else local_data not in (None, "", 0, False)
+                    remote_has_data = bool(remote) if isinstance(remote, (dict, list)) else remote not in (None, "", 0, False)
+                    if (remote_has_data and not local_has_data) or (
+                        remote_has_data and local_data != remote
+                    ):
                         _save_local_json(local, remote)
                         print(f"[GITHUB] restored {name}", flush=True)
                 elif _json_has_real_data(local):
