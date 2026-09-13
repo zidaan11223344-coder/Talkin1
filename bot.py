@@ -2522,47 +2522,6 @@ class TalkinBot:
         if _norm_user(sender) == _norm_user(BOT_ID):
             return False
 
-        # Master-only private reports: `vi` / `vip` show the saved verified
-        # accounts from the project JSON files. These commands are handled by
-        # the master service, so they never leak to normal users or rooms.
-        if low in ("vi", "التوثيق", "الموثقين", "الحسابات الموثقة", "الحسابات الموثقه"):
-            data = _verified_data()
-            rows = []
-            for item in data.values():
-                if isinstance(item, dict):
-                    username = str(item.get("username") or "").strip()
-                else:
-                    username = str(item or "").strip()
-                if username:
-                    rows.append(username.lstrip("@"))
-            rows = list(dict.fromkeys(rows))
-            if not rows:
-                self.send_private_text(sender, "📋 لا توجد حسابات موثقة محفوظة.")
-            else:
-                lines = [f"📋 الحسابات الموثقة: {len(rows)}"]
-                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
-                self.send_private_text(sender, "\n".join(lines))
-            return True
-
-        if low in ("vip", "في اي بي", "الحسابات vip", "حسابات vip"):
-            data = _vip_data()
-            rows = []
-            for item in data.values():
-                if isinstance(item, dict):
-                    username = str(item.get("username") or "").strip()
-                else:
-                    username = str(item or "").strip()
-                if username:
-                    rows.append(username.lstrip("@"))
-            rows = list(dict.fromkeys(rows))
-            if not rows:
-                self.send_private_text(sender, "👑 لا توجد حسابات VIP محفوظة.")
-            else:
-                lines = [f"👑 حسابات VIP: {len(rows)}"]
-                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
-                self.send_private_text(sender, "\n".join(lines))
-            return True
-
         # Option 1: verify the sender's own account.
         if low in ("1", "🟦1", "🟦1️⃣", "1️⃣", "توثيق", "وثق", "التوثيق"):
             target_bot = PRIMARY_BOT_ID.strip()
@@ -3844,6 +3803,47 @@ class TalkinBot:
             else:
                 lines = [f"🏠 الغرف المتصلة فعلياً ({len(live)}):"]
                 lines.extend(f"{i}. {room}" for i, room in enumerate(live, 1))
+                self.send_private_text(sender, "\n".join(lines))
+            return True
+
+        # Private master shortcuts: vi / vip show the persisted account lists.
+        # These are intentionally exact commands so vi@username / vip@username
+        # keep their existing meaning for adding a single account.
+        if low in ("vi", "verified", "الموثقين", "الموثقون"):
+            data = _verified_data()
+            rows = []
+            for item in data.values():
+                if isinstance(item, dict):
+                    username = str(item.get("username") or "").strip()
+                else:
+                    username = str(item or "").strip()
+                if username:
+                    rows.append(username.lstrip("@"))
+            rows = sorted(dict.fromkeys(rows), key=str.casefold)
+            if not rows:
+                self.send_private_text(sender, "📭 لا توجد حسابات موثقة محفوظة حالياً.")
+            else:
+                lines = [f"✅ الحسابات الموثقة ({len(rows)}):"]
+                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
+                self.send_private_text(sender, "\n".join(lines))
+            return True
+
+        if low in ("vip", "vips", "حسابات vip", "حسابات في اي بي"):
+            data = _vip_data()
+            rows = []
+            for item in data.values():
+                if isinstance(item, dict):
+                    username = str(item.get("username") or "").strip()
+                else:
+                    username = str(item or "").strip()
+                if username:
+                    rows.append(username.lstrip("@"))
+            rows = sorted(dict.fromkeys(rows), key=str.casefold)
+            if not rows:
+                self.send_private_text(sender, "📭 لا توجد حسابات VIP محفوظة حالياً.")
+            else:
+                lines = [f"👑 حسابات VIP ({len(rows)}):"]
+                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
                 self.send_private_text(sender, "\n".join(lines))
             return True
 
