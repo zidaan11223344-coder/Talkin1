@@ -16,6 +16,7 @@ import re
 import queue
 import mimetypes
 import unicodedata
+import sys
 from urllib.parse import urlparse, unquote
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from collections import defaultdict
@@ -119,12 +120,89 @@ GIFT_CATALOG = {
 BOT_ID = (os.getenv("BOT_ID") or os.getenv("BOT_USERNAME") or "").strip()
 BOT_PWD = os.getenv("BOT_PWD") or os.getenv("BOT_PASSWORD") or ""
 BOT_MASTER = (os.getenv("BOT_MASTER") or os.getenv("MASTER_USERNAME") or "").strip()
+PRIMARY_BOT_ID = (os.getenv("PRIMARY_BOT_ID") or "").strip()
 INVITE_SENDER_NAME = os.getenv("INVITE_SENDER_NAME", "السفير").strip() or "السفير"
 GROUP_TO_JOIN = (os.getenv("GROUP_TO_JOIN") or os.getenv("FIRST_ROOM") or "").strip()
 MASTER_SUPPORT_USERNAME = os.getenv(
     "MASTER_SUPPORT_USERNAME",
     "∫♚∫اݪـــۛــ⃮ـاۿــ𓏺𓏺ـيّـــّٰـبــۃ∫♚∫",
 ).strip()
+MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
+
+# Master account process control. The primary bot can start/stop master_bot.py
+# from the private chat, but only the configured BOT_MASTER is authorized.
+MASTER_RUNNER_FILE = BASE_DIR / "master_bot.py"
+MASTER_PROCESS_LOCK = threading.Lock()
+MASTER_PROCESS = None
+
+def _master_process_running():
+    global MASTER_PROCESS
+    with MASTER_PROCESS_LOCK:
+        if MASTER_PROCESS is not None and MASTER_PROCESS.poll() is None:
+            return True
+        MASTER_PROCESS = None
+        return False
+
+def _start_master_process():
+    """Start master_bot.py once, inheriting deployment Secrets from the primary bot."""
+    global MASTER_PROCESS
+    master_id = os.getenv("MASTER_ID", "").strip()
+    master_pwd = os.getenv("MASTER_PWD", "")
+    if not master_id or not master_pwd:
+        return False, "❌ لم يتم ضبط MASTER_ID و MASTER_PWD في متغيرات الاستضافة."
+    if not MASTER_RUNNER_FILE.exists():
+        return False, "❌ ملف master_bot.py غير موجود بجانب البوت."
+    with MASTER_PROCESS_LOCK:
+        if MASTER_PROCESS is not None and MASTER_PROCESS.poll() is None:
+            return True, "ℹ️ الماستر يعمل بالفعل."
+        env = os.environ.copy()
+        env["MASTER_ID"] = master_id
+        env["MASTER_PWD"] = master_pwd
+        env["MASTER_SERVICE_ENABLED"] = "1"
+        env["PRIMARY_BOT_ID"] = BOT_ID
+        # Keep the master isolated from primary BOT_ID/BOT_PWD values.
+        env.pop("BOT_ID", None)
+        env.pop("BOT_PWD", None)
+        env.pop("BOT_USERNAME", None)
+        env.pop("BOT_PASSWORD", None)
+        try:
+            MASTER_PROCESS = subprocess.Popen(
+                [sys.executable, str(MASTER_RUNNER_FILE)],
+                cwd=str(BASE_DIR),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=None,
+                stderr=None,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            MASTER_PROCESS = None
+            return False, f"❌ تعذر تشغيل الماستر: {exc}"
+    time.sleep(0.7)
+    if MASTER_PROCESS.poll() is not None:
+        code = MASTER_PROCESS.returncode
+        MASTER_PROCESS = None
+        return False, f"❌ توقفت خدمة الماستر مباشرة (رمز الخروج: {code}). راجع سجل الاستضافة."
+    return True, "✅ تم تشغيل الماستر."
+
+def _stop_master_process():
+    """Stop only the master_bot.py process started by this primary bot."""
+    global MASTER_PROCESS
+    with MASTER_PROCESS_LOCK:
+        proc = MASTER_PROCESS
+        MASTER_PROCESS = None
+    if proc is None or proc.poll() is not None:
+        return True, "ℹ️ الماستر متوقف بالفعل."
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+        return True, "✅ تم إيقاف الماستر."
+    except Exception as exc:
+        return False, f"❌ تعذر إيقاف الماستر: {exc}"
 
 # Persistent Giant-style bot data. The owner/master has unlimited points.
 DATA_DIR = Path(__file__).resolve().parent
@@ -2257,15 +2335,30 @@ class TalkinBot:
             "2 شكاوي أو مقترحات"
         )
 
+    def _handle_master_process_command(self, sender: str, body: str, is_private: bool = False):
+        """Control the standalone master account from the primary bot private chat."""
+        if not is_private or not _is_master_name(sender):
+            return False
+        low = str(body or "").strip().casefold()
+        if low in ("تشغيل الماستر", "تشغيل الماستر@", "start master", "master on"):
+            ok, msg = _start_master_process()
+            self.send_private_text(sender, msg)
+            return True
+        if low in ("ايقاف الماستر", "إيقاف الماستر", "ايقاف الماستر@", "إيقاف الماستر@", "stop master", "master off"):
+            ok, msg = _stop_master_process()
+            self.send_private_text(sender, msg)
+            return True
+        if low in ("حالة الماستر", "حاله الماستر", "master status"):
+            self.send_private_text(sender, "🟢 الماستر يعمل." if _master_process_running() else "🔴 الماستر متوقف.")
+            return True
+        return False
+
     def _handle_offline_master_service(self, sender: str, body: str):
         """Handle private service requests only while BOT_MASTER is absent."""
         sender = str(sender or "").strip()
         body = str(body or "").strip()
         if not sender or _norm_user(sender) in {_norm_user(BOT_MASTER), _norm_user(BOT_ID)}:
             return False
-        if self._master_is_online():
-            return False
-
         sessions = getattr(self, "_offline_support_sessions", None)
         if not isinstance(sessions, dict):
             sessions = {}
@@ -2310,18 +2403,78 @@ class TalkinBot:
             return True
 
         if low in ("1", "توثيق", "وثق", "التوثيق"):
-            data = _verified_data()
-            data[key] = {
-                "username": sender,
-                "verified_by": BOT_MASTER or "offline_master_service",
-                "created_at": int(time.time()),
-            }
-            _save_local_json(VERIFIED_FILE, data)
+            # The primary bot NEVER grants verification while the master is
+            # away. Verification is an action performed by the master account.
+            # Forward the request to the master/support account and leave the
+            # verified_users store untouched until the master approves it.
+            if MASTER_SUPPORT_USERNAME:
+                self.send_private_text(
+                    MASTER_SUPPORT_USERNAME,
+                    f"📋 طلب توثيق جديد من @{sender}.\n"
+                    f"يرجى توثيقه من حساب الماستر باستخدام: vi@{sender}"
+                )
             sessions.pop(key, None)
-            self.send_private_text(sender, "✅ تم التوثيق.")
+            self.send_private_text(sender, "📩 تم إرسال طلب التوثيق إلى الماستر. سيتم توثيقك بعد موافقته.")
             return True
 
         # Do not repeat the menu for an unrecognized follow-up message.
+        return True
+
+    def _handle_master_account_service(self, sender: str, body: str):
+        """Private auto-service handled by the master account itself.
+
+        Every private message received by the master gets the service menu.
+        Option 1 is intentionally executed by the master account, not by the
+        primary bot, so the master is the authority that grants verification.
+        """
+        if not MASTER_SERVICE_ENABLED:
+            return False
+        sender = str(sender or "").strip()
+        body = str(body or "").strip()
+        if not sender or _norm_user(sender) in {_norm_user(BOT_ID), _norm_user(BOT_MASTER)}:
+            return False
+        sessions = getattr(self, "_master_service_sessions", None)
+        if not isinstance(sessions, dict):
+            sessions = {}
+            self._master_service_sessions = sessions
+        key = _norm_user(sender)
+        low = body.casefold()
+
+        # Any first/ordinary private message receives the menu.
+        if low in ("1", "توثيق", "وثق", "التوثيق"):
+            # The master does NOT modify the verification database directly.
+            # It sends the normal master verification command to the primary
+            # bot, so the primary bot remains the single authority/store for
+            # verified users.
+            target_bot = PRIMARY_BOT_ID.strip()
+            if not target_bot:
+                self.send_private_text(sender, "❌ لم يتم ضبط PRIMARY_BOT_ID للبوت الأساسي.")
+                return True
+            command = f"vi@{sender}"
+            sent = self.send_private_text(target_bot, command)
+            if not sent:
+                self.send_private_text(sender, "❌ تعذر إرسال أمر التوثيق إلى البوت الأساسي.")
+                return True
+            sessions.pop(key, None)
+            self.send_private_text(sender, "📩 تم إرسال أمر التوثيق للماستر، وسيتم اعتماد التوثيق من البوت الأساسي.")
+            return True
+
+        if low in ("2", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
+            sessions[key] = "complaint"
+            self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
+            return True
+
+        if sessions.get(key) == "complaint":
+            if not body:
+                self.send_private_text(sender, "❌ أرسل نص الشكوى أو المقترح.")
+                return True
+            if MASTER_SUPPORT_USERNAME and _norm_user(MASTER_SUPPORT_USERNAME) != _norm_user(BOT_ID):
+                self.send_private_text(MASTER_SUPPORT_USERNAME, f"📩 شكوى أو مقترح من @{sender}:\n{body}")
+            sessions.pop(key, None)
+            self.send_private_text(sender, "✅ تم استلام الشكوى أو المقترح.")
+            return True
+
+        self.send_private_text(sender, self._offline_support_menu())
         return True
 
     def reply_text(self, room: str, text: str, private_to: str = ""):
@@ -4030,7 +4183,17 @@ class TalkinBot:
                     if _norm_user(frm) == _norm_user(BOT_MASTER):
                         self.master_online = True
                         self.master_last_seen = time.time()
-                    elif self._handle_offline_master_service(frm, body):
+                    if body and self._handle_master_process_command(frm, body, is_private=True):
+                        return
+                    # When this process is the master account, it owns the
+                    # private service flow and performs verification itself.
+                    if MASTER_SERVICE_ENABLED and self._handle_master_account_service(frm, body):
+                        return
+                    # When the master account is absent, the primary bot provides
+                    # the private verification/support service. This must not depend
+                    # on MASTER_SERVICE_ENABLED, because that flag is reserved for
+                    # the standalone master process itself.
+                    if not self._master_is_online() and self._handle_offline_master_service(frm, body):
                         return
                     if body and media_url:
                         if not _is_verified_user(frm):
