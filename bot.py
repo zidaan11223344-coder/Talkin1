@@ -992,6 +992,9 @@ GITHUB_SYNC_ENABLED = bool(GITHUB_TOKEN and GITHUB_REPO and os.getenv("GITHUB_SY
 _GITHUB_SYNC_LOCK = threading.RLock()
 _GITHUB_SYNC_LAST = {}
 _GITHUB_RESTORING = False
+_GITHUB_PENDING = {}
+_GITHUB_PENDING_CONDITION = threading.Condition()
+_GITHUB_WORKER_STARTED = False
 
 def _github_url(path):
     from urllib.parse import quote
@@ -1111,9 +1114,39 @@ _github_restore_or_seed_state()
 def _github_sync_after_local_save(path, data):
     if not GITHUB_SYNC_ENABLED or _GITHUB_RESTORING:
         return
-    # Serialize commits so simultaneous command handlers do not race on the same SHA.
-    with _GITHUB_SYNC_LOCK:
-        _github_put_file(path, data)
+    # Never block the WebSocket/event handler on a GitHub HTTP request. Keep
+    # only the latest value for each file and let one worker serialize commits.
+    # This is especially important for tracked_rooms/room_users, which may be
+    # saved several times while a room is joining.
+    try:
+        snapshot = json.loads(json.dumps(data, ensure_ascii=False))
+    except Exception:
+        snapshot = data
+    with _GITHUB_PENDING_CONDITION:
+        _GITHUB_PENDING[str(path)] = snapshot
+        _GITHUB_PENDING_CONDITION.notify()
+
+
+def _github_sync_worker():
+    while True:
+        with _GITHUB_PENDING_CONDITION:
+            while not _GITHUB_PENDING:
+                _GITHUB_PENDING_CONDITION.wait()
+            # Coalesce bursts of local writes before making a network request.
+            _GITHUB_PENDING_CONDITION.wait(timeout=0.75)
+            pending = dict(_GITHUB_PENDING)
+            _GITHUB_PENDING.clear()
+        for path, data in pending.items():
+            try:
+                with _GITHUB_SYNC_LOCK:
+                    _github_put_file(path, data)
+            except Exception as exc:
+                print(f"[GITHUB] background sync failed for {Path(path).name}: {exc}", flush=True)
+
+
+if GITHUB_SYNC_ENABLED and not _GITHUB_WORKER_STARTED:
+    threading.Thread(target=_github_sync_worker, name="github-sync", daemon=True).start()
+    _GITHUB_WORKER_STARTED = True
 
 
 def _norm_user(name):
@@ -2070,6 +2103,10 @@ class TalkinBot:
         self.banned_words = set()
         self.moderation_enabled = AUTO_BAN_WORDS
         self.last_messages = defaultdict(list)
+        # Talkin may deliver an inbound frame more than once around reconnects.
+        # This cache prevents a duplicate event from executing a command again.
+        self._incoming_seen = {}
+        self._incoming_seen_lock = threading.Lock()
         # Live room membership cache: username -> role.  This is updated by
         # occupants_list and by user_joined/user_left room events.
         self.room_users = defaultdict(dict)
@@ -2118,6 +2155,14 @@ class TalkinBot:
         self._last_reconnect = 0.0
         self._pending_reconnect_reason = ""
         self._had_connection = False
+        # Do not flood the master when the server repeatedly reconnects.
+        # Connection state is runtime-only and must not be stored in GitHub.
+        self._last_connection_notice = 0.0
+        self._connection_notice_cooldown = max(30.0, float(os.getenv("CONNECTION_NOTICE_COOLDOWN", "300")))
+        # Reconnect progressively after transport failures instead of forcing
+        # a visible leave/join cycle every fixed 10 seconds.
+        self._reconnect_delay = 10.0
+        self._reconnect_delay_max = max(30.0, float(os.getenv("RECONNECT_MAX_SECONDS", "120")))
         self._heartbeat_stop = None
         self._heartbeat_thread = None
         self.moderation_enabled, moderation_words = _load_moderation_config()
@@ -2650,7 +2695,8 @@ class TalkinBot:
             "كيف يمكنني خدمتك؟\n"
             "1️⃣ توثيق\n"
             "2️⃣ شكاوي أو مقترحات\n"
-            "3️⃣ توثيق لحساب اخر"
+            "3️⃣ توثيق لحساب اخر\n"
+            "ارسل رقم 1 او 2 او 3"
         )
 
     def _offline_support_menu(self, username: str = ""):
@@ -4436,6 +4482,31 @@ class TalkinBot:
                 self.send_private_text(sender, "❌ أخطاء النشر: " + " | ".join(f"{r}: {e[:60]}" for r,e in errors))
         return True
 
+    def _is_duplicate_incoming(self, kind, values, event_id=""):
+        """Return True when the server has replayed an inbound event.
+
+        Event id 41 is preferred. Some Talkin server versions omit it, so a
+        short-lived content signature is used as a fallback. The cache is
+        intentionally in memory: it is transport de-duplication state, not
+        bot data that should be persisted to GitHub.
+        """
+        now = time.time()
+        event_id = str(event_id or "").strip()
+        if event_id:
+            key = (str(kind), "id", event_id)
+            ttl = 300.0
+        else:
+            raw = "\x1f".join(str(v or "") for v in values)
+            key = (str(kind), "sig", hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest())
+            ttl = 8.0
+        with self._incoming_seen_lock:
+            previous = self._incoming_seen.get(key, 0.0)
+            self._incoming_seen[key] = now
+            if len(self._incoming_seen) > 2000:
+                cutoff = now - 300.0
+                self._incoming_seen = {k: ts for k, ts in self._incoming_seen.items() if ts >= cutoff}
+        return bool(previous and now - previous < ttl)
+
     def handle_room_event(self, result):
         event = result.get("room_event") or {}
         if not hasattr(self, "blocked_rooms"):
@@ -4457,6 +4528,13 @@ class TalkinBot:
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
         # Do not log room message contents, usernames, room names, or media events.
+        if self._is_duplicate_incoming(
+            "room",
+            (event_type, room, frm, to, body, str(event.get(7, "") or "")),
+            event_id,
+        ):
+            self.log("[DEDUP] ignored repeated room event")
+            return
 
         # Keep the live membership state in sync.  The APK itself uses these
         # exact event names and RoomEvent fields.
@@ -4657,6 +4735,13 @@ class TalkinBot:
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
                     media_url = str(cm.get(6, "") or "").strip()
+                    if self._is_duplicate_incoming(
+                        "private",
+                        (frm, body, media_url),
+                        str(cm.get(41, "") or result.get("uid", "") or ""),
+                    ):
+                        self.log("[DEDUP] ignored repeated private message")
+                        return
                     if _norm_user(frm) == _norm_user(BOT_MASTER):
                         self.master_online = True
                         self.master_last_seen = time.time()
@@ -4901,13 +4986,22 @@ class TalkinBot:
                         self.log("[WS] CONNECTED:", url)
                         self.log("[WS] custom headers:", [x.split(":",1)[0] + ": <redacted>" if x.lower().startswith(("username:", "password:")) else x for x in header_lines])
                         self.bootstrap_after_connect()
-                        if self._pending_reconnect_reason and BOT_MASTER:
+                        if BOT_MASTER:
+                            now = time.time()
+                            should_notify = (
+                                now - self._last_connection_notice >= self._connection_notice_cooldown
+                            )
                             reason = self._pending_reconnect_reason
                             self._pending_reconnect_reason = ""
-                            self.send_private_text(BOT_MASTER, f"⚠️ انقطع الاتصال ثم عاد. السبب: {reason}")
-                            self.send_private_text(BOT_MASTER, "✅ تم الدخول والعودة للغرفة بنجاح.")
-                        elif not self._had_connection and BOT_MASTER:
-                            self.send_private_text(BOT_MASTER, "✅ تم الدخول للغرفة والاتصال بنجاح.")
+                            if should_notify:
+                                if reason:
+                                    self.send_private_text(
+                                        BOT_MASTER,
+                                        f"⚠️ انقطع الاتصال ثم عاد الاتصال بنجاح. السبب: {reason}",
+                                    )
+                                elif not self._had_connection:
+                                    self.send_private_text(BOT_MASTER, "✅ تم الدخول والاتصال بنجاح.")
+                                self._last_connection_notice = now
                         self._had_connection = True
 
                         while not self.stop_event.is_set():
@@ -4960,6 +5054,9 @@ class TalkinBot:
         while not self.stop_event.is_set():
             try:
                 self.run_once()
+                # run_once normally blocks until stop_event or a socket error;
+                # if it returns normally, the connection was not rejected.
+                self._reconnect_delay = 10.0
             except Exception as e:
                 self.last_error = str(e)
                 if self._had_connection:
@@ -4969,8 +5066,11 @@ class TalkinBot:
                     self._pending_reconnect_reason = raw_reason[:1000]
                 print("[BOT] error:", repr(e), flush=True)
             if not self.stop_event.is_set():
-                print("[BOT] reconnecting in 10s...", flush=True)
-                time.sleep(10)
+                delay = self._reconnect_delay
+                print(f"[BOT] reconnecting in {int(delay)}s...", flush=True)
+                if self.stop_event.wait(delay):
+                    break
+                self._reconnect_delay = min(self._reconnect_delay * 2.0, self._reconnect_delay_max)
 
 
 if __name__ == "__main__":
