@@ -1200,22 +1200,69 @@ def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
 def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
-    """Render the username inside the gift box exactly as received.
+    """Render a Talkin username with the same visual direction as the chat.
 
-    The value stored by the bot is never changed.  For the image only, Arabic
-    is converted to its visual RTL order when needed, while Latin/digits and
-    decorative Unicode keep their original characters.  Font runs are selected
-    from the bundled fonts so unsupported symbols do not become square boxes.
+    IMPORTANT: the username is kept byte-for-byte/logically unchanged in the
+    bot data.  This function only controls how it is painted on the image.
+
+    When Pillow has libraqm, let libraqm perform the complete Arabic bidi and
+    shaping pass on the ORIGINAL logical string.  Do not run arabic_reshaper /
+    python-bidi first: doing both is what caused names such as ``احمد`` to be
+    painted as ``دمحا`` in some deployments.
     """
     text = str(raw_text if raw_text is not None else "")
     if not text:
         return
 
-    fallbacks = _fallback_fonts(int(size))
+    sz = int(size)
+    font = _gift_font(text, sz)
 
-    # For mixed Arabic/decorative names, use the same visual ordering users see
-    # in chat. This is a rendering-only operation; the original string remains
-    # untouched in the command/data layer.
+    # Best path: one complete RTL layout pass.  NotoSansArabic in the supplied
+    # assets also contains the common decorative symbols used in usernames,
+    # so keeping the username as ONE string preserves the exact order.
+    try:
+        if PIL_AVAILABLE and features.check("raqm"):
+            while sz > 14:
+                font = _gift_font(text, sz)
+                try:
+                    bbox = draw.textbbox((0, 0), text, font=font,
+                                         direction="rtl", language="ar",
+                                         stroke_width=1)
+                except TypeError:
+                    bbox = draw.textbbox((0, 0), text, font=font,
+                                         direction="rtl", stroke_width=1)
+                width = bbox[2] - bbox[0]
+                if width <= max_width:
+                    break
+                sz -= 2
+
+            font = _gift_font(text, sz)
+            try:
+                bbox = draw.textbbox((0, 0), text, font=font,
+                                     direction="rtl", language="ar",
+                                     stroke_width=2)
+            except TypeError:
+                bbox = draw.textbbox((0, 0), text, font=font,
+                                     direction="rtl", stroke_width=2)
+            x = center[0] - (bbox[2] - bbox[0]) / 2
+            y = center[1] - (bbox[3] - bbox[1]) / 2 - bbox[1]
+            try:
+                draw.text((x, y), text, font=font, fill=fill,
+                          stroke_width=2, stroke_fill=(0, 0, 0, 180),
+                          direction="rtl", language="ar")
+            except TypeError:
+                draw.text((x, y), text, font=font, fill=fill,
+                          stroke_width=2, stroke_fill=(0, 0, 0, 180),
+                          direction="rtl")
+            return
+    except Exception:
+        # Continue to the compatibility path below if this Pillow build does
+        # not expose the full RAQM API.
+        pass
+
+    # Compatibility path for older Pillow builds: reshape + bidi exactly once,
+    # then draw the resulting visual string left-to-right.  This path is only
+    # used when the complete RAQM renderer is unavailable.
     visual = text
     if _has_arabic(text) and arabic_reshaper is not None and get_display is not None:
         try:
@@ -1223,86 +1270,42 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
         except Exception:
             visual = text
 
-    def choose(ch, sz):
-        # Formatting characters should stay attached to the surrounding run.
-        if "\ufe00" <= ch <= "\ufe0f" or "\u200d" <= ch <= "\u200f":
-            return _gift_font(text, sz)
-        # Prefer a Latin-capable font for Latin/digits so Noto Arabic cannot
-        # substitute a tofu glyph for them.
-        if ch.isascii() and (ch.isalnum() or ch in " ._@-+()[]{}!#$%&*,:;/?=\\|~'"):
-            for f in fallbacks:
-                if 'DejaVuSans' in str(getattr(f, 'path', '')) and _font_has_glyph(f, ch):
-                    return f
-        # Arabic first, then the symbol fonts and other fallbacks.
-        if _has_arabic(ch):
-            f = _gift_font(text, sz)
-            if _font_has_glyph(f, ch):
-                return f
-        for f in fallbacks:
-            if _font_has_glyph(f, ch):
-                return f
-        return _gift_font(text, sz)
+    fallbacks = _fallback_fonts(sz)
+    def choose(ch, size_):
+        base = _gift_font(text, size_)
+        if _font_has_glyph(base, ch):
+            return base
+        return next((f for f in fallbacks if _font_has_glyph(f, ch)), base)
 
-    def make_runs(sz):
-        runs = []
-        cur_font = None
-        cur = []
+    while sz > 14:
+        runs=[]; cur_font=None; cur=[]
         for ch in visual:
-            f = choose(ch, sz)
+            f=choose(ch, sz)
             if cur_font is None or str(getattr(f, 'path', '')) == str(getattr(cur_font, 'path', '')):
                 cur.append(ch)
             else:
-                runs.append((cur_font, ''.join(cur)))
-                cur = [ch]
-            cur_font = f
-        if cur:
-            runs.append((cur_font, ''.join(cur)))
-        return runs
-
-    def width_for(runs):
-        total = 0
-        for font, run in runs:
-            try:
-                total += draw.textlength(run, font=font)
-            except Exception:
-                total += font.getlength(run)
-        return total
-
-    sz = int(size)
-    while sz > 14:
-        runs = make_runs(sz)
-        if width_for(runs) <= max_width:
-            break
+                runs.append((cur_font, ''.join(cur))); cur=[ch]
+            cur_font=f
+        if cur: runs.append((cur_font, ''.join(cur)))
+        width=sum(font_.getlength(run) for font_,run in runs)
+        if width <= max_width: break
         sz -= 2
-    runs = make_runs(sz)
-    width = width_for(runs)
 
-    # Draw into a transparent strip so the whole username is centered as one
-    # object, instead of centering every font run separately.
-    strip_w = max(1, int(width + sz * 2))
-    strip_h = max(1, int(sz * 1.9))
-    strip = Image.new('RGBA', (strip_w, strip_h), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(strip)
-    x = sz
-    for font, run in runs:
-        try:
-            bbox = sd.textbbox((0, 0), run, font=font)
-            rw = bbox[2] - bbox[0]
-            rh = bbox[3] - bbox[1]
-            y = max(0, (strip_h - rh) // 2 - bbox[1])
-        except Exception:
-            rw = font.getlength(run)
-            y = max(0, (strip_h - sz) // 2)
-        try:
-            sd.text((x, y), run, font=font, fill=fill,
-                    stroke_width=1, stroke_fill=(0, 0, 0, 170))
-        except Exception:
-            sd.text((x, y), run, font=font, fill=fill)
-        x += rw
-
-    px = int(center[0] - strip.width / 2)
-    py = int(center[1] - strip.height / 2)
-    draw._image.alpha_composite(strip, (px, py))
+    runs=[]; cur_font=None; cur=[]
+    for ch in visual:
+        f=choose(ch, sz)
+        if cur_font is None or str(getattr(f, 'path', '')) == str(getattr(cur_font, 'path', '')):
+            cur.append(ch)
+        else:
+            runs.append((cur_font, ''.join(cur))); cur=[ch]
+        cur_font=f
+    if cur: runs.append((cur_font, ''.join(cur)))
+    width=sum(font_.getlength(run) for font_,run in runs)
+    x=center[0]-width/2
+    for font_,run in runs:
+        draw.text((x, center[1]-sz/2), run, font=font_, fill=fill,
+                  stroke_width=2, stroke_fill=(0,0,0,180))
+        x += font_.getlength(run)
 
 def _visual_runs(text, size):
     # Kept for compatibility with older helpers.
