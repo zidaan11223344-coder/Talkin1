@@ -806,7 +806,10 @@ def _master_list():
 def _is_master_name(name):
     n=_norm_user(name)
     return bool(n and (n == _norm_user(BOT_MASTER) or n in {_norm_user(x) for x in _master_list()}))
-
+def _is_primary_master(name):
+    """Only the account configured in BOT_MASTER has unlimited points."""
+    n=_norm_user(name)
+    return bool(n and n == _norm_user(BOT_MASTER))
 def _verification_notice():
     master = BOT_MASTER or "الماستر"
     return f"🔒 حسابك ليس موثقاً.\n📩 يرجى مراسلة الماستر لتوثيق حسابك @{master}"
@@ -861,7 +864,7 @@ def _game_stats_data():
 
 def _record_game(username, game_key, points_delta=0, stake=0):
     key = _norm_user(username)
-    if not key or _is_master_name(username):
+    if not key or _is_primary_master(username):
         return
     data = _game_stats_data()
     item = data.get(key, {"username": str(username).strip().lstrip("@"), "games": {}})
@@ -923,7 +926,7 @@ def _add_points(username, amount):
     return item["points"]
 
 def _get_points(username):
-    if _is_master_name(username): return None
+    if _is_primary_master(username): return None
     item=_points_data().get(_norm_user(username),{})
     return int(item.get("points",0) or 0)
 
@@ -2707,7 +2710,7 @@ class TalkinBot:
 
     # ----------------------------- Mini Games -----------------------------
     def _game_award(self, username, amount):
-        if not username or _is_master_name(username):
+        if not username or _is_primary_master(username):
             return _get_points(username)
         return _add_points(username, int(amount))
 
@@ -2751,7 +2754,7 @@ class TalkinBot:
             "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار")
 
     def _game_balance_ok(self, username, amount):
-        return _is_master_name(username) or _get_points(username) >= int(amount)
+        return _is_primary_master(username) or _get_points(username) >= int(amount)
 
     def _reserved_stake(self, username, exclude_key=None):
         key = _norm_user(username)
@@ -2817,7 +2820,7 @@ class TalkinBot:
                 int(w.get("stake", 0) or 0) for k, w in self.wager_waiting.items()
                 if k != key and _norm_user(w.get("user")) == _norm_user(sender)
             )
-            if not _is_master_name(sender):
+            if not _is_primary_master(sender):
                 balance = _get_points(sender)
                 if balance < amount + reserved:
                     error = _reply_template("game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"], balance=_fmt_points(balance))
@@ -2968,7 +2971,7 @@ class TalkinBot:
             self.send_room_text(room, "❌ المبلغ غير صحيح.")
             return True
         with self.game_lock:
-            if amount and not _is_master_name(sender):
+            if amount and not _is_primary_master(sender):
                 balance_before = _get_points(sender)
                 if balance_before < amount:
                     self.send_room_text(room, f"❌ رصيدك غير كافٍ. رصيدك: {_fmt_points(balance_before)}")
@@ -3242,7 +3245,7 @@ class TalkinBot:
             if not target or amount <= 0:
                 self.send_private_text(sender, "❌ الصيغة: sb@اسم المستخدم@عدد النقاط")
                 return True
-            if not _is_master_name(sender):
+            if not _is_primary_master(sender):
                 balance = _get_points(sender)
                 if balance < amount:
                             return True
