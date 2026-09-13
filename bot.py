@@ -879,7 +879,9 @@ def _load_local_json(path, default):
     return default
 
 def _save_local_json(path, data):
-    tmp=Path(str(path)+".tmp")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(path) + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
 
@@ -921,6 +923,48 @@ def _persistent_roster_users(room):
         if username and _norm_user(username) != _norm_user(BOT_ID):
             result.append(username)
     return result
+
+def _persistent_all_roster_users():
+    """Return the unique usernames stored in room_users.json across all rooms."""
+    data = _persistent_rosters()
+    rooms = data.get("rooms", data) if isinstance(data, dict) else {}
+    if not isinstance(rooms, dict):
+        return []
+    result = {}
+    for room, roster in rooms.items():
+        if not isinstance(roster, dict):
+            continue
+        for key, value in roster.items():
+            if isinstance(value, dict):
+                username = str(value.get("username") or key).strip()
+            else:
+                username = str(value or key).strip()
+            if username and _norm_user(username) != _norm_user(BOT_ID):
+                result.setdefault(_norm_user(username), username)
+    return sorted(result.values(), key=lambda x: _norm_user(x))
+
+def _format_saved_accounts(title, data, empty_text):
+    """Format a persistent verification/VIP dictionary for the master."""
+    if not isinstance(data, dict):
+        data = {}
+    users = []
+    for key, value in data.items():
+        if isinstance(value, dict):
+            username = str(value.get("username") or key).strip()
+        else:
+            username = str(value or key).strip()
+        if username and _norm_user(username) != _norm_user(BOT_ID):
+            users.append(username)
+    unique = {}
+    for username in users:
+        unique.setdefault(_norm_user(username), username)
+    users = sorted(unique.values(), key=lambda x: _norm_user(x))
+    if not users:
+        return empty_text
+    lines = [f"{title} ({len(users)}):"]
+    lines.extend(f"{i}. @{username}" for i, username in enumerate(users, 1))
+    return "\n".join(lines)
+
 
 def _remember_roster(room, users):
     room = _norm_room(room)
@@ -3762,7 +3806,7 @@ class TalkinBot:
             if not target:
                 self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
             joined = self.join_room(target)
-            self.send_private_text(sender, f"{'✅ دخلت الغرفة' if joined else '⚠️ الغرفة مسجلة بالفعل'}: {target} | الغرف الحالية: {len(self.known_rooms)}")
+            self.send_private_text(sender, f"{'✅ تم طلب دخول الغرفة' if joined else '⚠️ الغرفة مسجلة بالفعل'}: {target} | المتصلة فعلياً: {len(self.connected_rooms)}")
             return True
         m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
         if m_transfer and _is_verified_user(sender):
@@ -3803,47 +3847,6 @@ class TalkinBot:
             else:
                 lines = [f"🏠 الغرف المتصلة فعلياً ({len(live)}):"]
                 lines.extend(f"{i}. {room}" for i, room in enumerate(live, 1))
-                self.send_private_text(sender, "\n".join(lines))
-            return True
-
-        # Private master shortcuts: vi / vip show the persisted account lists.
-        # These are intentionally exact commands so vi@username / vip@username
-        # keep their existing meaning for adding a single account.
-        if low in ("vi", "verified", "الموثقين", "الموثقون"):
-            data = _verified_data()
-            rows = []
-            for item in data.values():
-                if isinstance(item, dict):
-                    username = str(item.get("username") or "").strip()
-                else:
-                    username = str(item or "").strip()
-                if username:
-                    rows.append(username.lstrip("@"))
-            rows = sorted(dict.fromkeys(rows), key=str.casefold)
-            if not rows:
-                self.send_private_text(sender, "📭 لا توجد حسابات موثقة محفوظة حالياً.")
-            else:
-                lines = [f"✅ الحسابات الموثقة ({len(rows)}):"]
-                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
-                self.send_private_text(sender, "\n".join(lines))
-            return True
-
-        if low in ("vip", "vips", "حسابات vip", "حسابات في اي بي"):
-            data = _vip_data()
-            rows = []
-            for item in data.values():
-                if isinstance(item, dict):
-                    username = str(item.get("username") or "").strip()
-                else:
-                    username = str(item or "").strip()
-                if username:
-                    rows.append(username.lstrip("@"))
-            rows = sorted(dict.fromkeys(rows), key=str.casefold)
-            if not rows:
-                self.send_private_text(sender, "📭 لا توجد حسابات VIP محفوظة حالياً.")
-            else:
-                lines = [f"👑 حسابات VIP ({len(rows)}):"]
-                lines.extend(f"{i}. @{name}" for i, name in enumerate(rows, 1))
                 self.send_private_text(sender, "\n".join(lines))
             return True
 
@@ -3925,6 +3928,31 @@ class TalkinBot:
             action = "تحويل" if amount >= 0 else "خصم"
             return True
             return True
+        # Persistent account lists. These commands are master-only because
+        # they expose the bot's saved verification records. They are read
+        # directly from disk so replacing bot.py does not reset the lists.
+        if low in ("vi", "الموثقين", "الموثقون", "الموثقين؟"):
+            self.send_private_text(sender, _format_saved_accounts(
+                "📋 الحسابات الموثقة", _verified_data(),
+                "📭 لا يوجد مستخدمون موثقون محفوظون في verified_users.json."
+            ))
+            return True
+        if low in ("vip", "vips", "حسابات vip", "قائمة vip"):
+            self.send_private_text(sender, _format_saved_accounts(
+                "👑 حسابات VIP", _vip_data(),
+                "📭 لا توجد حسابات VIP محفوظة في vip_users.json."
+            ))
+            return True
+        if low in ("اعضاء", "أعضاء", "الاعضاء", "الأعضاء", "members"):
+            users = _persistent_all_roster_users()
+            if not users:
+                self.send_private_text(sender, "📭 لا يوجد أعضاء محفوظون في room_users.json.")
+            else:
+                lines = [f"👥 الأعضاء المحفوظون ({len(users)}):"]
+                lines.extend(f"{i}. @{username}" for i, username in enumerate(users, 1))
+                self.send_private_text(sender, "\n".join(lines))
+            return True
+
         if low.startswith("vi@"):
             target=text[2:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: vi@اسم المستخدم"); return True
