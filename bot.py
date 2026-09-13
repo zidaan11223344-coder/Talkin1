@@ -1484,8 +1484,12 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url=""):
     _draw_centered(d,(w/2,bottom_y+27),"المستلم",25,(255,224,165,255),box_w-20)
 
     # Same visual text as the chat username: no @ removal, no transliteration.
-    _draw_name_centered(d,(w/2,top_y+box_h*.68),sender_name,39,(255,238,199,255),box_w-42)
-    _draw_name_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,(255,238,199,255),box_w-42)
+    # Use distinct high-contrast colors so sender/receiver are immediately
+    # recognizable while the dark stroke keeps decorated glyphs readable.
+    sender_color=(126,226,255,255)     # turquoise-blue for the sender
+    receiver_color=(255,166,218,255)   # pink-magenta for the receiver
+    _draw_name_centered(d,(w/2,top_y+box_h*.68),sender_name,39,sender_color,box_w-42)
+    _draw_name_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-42)
 
     out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
@@ -3050,14 +3054,14 @@ class TalkinBot:
             self._send_help_chunks("room_message", text, room=room)
 
     def _handle_management_command(self, room, body, sender, is_private=False):
-        # Master/admin commands execute silently: no private acknowledgement and
-        # no public command-result message. The action itself still executes.
-        old = getattr(self._silent_master_local, "active", False)
-        self._silent_master_local.active = _is_master_name(sender)
-        try:
-            return self._handle_management_command_impl(room, body, sender, is_private=is_private)
-        finally:
-            self._silent_master_local.active = old
+        # Management commands are accepted only from the master. Keep normal
+        # response routing enabled so the master receives the result privately
+        # (or in the command room when the command is public by design).
+        # Publishing is intentionally also available to verified accounts.
+        is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
+        if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)):
+            return False
+        return self._handle_management_command_impl(room, body, sender, is_private=is_private)
 
     def _handle_management_command_impl(self, room, body, sender, is_private=False):
         """Giant-style persistent management commands. Returns True if consumed."""
@@ -3400,13 +3404,13 @@ class TalkinBot:
             self._save_social_features()
             self.send_private_text(sender, "✅ تم تشغيل الترحيب المخصص." if self.custom_welcome_enabled else "⛔ تم إيقاف الترحيب المخصص.")
             return True
-        # Publishing: master says `انشر` or `انشر@description`, then sends an image.
+        # Publishing: master or verified user says `انشر` or `انشر@description`, then sends an image.
         if low == "انشر" or low.startswith("انشر@"):
             desc=text[5:].strip() if low.startswith("انشر@") else ""
             # The image may be sent later in a room or in private chat.
             # Key the pending publish by sender, not by the command room, so
             # sending the image from another room still completes the publish.
-            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":_is_master_name(sender)}
+            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":False}
             self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
             return True
         return False
@@ -3548,13 +3552,22 @@ class TalkinBot:
             if frm and frm != BOT_ID and media_url:
                 # Ignore ordinary room images silently. Only a pending publish
                 # request may consume an image, avoiding verification notices.
-                if _is_vip_user(frm) and self._handle_publish_media(room, frm, media_url):
+                if _is_verified_user(frm) and self._handle_publish_media(room, frm, media_url):
                     return
             return
 
         if event_type != "text" or not body:
             return
         if frm == BOT_ID:
+            return
+
+        # Administrative commands are private to the configured master. Do
+        # not send an authorization message to other users and do not allow
+        # verified/VIP users to reach the management handlers accidentally.
+        is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
+        if _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)):
+            if not _is_verified_user(frm):
+                self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
 
         # Word filter runs before games/normal commands. It uses the same native
@@ -3649,12 +3662,18 @@ class TalkinBot:
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
                     media_url = str(cm.get(6, "") or "").strip()
-                    if frm and media_url:
-                        if not _is_vip_user(frm):
-                            self.send_room_text(self.room, f"🔒 @{frm} يحتاج VIP لاستخدام النشر.\n{_verification_notice()}")
+                    if body and media_url:
+                        if not _is_verified_user(frm):
+                            self.send_room_text(self.room, f"🔒 @{frm} يحتاج توثيقاً لاستخدام النشر.\n{_verification_notice()}")
                             return
                         if self._handle_publish_media(self.room, frm, media_url):
                             return
+                    # Silently ignore master-only commands from everyone else.
+                    is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
+                    if body and _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)):
+                        if not _is_verified_user(frm):
+                            self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
+                        return
                     if body and not _is_verified_user(frm) and _looks_like_bot_command(body) and not body.strip().casefold().startswith(("دخول ", "join ", "ادخل ", "enter ")):
                         self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
