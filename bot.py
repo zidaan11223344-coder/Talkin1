@@ -1747,6 +1747,7 @@ class TalkinBot:
         self.master_last_seen = 0.0
         self._master_online_rooms = set()
         self._offline_support_sessions = {}
+        self._offline_support_recent = {}
         # Keep rejected rooms tracked for history, but exclude them from
         # broadcasts and reconnect attempts until the master retries them.
         self.blocked_rooms = set()
@@ -2269,9 +2270,22 @@ class TalkinBot:
         if not isinstance(sessions, dict):
             sessions = {}
             self._offline_support_sessions = sessions
+        recent = getattr(self, "_offline_support_recent", None)
+        if not isinstance(recent, dict):
+            recent = {}
+            self._offline_support_recent = recent
         key = _norm_user(sender)
         state = sessions.get(key, "")
         low = body.casefold()
+
+        # Talkin may deliver the same private frame more than once. Ignore an
+        # identical sender/message pair briefly so menus and acknowledgements
+        # are never duplicated.
+        signature = (key, body)
+        now = time.time()
+        if now - float(recent.get(signature, 0.0) or 0.0) < 15:
+            return True
+        recent[signature] = now
 
         if not state:
             sessions[key] = "menu"
@@ -2282,8 +2296,10 @@ class TalkinBot:
             if not body:
                 self.send_private_text(sender, "❌ أرسل نص الشكوى أو المقترح.")
                 return True
-            support = MASTER_SUPPORT_USERNAME or BOT_MASTER
-            self.send_private_text(support, f"📩 شكوى أو مقترح من @{sender}:\n{body}")
+            if MASTER_SUPPORT_USERNAME:
+                self.send_private_text(MASTER_SUPPORT_USERNAME, f"📩 شكوى أو مقترح من @{sender}:\n{body}")
+            else:
+                self.log("[OFFLINE-SUPPORT] MASTER_SUPPORT_USERNAME is not configured")
             self.send_private_text(sender, "✅ سيتم إبلاغ الإدارة ونبلغك قريباً.")
             sessions.pop(key, None)
             return True
@@ -2305,7 +2321,7 @@ class TalkinBot:
             self.send_private_text(sender, "✅ تم التوثيق.")
             return True
 
-        self.send_private_text(sender, self._offline_support_menu())
+        # Do not repeat the menu for an unrecognized follow-up message.
         return True
 
     def reply_text(self, room: str, text: str, private_to: str = ""):
