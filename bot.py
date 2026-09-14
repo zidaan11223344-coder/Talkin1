@@ -2084,13 +2084,15 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
     _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Taller sender/receiver panels. Each avatar is placed beside its panel,
-    # not inside it, so the name rectangle remains clean and readable.
+    # Show each person's profile image beside that person's name panel.
     box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
     top_y=int(h*.675); bottom_y=int(h*.815)
     for y in (top_y,bottom_y):
         d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
-    for y, label, name, photo in ((top_y, "المرسل", sender_name, sender_photo_url), (bottom_y, "المستلم", receiver_name, receiver_photo_url)):
+    for y, label, name, photo in (
+        (top_y, "المرسل", sender_name, sender_photo_url),
+        (bottom_y, "المستلم", receiver_name, receiver_photo_url),
+    ):
         avatar = _load_sender_avatar(photo, 120)
         if avatar is not None:
             image.alpha_composite(avatar, (box_x-142, y+(box_h-120)//2)); d=ImageDraw.Draw(image)
@@ -2105,20 +2107,19 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     _draw_name_centered(d,(panel_center_x,top_y+box_h*.68),sender_name,39,sender_color,box_w-42)
     _draw_name_centered(d,(panel_center_x,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-42)
 
-    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
+    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.gif"
     out.parent.mkdir(parents=True,exist_ok=True)
+    # Animated reveal: the gift artwork and both avatars appear together in
+    # one GIF message, avoiding separate static image messages in the chat.
     rgb=image.convert("RGB").resize((620,635),Image.LANCZOS)
-    quality=78
-    while quality>=30:
-        rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
-        if out.stat().st_size <= 48*1024:
-            return out
-        quality-=4
-    for size in ((560,573),(500,512),(440,451),(380,390)):
-        rgb=rgb.resize(size,Image.LANCZOS)
-        rgb.save(out,"JPEG",quality=40,optimize=True,progressive=True)
-        if out.stat().st_size <= 48*1024:
-            return out
+    frames=[]
+    width,height=rgb.size
+    for progress in (0.08,0.22,0.38,0.56,0.76,1.0,1.0):
+        frame=Image.new("RGB",(width,height),(8,10,20))
+        reveal=max(1,int(width*progress))
+        frame.paste(rgb.crop((0,0,reveal,height)),(0,0))
+        frames.append(frame)
+    frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=[90,90,90,100,120,220,700],loop=0,optimize=True)
     return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
@@ -2287,6 +2288,7 @@ class TalkinBot:
         self._profile_status_timer = None
         self._profile_status_token = 0
         self._profile_base_status = BOT_BASE_STATUS
+        self._profile_current_status = ""
         self.music_lock = threading.Lock()
         # Mini-games: free-to-play, no points are deducted.
         self.game_lock = threading.Lock()
@@ -3249,9 +3251,11 @@ class TalkinBot:
                 user_id = first_text(uf, 2).strip()
                 online = first_text(uf, 5).strip()
                 photo = first_text(uf, 3).strip()
-                if username and username != BOT_ID:
+                status = first_text(uf, 4).strip()
+                if username:
                     users.append({"username": username, "role": role or "none",
-                                  "user_id": user_id, "online": online, "photo": photo})
+                                  "user_id": user_id, "online": online, "photo": photo,
+                                  "status": status})
             except Exception as e:
                 self.log("[INV] UserItem decode failed:", repr(e))
         # De-duplicate by username while preserving server order.
@@ -3313,11 +3317,23 @@ class TalkinBot:
                     continue
                 username = str(user.get(1, "") or "").strip()
                 photo = str(user.get(3, "") or "").strip()
+                status = str(user.get(4, "") or "").strip()
+                if username and username.casefold() == BOT_ID.casefold() and status:
+                    with self._profile_status_lock:
+                        self._profile_current_status = status
+                        if self._profile_status_timer is None:
+                            self._profile_base_status = status
                 if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
             for user in self._users_from_room_admin(result.get("room_admin") or {}):
                 username = str(user.get("username") or "").strip()
                 photo = str(user.get("photo") or "").strip()
+                status = str(user.get("status") or "").strip()
+                if username and username.casefold() == BOT_ID.casefold() and status:
+                    with self._profile_status_lock:
+                        self._profile_current_status = status
+                        if self._profile_status_timer is None:
+                            self._profile_base_status = status
                 if username and photo and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
         except Exception as exc:
@@ -3720,15 +3736,25 @@ class TalkinBot:
         sender = str(sender or "").strip().lstrip("@")
         receiver = str(receiver or "").strip().lstrip("@")
         gift_name = str(gift_name or "هدية").strip()
-        temporary = f"🎁 {sender} ➜ {receiver} | {gift_name}"
+        # Keep sender and receiver on separate colored lines and append the
+        # configured base status below them instead of replacing it.
+        temporary = (
+            f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
+            f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
+            f'<br><font color="#FFE29A">{gift_name}</font>'
+        )
         with self._profile_status_lock:
             self._profile_status_token += 1
             token = self._profile_status_token
             timer = self._profile_status_timer
             if timer is not None:
                 timer.cancel()
+            base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
+            self._profile_base_status = base_status
+            # Send one profile-status update only: the gift lines are above
+            # the previous/base status in the same value, not a new status.
             self._set_profile_status(
-                temporary + (f"\n{self._profile_base_status}" if self._profile_base_status else "")
+                temporary + (f"<br>{base_status}" if base_status else "")
             )
 
             def restore():
@@ -3737,6 +3763,7 @@ class TalkinBot:
                         return
                     self._profile_status_timer = None
                     self._set_profile_status(self._profile_base_status)
+                    self._profile_current_status = self._profile_base_status
 
             self._profile_status_timer = threading.Timer(GIFT_STATUS_SECONDS, restore)
             self._profile_status_timer.daemon = True
@@ -3764,10 +3791,11 @@ class TalkinBot:
                 if charged:
                     _add_points(sender_name, cost)
                 raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ أنشئ Railway Public Domain أو ضع PUBLIC_BASE_URL")
-            sender_photo_url = self.user_photos.get(sender_name.casefold(), "")
-            receiver_photo_url = self.user_photos.get(target.casefold().lstrip("@"), "")
-            if not receiver_photo_url:
-                receiver_photo_url = self._lookup_profile_photo(target)
+            sender_key = sender_name.casefold().lstrip("@")
+            receiver_key = target.casefold().lstrip("@")
+            # Use each account's own cached/profile image beside its own name.
+            sender_photo_url = self.user_photos.get(sender_key, "") or self._lookup_profile_photo(sender_name)
+            receiver_photo_url = self.user_photos.get(receiver_key, "") or self._lookup_profile_photo(target)
             gift_path = render_gift_card(gift_id, sender_name, target, sender_photo_url, receiver_photo_url)
             gift_url = public_base + "/gifts/" + gift_path.name
             self._verify_public_media_url(gift_url, "image")
