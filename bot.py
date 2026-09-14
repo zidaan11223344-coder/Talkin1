@@ -130,7 +130,9 @@ MASTER_SUPPORT_USERNAME = os.getenv(
 MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # Talkin profile-status query can differ between server builds. Keep the
 # action configurable while defaulting to the native profile update name.
-PROFILE_STATUS_ACTION = os.getenv("PROFILE_STATUS_ACTION", "update_profile").strip() or "update_profile"
+PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
+    "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
+).split(",") if x.strip()]
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", "").strip()
 GIFT_STATUS_SECONDS = 15 * 60
 
@@ -2082,15 +2084,6 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
     _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Sender avatar overlaps the lower part of the gift image, matching the
-    # requested style. No fake initial is shown when no photo is available.
-    avatar=_load_sender_avatar(sender_photo_url,170)
-    if avatar is not None:
-        ax=(w-170)//2
-        ay=int(h*.505)
-        image.alpha_composite(avatar,(ax,ay))
-        d=ImageDraw.Draw(image)
-
     # Taller sender/receiver panels. Each avatar is placed beside its panel,
     # not inside it, so the name rectangle remains clean and readable.
     box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
@@ -2215,7 +2208,10 @@ class TalkinBot:
         self.banned_words = set()
         self.moderation_enabled = AUTO_BAN_WORDS
         self.last_messages = defaultdict(list)
-        self._room_repeat_state = defaultdict(lambda: defaultdict(list))
+        # Per-room consecutive-message state. Protection can trigger when the
+        # same user keeps sending messages OR when the same text is repeated,
+        # including repeated text sent by different users.
+        self._room_repeat_state = defaultdict(dict)
         # Talkin may deliver an inbound frame more than once around reconnects.
         # This cache prevents a duplicate event from executing a command again.
         self._incoming_seen = {}
@@ -3327,6 +3323,27 @@ class TalkinBot:
         except Exception as exc:
             self.log("[GIFT] photo cache failed:", repr(exc))
 
+    def _lookup_profile_photo(self, username):
+        """Best-effort profile-photo lookup for a gift receiver not in cache."""
+        username = str(username or "").strip().lstrip("@").casefold()
+        if not username or not getattr(self.db, "client", None):
+            return ""
+        try:
+            response = (self.db.client.table("profiles").select("*")
+                        .eq("username", username).limit(1).execute())
+            rows = getattr(response, "data", None) or []
+            if rows:
+                row = rows[0] if isinstance(rows[0], dict) else {}
+                photo = next((str(row.get(key) or "").strip() for key in
+                              ("photo_url", "photo", "avatar_url", "avatar", "image_url")
+                              if str(row.get(key) or "").strip().startswith(("http://", "https://"))), "")
+                if photo:
+                    self.user_photos[username] = photo
+                    return photo
+        except Exception as exc:
+            self.log("[GIFT] receiver photo lookup failed:", repr(exc))
+        return ""
+
     def process_occupants_for_invite(self, result):
         room = (self.invite_room or result.get("_occupants_room") or
                 self.last_joined_room or self.room)
@@ -3679,14 +3696,22 @@ class TalkinBot:
         """
         status = str(status or "").strip()
         try:
-            self.send_query(encode_query(
-                PROFILE_STATUS_ACTION,
-                type_="profile",
-                body=status,
-                value=status,
-            ))
-            self.log("[PROFILE] status updated")
-            return True
+            sent = False
+            for action in PROFILE_STATUS_ACTIONS:
+                try:
+                    self.send_query(encode_query(
+                        action,
+                        type_="status",
+                        body=status,
+                        value=status,
+                    ))
+                    self.log("[PROFILE] status update sent via", action)
+                    sent = True
+                except Exception as exc:
+                    self.log("[PROFILE] action failed", action, repr(exc))
+            if not sent:
+                self.log("[PROFILE] all status update actions failed")
+            return sent
         except Exception as exc:
             self.log("[PROFILE] status update failed:", repr(exc))
             return False
@@ -3741,6 +3766,8 @@ class TalkinBot:
                 raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ أنشئ Railway Public Domain أو ضع PUBLIC_BASE_URL")
             sender_photo_url = self.user_photos.get(sender_name.casefold(), "")
             receiver_photo_url = self.user_photos.get(target.casefold().lstrip("@"), "")
+            if not receiver_photo_url:
+                receiver_photo_url = self._lookup_profile_photo(target)
             gift_path = render_gift_card(gift_id, sender_name, target, sender_photo_url, receiver_photo_url)
             gift_url = public_base + "/gifts/" + gift_path.name
             self._verify_public_media_url(gift_url, "image")
@@ -4886,16 +4913,31 @@ class TalkinBot:
         # room ban operation as b@, with Arabic normalization and no public reply.
         room_cfg = _room_moderation_config(room)
         if room_cfg["enabled"] and not _is_master_name(frm):
-            state = self._room_repeat_state[room][frm]
-            now = time.time(); state[:] = [x for x in state if now - x[0] <= 30.0]
-            state.append((now, body.strip()))
-            same = [x for x in state if x[1] == body.strip()]
-            if len(same) >= room_cfg["repeat_limit"]:
+            now = time.time()
+            state = self._room_repeat_state[room]
+            last_sender = str(state.get("sender", ""))
+            last_text = str(state.get("text", ""))
+            last_at = float(state.get("at", 0.0) or 0.0)
+            same_sender = _norm_user(last_sender) == _norm_user(frm)
+            same_text = _norm_filter_text(last_text) == _norm_filter_text(body.strip())
+            within_window = now - last_at <= 30.0
+            # Both counters are consecutive counters. A different sender
+            # breaks the sender sequence; a different text breaks the text
+            # sequence. Either counter can independently cause a ban.
+            state["sender_count"] = int(state.get("sender_count", 0) or 0) + 1 if same_sender and within_window else 1
+            state["text_count"] = int(state.get("text_count", 0) or 0) + 1 if same_text and within_window else 1
+            state["sender"] = frm
+            state["text"] = body.strip()
+            state["at"] = now
+            sender_count = int(state.get("sender_count", 0) or 0)
+            text_count = int(state.get("text_count", 0) or 0)
+            limit = room_cfg["repeat_limit"]
+            if sender_count >= limit or text_count >= limit:
                 self.send_admin(room, frm, "ban")
                 self.send_room_text(room, f"🚫 تم حظر @{frm}\nالسبب: تكرار مشبوه")
                 state.clear()
                 return
-            if len(same) == room_cfg["repeat_limit"] - 1:
+            if sender_count == limit - 1 or text_count == limit - 1:
                 self.send_room_text(room, f"⚠️ تحذير @{frm}: الرسالة مكررة، الرسالة التالية ستؤدي إلى الحظر.")
                 return
         filter_words = room_cfg["words"] or (sorted(self.banned_words) if self.moderation_enabled else [])
