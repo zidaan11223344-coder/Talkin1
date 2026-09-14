@@ -17,6 +17,7 @@ import queue
 import mimetypes
 import unicodedata
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, unquote
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from collections import defaultdict
@@ -2039,7 +2040,7 @@ def _load_sender_avatar(photo_url, size=190):
     if not photo_url or not photo_url.startswith(("http://", "https://")):
         return None
     try:
-        r = requests.get(photo_url, headers={"User-Agent":"TalkinBot/22"}, timeout=8)
+        r = requests.get(photo_url, headers={"User-Agent":"TalkinBot/22"}, timeout=3)
         if r.status_code != 200 or not r.content:
             return None
         from io import BytesIO
@@ -2089,13 +2090,15 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     top_y=int(h*.675); bottom_y=int(h*.815)
     for y in (top_y,bottom_y):
         d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
-    for y, label, name, photo in (
+    avatar_inputs = (sender_photo_url, receiver_photo_url)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        avatars = list(pool.map(lambda url: _load_sender_avatar(url, 96), avatar_inputs))
+    for (y, label, name, photo), avatar in zip((
         (top_y, "المرسل", sender_name, sender_photo_url),
         (bottom_y, "المستلم", receiver_name, receiver_photo_url),
-    ):
-        avatar = _load_sender_avatar(photo, 120)
+    ), avatars):
         if avatar is not None:
-            image.alpha_composite(avatar, (box_x-142, y+(box_h-120)//2)); d=ImageDraw.Draw(image)
+            image.alpha_composite(avatar, (box_x-118, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
         _draw_centered(d,(box_x+box_w*.52,y+34),label,25,(255,224,165,255),box_w-30)
 
     # Same visual text as the chat username: no @ removal, no transliteration.
@@ -2111,15 +2114,18 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     out.parent.mkdir(parents=True,exist_ok=True)
     # Animated reveal: the gift artwork and both avatars appear together in
     # one GIF message, avoiding separate static image messages in the chat.
-    rgb=image.convert("RGB").resize((620,635),Image.LANCZOS)
+    # Small canvas and few frames keep the image fast to upload and display.
+    rgb=image.convert("RGB").resize((420,430),Image.LANCZOS)
+    rgb=rgb.quantize(colors=96, method=Image.Quantize.MEDIANCUT).convert("P")
     frames=[]
     width,height=rgb.size
-    for progress in (0.08,0.22,0.38,0.56,0.76,1.0,1.0):
-        frame=Image.new("RGB",(width,height),(8,10,20))
+    for progress in (0.18,0.48,0.78,1.0):
+        frame=Image.new("P",(width,height),0)
+        frame.putpalette(rgb.getpalette())
         reveal=max(1,int(width*progress))
         frame.paste(rgb.crop((0,0,reveal,height)),(0,0))
         frames.append(frame)
-    frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=[90,90,90,100,120,220,700],loop=0,optimize=True)
+    frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=[70,90,110,450],loop=0,optimize=True)
     return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
