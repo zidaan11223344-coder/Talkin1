@@ -2115,17 +2115,21 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     # Animated reveal: the gift artwork and both avatars appear together in
     # one GIF message, avoiding separate static image messages in the chat.
     # Small canvas and few frames keep the image fast to upload and display.
-    rgb=image.convert("RGB").resize((420,430),Image.LANCZOS)
-    rgb=rgb.quantize(colors=96, method=Image.Quantize.MEDIANCUT).convert("P")
-    frames=[]
+    rgb=image.convert("RGB").resize((280,287),Image.LANCZOS)
     width,height=rgb.size
-    for progress in (0.18,0.48,0.78,1.0):
-        frame=Image.new("P",(width,height),0)
-        frame.putpalette(rgb.getpalette())
-        reveal=max(1,int(width*progress))
-        frame.paste(rgb.crop((0,0,reveal,height)),(0,0))
-        frames.append(frame)
-    frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=[70,90,110,450],loop=0,optimize=True)
+    # The first frame is always the complete card. Some chat clients show
+    # only the first GIF frame in the message preview, so it must never be a
+    # blank/reveal mask. Later frames add a lightweight moving highlight.
+    frames=[rgb.quantize(colors=24, method=Image.Quantize.MEDIANCUT).convert("P")]
+    for x in (int(width*.48),):
+        frame=rgb.copy()
+        shine=Image.new("RGBA",(width,height),(0,0,0,0))
+        sd=ImageDraw.Draw(shine)
+        sd.polygon([(x-34,0),(x+6,0),(x-70,height),(x-110,height)], fill=(255,244,190,48))
+        frame=Image.alpha_composite(frame.convert("RGBA"),shine).convert("RGB")
+        frames.append(frame.quantize(colors=24, method=Image.Quantize.MEDIANCUT).convert("P"))
+    frames.append(frames[0].copy())
+    frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=[600,110,450],loop=0,optimize=True)
     return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
