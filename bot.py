@@ -137,48 +137,17 @@ PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
 # الحالة الأساسية لملف البوت — يمكن تعديلها مباشرة من هذا الملف.
 # عند إرسال هدية تُضاف حالة الهدية فوق هذه الحالة لمدة 5 دقائق،
 # ثم تعود الحالة الأساسية تلقائياً.
-BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", """<h3>
-<p style="
-background-color:#000000;
-padding:20px;
-text-align:center;
-">
+BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", """<h3><p style="background:#000;padding:20px;text-align:center"><font color="#b73206" size="7">بوت حمايه والعاب واغاني</font></p><p style="background:#0C090A"><font color="#FFE87C"><b>لمعرفه الالعاب والاوامر ارسل مساعده</b></font></p><span style="color:#af0365;font-size:60px">لدخول الغرف ارسل دخول اسم الغرفه</span><br><span style="color:#af0365;font-size:42px">ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧر𝁤𝆬𝃛</span></h3>""").strip()
+# Talkin rejects oversized profile-status values on some server builds.
+# Keep a conservative UTF-8 limit and never send malformed/truncated HTML.
+PROFILE_STATUS_MAX_BYTES = int(os.getenv("PROFILE_STATUS_MAX_BYTES", "680"))
 
-<font color="#b73206" size="7">بوت حمايه والعاب واغاني 
-</font>
-
-</p>
-
-
-<B><H2><p style="background-color:#0C090A;"><font color=#FFE87C>لمعرفه الالعاب والاوامر ارسل مساعده 
-</p>
-
-</h3>
-</span>
-
-<br><br>
-
-<span style="
-color:#af0365;
-font-size:60px;
-">
- لدخول الغرف ارسل دخول اسم الغرفه</span>
-
-</h1>
-
-<br><br>
-
-<span style="color:#af0365;font-size:42px;">
-ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛
-</span>""").strip()
 GIFT_STATUS_SECONDS = 5 * 60
 
 # حالة الهدية المؤقتة — تُعرض فوق الحالة الأساسية لمدة 5 دقائق.
 # لا تغيّر طريقة عرض الأسماء في بطاقة الهدية؛ هذا خاص بحالة الملف فقط.
 GIFT_STATUS_TEMPLATE = (
-    '<font color="#66D9FF">🎁 المرسل: {sender}</font>'
-    '<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
-    '<br><font color="#FFE29A">{gift_name}</font>'
+    '<b><font color="#FFE29A">🎁 {sender} ➜ {receiver} | {gift_name}</font></b>'
 )
 
 # Master account process control. The primary bot can start/stop master_bot.py
@@ -3753,6 +3722,14 @@ class TalkinBot:
         status = str(status or "").strip()
         try:
             sent = False
+            # Some Talkin servers close the socket with code 1009 when the
+            # profile-status field is too large. Validate before sending and
+            # use only the first successful native action (do not send the
+            # same large status 2-3 times).
+            raw = status.encode("utf-8")
+            if len(raw) > PROFILE_STATUS_MAX_BYTES:
+                self.log(f"[PROFILE] status too large ({len(raw)} bytes); skipped to protect WebSocket")
+                return False
             for action in PROFILE_STATUS_ACTIONS:
                 try:
                     self.send_query(encode_query(
@@ -3763,6 +3740,7 @@ class TalkinBot:
                     ))
                     self.log("[PROFILE] status update sent via", action)
                     sent = True
+                    break
                 except Exception as exc:
                     self.log("[PROFILE] action failed", action, repr(exc))
             if not sent:
@@ -3773,37 +3751,38 @@ class TalkinBot:
             return False
 
     def _set_temporary_gift_status(self, sender: str, receiver: str, gift_name: str):
-        sender = str(sender or "").strip().lstrip("@")
-        receiver = str(receiver or "").strip().lstrip("@")
-        gift_name = str(gift_name or "هدية").strip()
-        # Keep sender and receiver on separate colored lines and append the
-        # configured base status below them instead of replacing it.
+        # Keep the temporary status extremely small. Long HTML/profile-status
+        # packets can make the Talkin server close the WebSocket with code 1009.
+        sender = str(sender or "").strip().lstrip("@")[:24]
+        receiver = str(receiver or "").strip().lstrip("@")[:24]
+        gift_name = str(gift_name or "هدية").strip()[:18]
         temporary = GIFT_STATUS_TEMPLATE.format(
-            sender=sender,
-            receiver=receiver,
-            gift_name=gift_name,
+            sender=sender, receiver=receiver, gift_name=gift_name
         )
         with self._profile_status_lock:
             self._profile_status_token += 1
             token = self._profile_status_token
-            timer = self._profile_status_timer
-            if timer is not None:
-                timer.cancel()
-            base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
-            self._profile_base_status = base_status
-            # Send one profile-status update only: the gift lines are above
-            # the previous/base status in the same value, not a new status.
-            self._set_profile_status(
-                temporary + (f"<br>{base_status}" if base_status else "")
-            )
+            if self._profile_status_timer is not None:
+                self._profile_status_timer.cancel()
+
+            base_status = str(self._profile_base_status or BOT_BASE_STATUS).strip()
+            # Only send a gift status when the complete packet is safely below
+            # the server limit. Never risk the connection just to update status.
+            combined = temporary + ("<br>" + base_status if base_status else "")
+            if len(combined.encode("utf-8")) > PROFILE_STATUS_MAX_BYTES:
+                self.log("[PROFILE] gift status skipped: packet too large; WebSocket protected")
+            else:
+                self._set_profile_status(combined)
 
             def restore():
                 with self._profile_status_lock:
                     if token != self._profile_status_token:
                         return
                     self._profile_status_timer = None
-                    self._set_profile_status(self._profile_base_status)
-                    self._profile_current_status = self._profile_base_status
+                    safe_base = str(self._profile_base_status or BOT_BASE_STATUS).strip()
+                    if len(safe_base.encode("utf-8")) <= PROFILE_STATUS_MAX_BYTES:
+                        self._set_profile_status(safe_base)
+                    self._profile_current_status = safe_base
 
             self._profile_status_timer = threading.Timer(GIFT_STATUS_SECONDS, restore)
             self._profile_status_timer.daemon = True
