@@ -26,6 +26,8 @@ os.environ["BOT_ID"] = master_id
 os.environ["BOT_PWD"] = master_pwd
 os.environ["BOT_MASTER"] = master_id
 os.environ["MASTER_SERVICE_ENABLED"] = "1"
+os.environ["GROUP_TO_JOIN"] = ""
+os.environ["FIRST_ROOM"] = ""
 # PRIMARY_BOT_ID is supplied by the primary bot when it starts this process.
 
 from bot import TalkinBot  # noqa: E402
