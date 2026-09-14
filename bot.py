@@ -132,8 +132,9 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # Talkin profile-status query can differ between server builds. Keep the
 # action configurable while defaulting to the native profile update name.
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
-    "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
+    "PROFILE_STATUS_ACTIONS", "update_profile"
 ).split(",") if x.strip()]
+MAX_PROFILE_STATUS_BYTES = int(os.getenv("MAX_PROFILE_STATUS_BYTES", "700"))
 BOT_BASE_STATUS = os.getenv(
     "BOT_BASE_STATUS",
     '<B><H3><font color="#FFD700">بوت حمايه والعاب واغاني</font><br>'
@@ -1344,7 +1345,7 @@ def _looks_like_bot_command(text):
     if not low:
         return False
     prefixes = (
-        "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
+        "sa@", ".sa ", "vi@", "vip@", "unvip@", "unvi@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
@@ -1357,7 +1358,7 @@ def _looks_like_bot_command(text):
 def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
     prefixes = (
-        "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
+        "vi@", "vip@", "unvip@", "unvi@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "توثيق الكل", "وثق الكل", "verify",
@@ -1655,7 +1656,7 @@ def _default_help_pages():
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
         6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
-        7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\nvi@اسم — توثيق الألعاب\nتوثيق الكل — توثيق جميع مستخدمي الغرف\nuns@اسم — إزالة التوثيق\nVip@اسم — توثيق VIP\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
+        7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\nvi@اسم — توثيق الألعاب وإرسال إشعار للمستخدم\nunvi@اسم — إزالة التوثيق\nتوثيق الكل — توثيق جميع مستخدمي الغرف\nVip@اسم — توثيق VIP وإرسال إشعار للمستخدم\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
     }
 
 def _help_pages_from_messages():
@@ -3721,6 +3722,13 @@ class TalkinBot:
         to select the matching profile-update action without changing code.
         """
         status = str(status or "").strip()
+        # Query used to put the complete status in both `body` and `value`,
+        # doubling the protobuf frame and making the server close the socket
+        # with WebSocket code 1009 when a gift was sent.  Keep one copy only.
+        encoded_status = status.encode("utf-8")
+        if len(encoded_status) > MAX_PROFILE_STATUS_BYTES:
+            status = encoded_status[:MAX_PROFILE_STATUS_BYTES].decode("utf-8", "ignore").rstrip()
+            self.log("[PROFILE] status shortened to", len(status.encode("utf-8")), "bytes")
         try:
             sent = False
             for action in PROFILE_STATUS_ACTIONS:
@@ -3729,7 +3737,6 @@ class TalkinBot:
                         action,
                         type_="status",
                         body=status,
-                        value=status,
                     ))
                     self.log("[PROFILE] status update sent via", action)
                     sent = True
@@ -4573,11 +4580,16 @@ class TalkinBot:
             # Keep the bot's normal verification notice for the verified user,
             # while the master process separately relays the result to whoever
             # requested the verification.
-            self.send_private_text(target, f"✅ تم توثيق حسابك @{target} بنجاح.\n🎉 يمكنك الآن استخدام أوامر البوت.")
+            self.send_private_text(
+                target,
+                f"✅ تم توثيق حسابك @{target} بنجاح.\n"
+                f"🎉 يمكنك الآن استخدام أوامر البوت.\n"
+                f"من قبل @{sender}",
+            )
             self.send_private_text(sender, f"✅ تم توثيق @{target}.")
             return True
-        if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
-            prefix="uns@" if low.startswith("uns@") else text.split("@",1)[0]+"@"
+        if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("unvi@"): 
+            prefix="unvi@" if low.startswith("unvi@") else text.split("@",1)[0]+"@"
             target=text[len(prefix):].strip().lstrip("@"); data=_verified_data(); data.pop(_norm_user(target),None); _save_local_json(VERIFIED_FILE,data)
             self.send_private_text(sender, f"✅ تم إلغاء توثيق @{target}.")
             return True
@@ -4599,6 +4611,13 @@ class TalkinBot:
                 present = any(_norm_user(u) == key for u in self.room_users.get(active_room, {}))
                 if present:
                     self.send_room_text(active_room, f"👑 عضو Vip\n👤 {target}\n🏠 الغرفة: {active_room}")
+            self.send_private_text(
+                target,
+                f"✅ تم توثيق حسابك @{target} بنجاح.\n"
+                "🎉 ويمكنك الان النشر وارسال الهدايا\n"
+                "👑 تم تفعيل الترحيب المخصص تلقائياً.\n"
+                f"من قبل @{sender}",
+            )
             self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.\n👑 تم تفعيل الترحيب المخصص تلقائياً.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
