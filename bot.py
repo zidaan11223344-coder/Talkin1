@@ -1467,6 +1467,21 @@ DEFAULT_REPLY_MESSAGES = {
     "luck_result": "🍀✨ حظ\n━━━━━━━━━━━━\n👤 اللاعب: @{username}\n🎯 النتيجة: {result}\n💰 الرهان: {amount} نقطة\n💵 التغير: {delta} نقطة\n💳 الرصيد: {balance} نقطة",
 }
 
+
+def _points_summary_text(username):
+    pts = _get_points(username)
+    if pts is None:
+        return "♾️ نقاطك: لا محدود\n👑 الماستر لا يُخصم منه رصيد."
+    plays, level = _game_level(username)
+    labels=[("رهان","bet"),("مضاربة","duel"),("مليون","million"),("حظي","luck"),("استثمار","investment"),("حظ","luck_free"),("حجر/ورق/مقص","rps"),("زرع","farm"),("فيس","fruit"),("ألعاب أخرى","misc")]
+    details=[]
+    for label,key in labels:
+        g=_game_stats(username,key)
+        details.append(f"🎮 {label}: لعب {g['plays']} | نقاط {g['points']:+d} | رهان {g['staked']}")
+    return (f"💰 نقاطي\n━━━━━━━━━━━━\n👤 @{str(username).strip().lstrip('@')}\n"
+            f"💰 الرصيد: {_fmt_points(pts)}\n⭐ المستوى: {level}\n🎮 إجمالي مرات اللعب: {plays}\n"
+            + "\n".join(details))
+
 def _ensure_replies_file():
     data = _load_local_json(REPLIES_FILE, {})
     if not isinstance(data, dict):
@@ -2914,9 +2929,11 @@ class TalkinBot:
                     elif "vip" in body_low or "توثيق VIP بالفعل" in body_low:
                         reply = f"⚠️ @{target} لديه توثيق VIP بالفعل."
                     elif "تم توثيق" in body_low:
-                        reply = f"✅ تم توثيق @{target} بنجاح."
+                        reply = f"✅ تم توثيق @{target} بنجاح.\n🎉 يمكنك الآن استخدام أوامر البوت."
                     else:
                         reply = body
+                    # Final notification is always sent by the master account
+                    # directly to the verified user, not to a room.
                     self.send_private_text(requester, reply)
                 return True
             # Any private message from the primary bot is internal; never show
@@ -3727,6 +3744,15 @@ class TalkinBot:
             winner=winner["user"], loser=loser["user"], amount=_fmt_points(stake)
         )
         self.broadcast_all_rooms(text)
+        filename = GAME_IMAGE_FILES.get(game_key)
+        base = _public_base_url()
+        image = ASSETS_DIR / filename if filename else None
+        if filename and base and image and image.is_file():
+            for target_room in self._active_rooms():
+                try:
+                    self.send_room_media(target_room, f"{base}/assets/{filename}", "image")
+                except Exception as exc:
+                    self.log("[GAME] wager result image failed:", repr(exc))
 
     def _queue_wager(self, room, sender, game_name, amount):
         try:
@@ -3935,6 +3961,15 @@ class TalkinBot:
             balance=_fmt_points(balance)
         )
         self.send_room_text(room, text)
+        if reward > 0:
+            filename = GAME_IMAGE_FILES.get("luck")
+            base = _public_base_url()
+            image = ASSETS_DIR / filename if filename else None
+            if base and image and image.is_file():
+                try:
+                    self.send_room_media(room, f"{base}/assets/{filename}", "image")
+                except Exception as exc:
+                    self.log("[GAME] luck result image failed:", repr(exc))
         return True
 
     def _investment_bot_game(self, room, sender):
@@ -3960,6 +3995,15 @@ class TalkinBot:
             f"🎁 النتيجة: +{_fmt_points(reward)} نقطة\n"
             f"💰 الرصيد: {_fmt_points(balance)}"
         )
+        if reward > 0:
+            filename = GAME_IMAGE_FILES.get("investment")
+            base = _public_base_url()
+            image = ASSETS_DIR / filename if filename else None
+            if base and image and image.is_file():
+                try:
+                    self.send_room_media(room, f"{base}/assets/{filename}", "image")
+                except Exception as exc:
+                    self.log("[GAME] investment result image failed:", repr(exc))
         return True
 
     def handle_game_command(self, room, text, sender_name):
@@ -4117,19 +4161,7 @@ class TalkinBot:
             self._send_help(room=room, private_to=sender if is_private else None, page=page)
             return True
         if low in ("نقاطي","points"):
-            pts=_get_points(sender)
-            if pts is None:
-                self.send_private_text(sender, "♾️ نقاطك: لا محدود\n👑 الماستر لا يُخصم منه رصيد.")
-                return True
-            labels=[("رهان","bet"),("مضاربة","duel"),("مليون","million"),("حظي","luck"),("استثمار","investment"),("حظ","luck_free"),("حجر/ورق/مقص","rps"),("زرع","farm"),("فيس","fruit"),("ألعاب أخرى","misc")]
-            details=[]
-            for label,key in labels:
-                g=_game_stats(sender,key)
-                details.append(f"🎮 {label}: لعب {g['plays']} | نقاط {g['points']:+d} | رهان {g['staked']}")
-            plays,level=_game_level(sender)
-            self.send_private_text(sender, "💰 نقاطي\n━━━━━━━━━━━━\n"
-                f"👤 @{sender}\n💰 الرصيد: {_fmt_points(pts)}\n⭐ المستوى: {level}\n🎮 إجمالي مرات اللعب: {plays}\n"
-                + "\n".join(details))
+            self.send_private_text(sender, _points_summary_text(sender))
             return True
         mtop=re.fullmatch(r"توب\s*(رهان|مضاربة|حظي|استثمار)?", low)
         if low in ("توب","top") or mtop:
@@ -4313,16 +4345,12 @@ class TalkinBot:
         # they expose the bot's saved verification records. They are read
         # directly from disk so replacing bot.py does not reset the lists.
         if low in ("vi", "الموثقين", "الموثقون", "الموثقين؟"):
-            self.send_private_text(sender, _format_saved_accounts(
-                "📋 الحسابات الموثقة", _verified_data(),
-                "📭 لا يوجد مستخدمون موثقون محفوظون في verified_users.json."
-            ))
+            count = len(_verified_data())
+            self.send_private_text(sender, f"📋 عدد الحسابات الموثقة: {count}")
             return True
         if low in ("vip", "vips", "حسابات vip", "قائمة vip"):
-            self.send_private_text(sender, _format_saved_accounts(
-                "👑 حسابات VIP", _vip_data(),
-                "📭 لا توجد حسابات VIP محفوظة في vip_users.json."
-            ))
+            count = len(_vip_data())
+            self.send_private_text(sender, f"👑 عدد أعضاء VIP: {count}")
             return True
         if low in ("اعضاء", "أعضاء", "الاعضاء", "الأعضاء", "members"):
             users = _persistent_all_roster_users()
@@ -4360,7 +4388,17 @@ class TalkinBot:
                 self.send_private_text(sender, f"⚠️ @{target} لديه توثيق VIP بالفعل.")
                 return True
             data[key]={"username":target,"granted_by":sender,"created_at":int(time.time())}; _save_local_json(VIP_FILE,data)
-            self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.")
+            self.custom_welcomes[key] = {
+                "username": target,
+                "message": "👑 عضو Vip\n👤 {username}\n🏠 الغرفة: {room}"
+            }
+            self.custom_welcome_enabled = True
+            self._save_social_features()
+            for active_room in self._active_rooms():
+                present = any(_norm_user(u) == key for u in self.room_users.get(active_room, {}))
+                if present:
+                    self.send_room_text(active_room, f"👑 عضو Vip\n👤 {target}\n🏠 الغرفة: {active_room}")
+            self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.\n👑 تم تفعيل الترحيب المخصص تلقائياً.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
             target=text[text.casefold().find("vip@")+4:].strip().lstrip("@"); data=_vip_data(); data.pop(_norm_user(target),None); _save_local_json(VIP_FILE,data)
@@ -4476,7 +4514,7 @@ class TalkinBot:
             self.send_private_text(sender, "✅ تم تشغيل الردود التلقائية." if self.auto_replies_enabled else "⛔ تم إيقاف الردود التلقائية.")
             return True
         # Custom welcome: swc+@اسم@الترحيب and on/off.
-        m_sw = re.match(r"^swc\+@([^@]+)@(.+)$", text.strip(), re.I)
+        m_sw = re.match(r"^(?:swc\+|ترحيب\+)@([^@]+)@(.+)$", text.strip(), re.I)
         if m_sw and _is_master_name(sender):
             user, welcome = m_sw.group(1).strip().lstrip("@"), m_sw.group(2).strip()
             if user and welcome:
@@ -4621,6 +4659,8 @@ class TalkinBot:
                 self.send_room_text(room, f"👑 لقد أتاكم الزعيم\n👤 {username}\n🏠 الغرفة: {room}")
             elif self.custom_welcome_enabled:
                 cw = self.custom_welcomes.get(_norm_user(username))
+                if _is_vip_user(username):
+                    cw = {"message": "👑 عضو Vip\n👤 {username}\n🏠 الغرفة: {room}"}
                 if isinstance(cw, dict) and cw.get("message"):
                     self.send_room_text(room, str(cw["message"]).replace("{username}", username).replace("{room}", room))
         elif event_type == "user_left" and username:
@@ -4734,6 +4774,11 @@ class TalkinBot:
                 self.send_private_text(publisher,notice)
                 return
 
+        # نقاطي متاح للجميع ولا يحتاج توثيقاً.
+        if body.strip().casefold() in ("نقاطي", "points"):
+            self.send_room_text(room, _points_summary_text(frm))
+            return
+
         # Verified users may use normal bot commands; administration remains
         # restricted to masters. Unverified command attempts receive one clear
         # notice instead of being silently ignored.
@@ -4841,6 +4886,9 @@ class TalkinBot:
                         return
                     if body and not _is_verified_user(frm) and _looks_like_bot_command(body) and not body.strip().casefold().startswith(("دخول ", "join ", "ادخل ", "enter ")):
                         self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
+                        return
+                    if body and body.casefold() in ("نقاطي", "points"):
+                        self.send_private_text(frm, _points_summary_text(frm))
                         return
                     if body:
                         if self._handle_management_command(self.room, body, frm, is_private=True):
