@@ -2120,14 +2120,16 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     # The first frame is always the complete card. Some chat clients show
     # only the first GIF frame in the message preview, so it must never be a
     # blank/reveal mask. Later frames add a lightweight moving highlight.
-    frames=[rgb.quantize(colors=24, method=Image.Quantize.MEDIANCUT).convert("P")]
+    # Use a full adaptive GIF palette so the animation does not noticeably
+    # change the original gift colors.
+    frames=[rgb.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).convert("P")]
     for x in (int(width*.48),):
         frame=rgb.copy()
         shine=Image.new("RGBA",(width,height),(0,0,0,0))
         sd=ImageDraw.Draw(shine)
         sd.polygon([(x-34,0),(x+6,0),(x-70,height),(x-110,height)], fill=(255,244,190,48))
         frame=Image.alpha_composite(frame.convert("RGBA"),shine).convert("RGB")
-        frames.append(frame.quantize(colors=24, method=Image.Quantize.MEDIANCUT).convert("P"))
+        frames.append(frame.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).convert("P"))
     frames.append(frames[0].copy())
     frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=[600,110,450],loop=0,optimize=True)
     return out
