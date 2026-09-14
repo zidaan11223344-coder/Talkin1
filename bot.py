@@ -134,17 +134,15 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
     "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
 ).split(",") if x.strip()]
-# Talkin rejects oversized profile-status values on some server builds.
-# Keep a conservative UTF-8 limit and never send malformed/truncated HTML.
-PROFILE_STATUS_MAX_BYTES = int(os.getenv("PROFILE_STATUS_MAX_BYTES", "680"))
-
-GIFT_STATUS_SECONDS = 5 * 60
-
-# حالة الهدية المؤقتة — تُعرض فوق الحالة الأساسية لمدة 5 دقائق.
-# لا تغيّر طريقة عرض الأسماء في بطاقة الهدية؛ هذا خاص بحالة الملف فقط.
-GIFT_STATUS_TEMPLATE = (
-    '<b><font color="#FFE29A">🎁 {sender} ➜ {receiver} | {gift_name}</font></b>'
-)
+BOT_BASE_STATUS = os.getenv(
+    "BOT_BASE_STATUS",
+    '<B><H3><font color="#FFD700">بوت حمايه والعاب واغاني</font><br>'
+    '<font color="#00E5FF">لمعرفه الالعاب والاوامر ارسل مساعده</font><br>'
+    '<font color="#FF4FD8">لدخول الغرف ارسل دخول اسم الغرفه</font><br>'
+    '<font color="#7CFF00">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
+    '</H3></B>',
+).strip()
+GIFT_STATUS_SECONDS = 15 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
 # from the private chat, but only the configured BOT_MASTER is authorized.
@@ -2094,7 +2092,8 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
     _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Show each person's profile image beside that person's name panel.
+    # Keep each username in a clear rectangle and place that user's photo
+    # inside the rectangle at its end.
     box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
     top_y=int(h*.675); bottom_y=int(h*.815)
     for y in (top_y,bottom_y):
@@ -2107,8 +2106,8 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
         (bottom_y, "المستلم", receiver_name, receiver_photo_url),
     ), avatars):
         if avatar is not None:
-            image.alpha_composite(avatar, (box_x-118, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
-        _draw_centered(d,(box_x+box_w*.52,y+34),label,25,(255,224,165,255),box_w-30)
+            image.alpha_composite(avatar, (box_x+box_w-108, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
+        _draw_centered(d,(box_x+box_w*.43,y+34),label,25,(255,224,165,255),box_w-125)
 
     # Same visual text as the chat username: no @ removal, no transliteration.
     # Use distinct high-contrast colors so sender/receiver are immediately
@@ -2116,15 +2115,21 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     sender_color=(126,226,255,255)     # turquoise-blue for the sender
     receiver_color=(255,166,218,255)   # pink-magenta for the receiver
     panel_center_x = box_x + box_w / 2
-    _draw_name_centered(d,(panel_center_x,top_y+box_h*.68),sender_name,39,sender_color,box_w-42)
-    _draw_name_centered(d,(panel_center_x,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-42)
+    _draw_name_centered(d,(box_x+box_w*.43,top_y+box_h*.68),sender_name,39,sender_color,box_w-135)
+    _draw_name_centered(d,(box_x+box_w*.43,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-135)
 
-    # Use a single high-quality PNG instead of an animated GIF.
-    # This prevents GIF palette/compression artifacts from making the gift
-    # artwork and the sender/receiver names blurry.
-    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.png"
+    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
-    image.convert("RGB").save(out,"PNG",optimize=True)
+    # Static output replaces the old animated GIF because motion reduced
+    # clarity in Talkin previews.  The canvas is slightly larger, and the
+    # quality is reduced only as needed to stay below 100 KiB.
+    rgb=image.convert("RGB").resize((360,370),Image.LANCZOS)
+    for quality in (88,82,76,70,64,58,52):
+        rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
+        if out.stat().st_size < 100 * 1024:
+            break
+    if out.stat().st_size >= 100 * 1024:
+        raise RuntimeError("تعذر ضغط بطاقة الهدية إلى أقل من 100 كيلوبايت")
     return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
@@ -2292,7 +2297,8 @@ class TalkinBot:
         self._profile_status_lock = threading.Lock()
         self._profile_status_timer = None
         self._profile_status_token = 0
-        self._profile_current_status = ""
+        self._profile_base_status = BOT_BASE_STATUS
+        self._profile_current_status = BOT_BASE_STATUS
         self.music_lock = threading.Lock()
         # Mini-games: free-to-play, no points are deducted.
         self.game_lock = threading.Lock()
@@ -3325,6 +3331,8 @@ class TalkinBot:
                 if username and username.casefold() == BOT_ID.casefold() and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
+                        if self._profile_status_timer is None:
+                            self._profile_base_status = status
                 if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
             for user in self._users_from_room_admin(result.get("room_admin") or {}):
@@ -3334,6 +3342,8 @@ class TalkinBot:
                 if username and username.casefold() == BOT_ID.casefold() and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
+                        if self._profile_status_timer is None:
+                            self._profile_base_status = status
                 if username and photo and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
         except Exception as exc:
@@ -3713,14 +3723,6 @@ class TalkinBot:
         status = str(status or "").strip()
         try:
             sent = False
-            # Some Talkin servers close the socket with code 1009 when the
-            # profile-status field is too large. Validate before sending and
-            # use only the first successful native action (do not send the
-            # same large status 2-3 times).
-            raw = status.encode("utf-8")
-            if len(raw) > PROFILE_STATUS_MAX_BYTES:
-                self.log(f"[PROFILE] status too large ({len(raw)} bytes); skipped to protect WebSocket")
-                return False
             for action in PROFILE_STATUS_ACTIONS:
                 try:
                     self.send_query(encode_query(
@@ -3731,7 +3733,6 @@ class TalkinBot:
                     ))
                     self.log("[PROFILE] status update sent via", action)
                     sent = True
-                    break
                 except Exception as exc:
                     self.log("[PROFILE] action failed", action, repr(exc))
             if not sent:
@@ -3742,34 +3743,37 @@ class TalkinBot:
             return False
 
     def _set_temporary_gift_status(self, sender: str, receiver: str, gift_name: str):
-        """Show ONLY the temporary gift status for 5 minutes, then clear it."""
-        sender = str(sender or "").strip().lstrip("@")[:24]
-        receiver = str(receiver or "").strip().lstrip("@")[:24]
-        gift_name = str(gift_name or "هدية").strip()[:18]
-        temporary = GIFT_STATUS_TEMPLATE.format(
-            sender=sender, receiver=receiver, gift_name=gift_name
+        sender = str(sender or "").strip().lstrip("@")
+        receiver = str(receiver or "").strip().lstrip("@")
+        gift_name = str(gift_name or "هدية").strip()
+        # Keep sender and receiver on separate colored lines and append the
+        # configured base status below them instead of replacing it.
+        temporary = (
+            f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
+            f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
+            f'<br><font color="#FFE29A">{gift_name}</font>'
         )
         with self._profile_status_lock:
             self._profile_status_token += 1
             token = self._profile_status_token
-            if self._profile_status_timer is not None:
-                self._profile_status_timer.cancel()
-
-            # Send ONLY the gift status. The old long base status is no longer sent.
-            if len(temporary.encode("utf-8")) <= PROFILE_STATUS_MAX_BYTES:
-                self._set_profile_status(temporary)
-                self._profile_current_status = temporary
-            else:
-                self.log("[PROFILE] gift status too large; skipped")
+            timer = self._profile_status_timer
+            if timer is not None:
+                timer.cancel()
+            base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
+            self._profile_base_status = base_status
+            # Send one profile-status update only: the gift lines are above
+            # the previous/base status in the same value, not a new status.
+            self._set_profile_status(
+                temporary + (f"<br>{base_status}" if base_status else "")
+            )
 
             def restore():
                 with self._profile_status_lock:
                     if token != self._profile_status_token:
                         return
                     self._profile_status_timer = None
-                    # Clear the profile status after 5 minutes.
-                    self._set_profile_status("")
-                    self._profile_current_status = ""
+                    self._set_profile_status(self._profile_base_status)
+                    self._profile_current_status = self._profile_base_status
 
             self._profile_status_timer = threading.Timer(GIFT_STATUS_SECONDS, restore)
             self._profile_status_timer.daemon = True
