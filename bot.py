@@ -280,6 +280,8 @@ REPLIES_FILE = DATA_DIR / "replies.json"
 MODERATION_FILE = DATA_DIR / "moderation.json"
 # Dedicated persistent file for filter words added with +mf@...
 MF_FILE = DATA_DIR / "mf.json"
+# Dedicated persistent file for accounts allowed to manage VIP verification.
+MVIP_MASTERS_FILE = DATA_DIR / "mvip_masters.json"
 
 # Known legacy state files used by older releases. This migration runs once and
 # NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
@@ -287,7 +289,7 @@ _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
     "messages.json", "published_posts.json", "game_stats.json", "crop_plots.json",
     "tracked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
-    "moderation.json", "mf.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
+    "moderation.json", "mf.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json",
 )
 
@@ -1349,6 +1351,24 @@ def _master_list():
 def _is_master_name(name):
     n=_norm_user(name)
     return bool(n and (n == _norm_user(BOT_MASTER) or n in {_norm_user(x) for x in _master_list()}))
+def _mvip_master_list():
+    data = _load_local_json(MVIP_MASTERS_FILE, [])
+    return data if isinstance(data, list) else []
+
+def _is_mvip_master(name):
+    key = _norm_user(name)
+    return bool(key and (key in {_norm_user(x) for x in _mvip_master_list()} or _is_primary_master(name)))
+
+def _is_verification_manager(name):
+    return _is_master_name(name) or _is_mvip_master(name)
+
+def _is_verification_manager_command(text):
+    value = str(text or "").strip()
+    return bool(
+        re.match(r"^(?:vi|uns|vip|unvip|un vip)@.+$", value, re.I)
+        or value.casefold() in {"l@mvip"}
+    )
+
 def _is_primary_master(name):
     """Only the account configured in BOT_MASTER has unlimited points."""
     n=_norm_user(name)
@@ -1365,7 +1385,7 @@ def _looks_like_bot_command(text):
     prefixes = (
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
-        "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "خروج",
+        "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
@@ -1378,7 +1398,7 @@ def _looks_like_admin_command(text):
     prefixes = (
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
-        "i@", "inv", "دعوات", "invite", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
+        "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
@@ -1700,7 +1720,7 @@ def _default_help_pages():
     return {
         1: '📋 أوامر الإدارة\n━━━━━━━━━━━━\nk@اسم — طرد\nb@اسم — حظر\nub@اسم — فك الحظر\na@اسم — تعيين مشرف\no@اسم — تعيين مالك',
         2: '🎵 الموسيقى\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل',
-        3: '🎮 الألعاب\n━━━━━━━━━━━━\nرهان@المبلغ — رهان (للموثقين)\nمضاربة@المبلغ — مضاربة\nاستثمار@المبلغ — استثمار\nحظي@المبلغ — حظي ثنائي\nصيد — لعبة عالمية، جائزة 500\nسرعة — لعبة عالمية، جائزة 500\nكنز — لعبة عالمية، جائزة 500\nمصارعة — لعبة عالمية، جائزة 500\nبحث — لعبة عالمية، جائزة 500\nاسرق — سرقة 500 نقطة من عضو عشوائي\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون',
+        3: '🎮 الألعاب — القسم 1\n━━━━━━━━━━━━\nرهان@المبلغ — رهان لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون\n🌱 زرع — زراعة حتى 5 أنواع مختلفة\n\n📌 للمزيد اكتب Ns',
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
         6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
@@ -2481,6 +2501,8 @@ class TalkinBot:
         # Live room membership cache: username -> role.  This is updated by
         # occupants_list and by user_joined/user_left room events.
         self.room_users = defaultdict(dict)
+        self.bot_room_roles = {}
+        self._pending_inv_role_check = {}
         # Live profile photos learned from Talkin UserItem field 3.
         # username(casefold) -> public photo URL.
         self.user_photos = {}
@@ -2555,6 +2577,7 @@ class TalkinBot:
         self.game_cooldown = defaultdict(float)
         self.guess_games = {}
         self.help_pages = {}
+        self.help_game_part = {}
         # Global wager queues, crop timers, and fruit-match state.
         self.wager_waiting = {}
         # Global fixed-prize PvP queues: one open challenge per game name.
@@ -3339,6 +3362,32 @@ class TalkinBot:
     def reply_text(self, room: str, text: str, private_to: str = ""):
         return self.send_private_text(private_to, text) if private_to else self.send_room_text(room, text)
 
+    def _bot_room_role(self, room):
+        room = str(room or "").strip()
+        role = str(getattr(self, "bot_room_roles", {}).get(_norm_room(room), "") or "").casefold().strip()
+        if role:
+            return role
+        live = getattr(self, "room_users", {}).get(room, {}) or {}
+        for username, value in live.items():
+            if _norm_user(username) == _norm_user(BOT_ID):
+                return str(value or "").casefold().strip()
+        return ""
+
+    def _inv_bot_owner_allowed(self, room):
+        role = self._bot_room_role(room)
+        if role in {"owner", "creator", "room_owner", "room_creator"}:
+            return True
+        if role in {"admin", "moderator", "mod", "member", "user", "none"}:
+            return False
+        # Unknown role: ask the server for a fresh occupants list; the result
+        # handler will complete the check and continue the invitation flow.
+        try:
+            self.send_query(encode_query("room_admin", type_="occupants_list", room=room, to=BOT_ID, value="none"))
+            return None
+        except Exception as exc:
+            self.log("[INV] bot-role refresh failed", room, repr(exc))
+            return False
+
     def request_occupants(self, room: str = "", silent_master: bool = False, response_room: str = "", response_to: str = ""):
 
         """Load invitation candidates ONLY from the room specified by inv.
@@ -3721,6 +3770,21 @@ class TalkinBot:
         if not users_info and result.get("room_admin"):
             users_info = self._users_from_room_admin(result["room_admin"])
 
+        # Cache the bot's own room role before removing it from the invitation roster.
+        for u in users_info:
+            if _norm_user(u.get("username")) == _norm_user(BOT_ID):
+                bot_role = str(u.get("role") or "").casefold().strip()
+                if bot_role:
+                    self.bot_room_roles[_norm_room(room)] = bot_role
+                break
+
+        pending_role = getattr(self, "_pending_inv_role_check", {}).pop(_norm_room(room), None)
+        if pending_role is not None:
+            bot_role = self._bot_room_role(room)
+            if bot_role not in {"owner", "creator", "room_owner", "room_creator"}:
+                self.send_room_text(room, "⚠️ ارفع البوت أونر راعد المحاولة.")
+                return
+
         # Cache the complete room list, including role categories. The disk
         # roster is append/update-only: a transient leave event never erases history.
         if users_info:
@@ -3730,6 +3794,17 @@ class TalkinBot:
         # A roster refresh requested on room entry is only for persistence.
         # It must never start invitations unless the master explicitly used inv.
         if not self.invite_pending:
+            if pending_role is not None:
+                usernames = [u["username"] for u in users_info if _norm_user(u.get("username")) != _norm_user(BOT_ID)]
+                if not usernames:
+                    self.send_room_text(room, "📭 لا يوجد أعضاء لإرسال الدعوات لهم.")
+                    return
+                self.invite_pending = True
+                self.invite_silent_master = False
+                self.invite_room = room
+                self.invite_sent.clear()
+                response_room = str((pending_role or {}).get("room") or room).strip()
+                threading.Thread(target=self._finish_invites, args=(room, usernames), name="talkin-invites", daemon=True).start()
             return
 
         if not users_info:
@@ -4093,6 +4168,16 @@ class TalkinBot:
             self.reply_text(room,"❌ الصيغة: sa@رقم_الهدية@اسم_المستخدم",private_to); return True
         try:
             sender_name = str(sender_name or BOT_ID)
+            if not _is_verified_user(sender_name):
+                self.reply_text(room, f"🔒 @{sender_name} يحتاج توثيق VIP لإرسال الهدايا.\n{_verification_notice()}", private_to)
+                return True
+            if not _is_verified_user(target):
+                self.reply_text(
+                    room,
+                    f"🔒 المستلم @{target} غير موثق.\n📩 اطلب توثيق VIP للمستلم أولاً ثم أعد إرسال الهدية.",
+                    private_to
+                )
+                return True
             # Giant Chat point costs; owner/masters have unlimited points.
             cost=int(GIFT_COSTS.get(str(gift_id),0)); charged=False
             if not _is_master_name(sender_name):
@@ -4203,7 +4288,7 @@ class TalkinBot:
             "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليون — فرصة عشوائية للفوز بمليون نقطة.\n"
-            "🌱 زرع — كل محصول يمكن زراعته حتى 5 مرات معاً لكل مستخدم.\n"
+            "🌱 زرع — حتى 5 محاصيل نشطة لكل مستخدم، وكل نوع مرة واحدة فقط.\n"
             "🆕 صيد | سرعة | كنز | مصارعة | بحث — ألعاب عالمية، الجائزة 500 نقطة.\n"
             "🕵️ اسرق — اختر عضوًا عشوائيًا وحاول سرقة 500 نقطة منه.\n"
             "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار")
@@ -4555,23 +4640,55 @@ class TalkinBot:
         if crop not in crops:
             self.send_room_text(room, "❌ اختر محصولاً من قائمة زرع.")
             return True
+        user_key=_norm_user(sender)
+        with self.game_lock:
+            # يسمح لكل مستخدم بحد أقصى 5 محاصيل نشطة في الوقت نفسه،
+            # وكل نوع محصول مرة واحدة فقط؛ تكرار نفس النوع يكون صامتاً.
+            active_user = []
+            active_crops = set()
+            for key, plot in self.crop_plots.items():
+                if key.startswith(user_key + "|"):
+                    active_user.append((key, plot))
+                    active_crops.add(str(plot.get("crop") or ""))
+
+            if crop in active_crops:
+                self.send_room_text(
+                    room,
+                    f"🌱 ازرع محصولاً آخر.\n"
+                    f"📖 الطريقة: اكتب زرع ثم @ ثم رمز المحصول.\n"
+                    f"مثال: زرع@🍐\n"
+                    f"💡 لا يمكن زراعة نفس النوع مرتين في نفس الوقت."
+                )
+                return True
+
+            if len(active_user) >= 5:
+                self.send_room_text(room, "⏳ لديك 5 محاصيل قيد الزراعة حالياً. احصد أحدها أولاً ثم ازرع محصولاً جديداً.")
+                return True
+
         if not self._game_cooldown_notice(room, sender, 30.0, "زرع"):
             return True
-        user_key=_norm_user(sender)
-        # لكل مستخدم يمكن تشغيل نفس المحصول حتى 5 مرات في الوقت نفسه.
-        # المحاصيل الأخرى لها أيضاً حد 5 مرات مستقلة.
+
         with self.game_lock:
-            active_same = []
+            # نعيد الفحص بعد الانتظار لتجنب التكرار إذا وصلت زراعة أخرى بالتزامن.
+            active_user = []
+            active_crops = set()
             for key, plot in self.crop_plots.items():
-                if key.startswith(user_key + "|") and str(plot.get("crop") or "") == crop:
-                    active_same.append((key, plot))
-            if len(active_same) >= 5:
-                lefts=[]
-                for _, plot in active_same:
-                    lefts.append(max(1, int((float(plot.get("finish",0))-time.time()+59)//60)))
-                left=min(lefts) if lefts else 1
-                self.send_room_text(room, f"⏳ وصلت للحد الأقصى: 5 مرات للمحصول {crop}. أقرب حصاد بعد نحو {left} دقيقة.")
+                if key.startswith(user_key + "|"):
+                    active_user.append((key, plot))
+                    active_crops.add(str(plot.get("crop") or ""))
+            if crop in active_crops:
+                self.send_room_text(
+                    room,
+                    f"🌱 ازرع محصولاً آخر.\n"
+                    f"📖 الطريقة: زرع@رمز_المحصول\n"
+                    f"مثال: زرع@🍐\n"
+                    f"💡 لا يمكن زراعة نفس النوع مرتين في نفس الوقت."
+                )
                 return True
+            if len(active_user) >= 5:
+                self.send_room_text(room, "⏳ لديك 5 محاصيل قيد الزراعة حالياً. احصد أحدها أولاً ثم ازرع محصولاً جديداً.")
+                return True
+
             minutes,reward=crops[crop]
             slot=uuid.uuid4().hex[:8]
             key=f"{user_key}|{crop}|{slot}"
@@ -4946,7 +5063,41 @@ class TalkinBot:
             return True
         return False
 
-    def _send_help(self, room=None, private_to=None, page=1):
+    def _send_game_help_section(self, room=None, private_to=None, part=1):
+        if part <= 1:
+            text = (
+                "🎮 الألعاب — القسم 1\n"
+                "━━━━━━━━━━━━\n"
+                "رهان@المبلغ — رهان لاعب ضد لاعب\n"
+                "مضاربة@المبلغ — مضاربة لاعب ضد لاعب\n"
+                "استثمار@المبلغ — استثمار لاعب ضد لاعب\n"
+                "حظي@المبلغ — تحدي حظ لاعب ضد لاعب\n"
+                "حظ@المبلغ — حظ عشوائي مع البوت\n"
+                "مليون — لعبة المليون\n"
+                "🌱 زرع — حتى 5 أنواع مختلفة\n"
+                "\n📌 للمزيد اكتب Ns"
+            )
+        else:
+            text = (
+                "🎮 الألعاب — القسم 2\n"
+                "━━━━━━━━━━━━\n"
+                "🆕 صيد — لعبة عالمية، الجائزة 500\n"
+                "🆕 سرعة — لعبة عالمية، الجائزة 500\n"
+                "🆕 كنز — لعبة عالمية، الجائزة 500\n"
+                "🆕 مصارعة — لعبة عالمية، الجائزة 500\n"
+                "🆕 بحث — لعبة عالمية، الجائزة 500\n"
+                "🕵️ اسرق — محاولة سرقة 500 نقطة من عضو\n"
+                "\n✅ انتهى قسم الألعاب"
+            )
+        if private_to:
+            self._send_help_chunks("chat_message", text, to=private_to)
+        elif room:
+            self._send_help_chunks("room_message", text, room=room)
+
+    def _send_help(self, room=None, private_to=None, page=1, game_part=1):
+        if page == 3:
+            self._send_game_help_section(room=room, private_to=private_to, part=game_part)
+            return
         text=_command_help(page)
         if private_to:
             self._send_help_chunks("chat_message", text, to=private_to)
@@ -4981,7 +5132,14 @@ class TalkinBot:
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
         security_command = bool(re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I) or re.match(r"^mr@\d+$", str(body or "").strip(), re.I))
         join_command = bool(re.match(r"^دخول@.+$", str(body or "").strip(), re.I))
-        if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)) and not join_command and not (security_command and room and _room_manager(self, room, sender)):
+        verification_manager_command = _is_verification_manager_command(body)
+        points_transfer_command = bool(re.fullmatch(r"sb@([^@]+)@(\d+)", str(body or "").strip(), re.I))
+        if (not _is_master_name(sender)
+                and not (verification_manager_command and _is_mvip_master(sender))
+                and not (points_transfer_command and _is_verified_user(sender))
+                and not (is_publish and _is_verified_user(sender))
+                and not join_command
+                and not (security_command and room and _room_manager(self, room, sender))):
             return False
         # A private command can be replayed by the Talkin transport with a new
         # frame/uid. Do not answer the same account-list request twice in a row.
@@ -5109,15 +5267,25 @@ class TalkinBot:
             page=int(m_help.group(1))
             if page in (1, 7) and not _is_master_name(sender):
                 return True
-            self.help_pages[(str(room), _norm_user(sender))]=page
-            self._send_help(room=room, private_to=sender if is_private else None, page=page)
+            key=(str(room), _norm_user(sender))
+            self.help_pages[key]=page
+            if page == 3:
+                self.help_game_part[key]=1
+            self._send_help(room=room, private_to=sender if is_private else None, page=page, game_part=1)
             return True
         if low in ("ns","n","التالي","القائمة التالية","next"):
             key=(str(room), _norm_user(sender))
-            page=int(self.help_pages.get(key,1) or 1)+1
-            if page>7: page=1
-            self.help_pages[key]=page
-            self._send_help(room=room, private_to=sender if is_private else None, page=page)
+            current_page=int(self.help_pages.get(key,1) or 1)
+            if current_page == 3:
+                part=int(self.help_game_part.get(key,1) or 1)
+                part = 2 if part == 1 else 1
+                self.help_game_part[key]=part
+                self._send_help(room=room, private_to=sender if is_private else None, page=3, game_part=part)
+            else:
+                page=current_page+1
+                if page>7: page=1
+                self.help_pages[key]=page
+                self._send_help(room=room, private_to=sender if is_private else None, page=page)
             return True
         if low in ("نقاطي","points"):
             self.send_private_text(sender, _points_summary_text(sender))
@@ -5199,7 +5367,8 @@ class TalkinBot:
             if not _is_primary_master(sender):
                 balance = _get_points(sender)
                 if balance < amount:
-                            return True
+                    self.send_private_text(sender, f"❌ رصيدك غير كافٍ. رصيدك الحالي: {_fmt_points(balance)} نقطة.")
+                    return True
                 _add_points(sender, -amount)
             new = _add_points(target, amount)
             self.send_private_text(sender, f"✅ تم تحويل {_fmt_points(amount)} نقطة إلى @{target}. رصيدك: {_fmt_points(_get_points(sender))}")
@@ -5214,7 +5383,7 @@ class TalkinBot:
             self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
             return True
 
-        if not _is_master_name(sender):
+        if not _is_master_name(sender) and not (_is_mvip_master(sender) and _is_verification_manager_command(text)):
             if _looks_like_admin_command(text):
                 self.send_private_text(sender, "🚫 هذا الأمر مخصص للماستر والإدارة فقط.")
             return False
@@ -5283,6 +5452,48 @@ class TalkinBot:
             _save_local_json(VERIFIED_FILE, data)
             self.send_private_text(sender, f"✅ تم توثيق {len(users)} مستخدم.")
             return True
+        # Verification masters (persisted separately from management masters).
+        if low.startswith("mvip@"):
+            if not _is_primary_master(sender):
+                self.send_private_text(sender, "🚫 إضافة ماستر توثيق مسموحة للمالك الأساسي فقط.")
+                return True
+            target = text[5:].strip().lstrip("@")
+            if not target:
+                self.send_private_text(sender, "❌ الصيغة: mvip@اسم المستخدم")
+                return True
+            data = _mvip_master_list()
+            if any(_norm_user(x) == _norm_user(target) for x in data) or _is_master_name(target):
+                self.send_private_text(sender, f"⚠️ @{target} لديه صلاحية ماستر توثيق بالفعل.")
+                return True
+            data.append(target)
+            _save_local_json(MVIP_MASTERS_FILE, data)
+            self.send_private_text(sender, f"✅ تم إضافة @{target} إلى ماسترات التوثيق.")
+            return True
+        if low.startswith("umvip@"):
+            if not _is_primary_master(sender):
+                self.send_private_text(sender, "🚫 إزالة ماستر توثيق مسموحة للمالك الأساسي فقط.")
+                return True
+            target = text[6:].strip().lstrip("@")
+            data = [x for x in _mvip_master_list() if _norm_user(x) != _norm_user(target)]
+            _save_local_json(MVIP_MASTERS_FILE, data)
+            self.send_private_text(sender, f"✅ تم إزالة @{target} من ماسترات التوثيق.")
+            return True
+        if low == "l@mvip":
+            if not _is_verification_manager(sender):
+                return True
+            msg = _format_saved_accounts("👑 ماسترات التوثيق", { _norm_user(x): {"username": x} for x in _mvip_master_list() }, "📭 لا توجد ماسترات توثيق.")
+            self.send_private_text(sender, msg)
+            return True
+        if low == "l@mas":
+            if not _is_master_name(sender):
+                return True
+            masters = list(_master_list())
+            if BOT_MASTER and not any(_norm_user(x) == _norm_user(BOT_MASTER) for x in masters):
+                masters.insert(0, BOT_MASTER)
+            msg = _format_saved_accounts("👑 ماسترات الإدارة", { _norm_user(x): {"username": x} for x in masters }, "📭 لا توجد ماسترات إدارة.")
+            self.send_private_text(sender, msg)
+            return True
+
         # Add/remove master. Only the owner from BOT_MASTER may alter master list.
         if low.startswith("mas@"):
             if _norm_user(sender) != _norm_user(BOT_MASTER):
@@ -5327,6 +5538,8 @@ class TalkinBot:
             return True
 
         if low.startswith("vi@"):
+            if not _is_verification_manager(sender):
+                return True
             target=text[2:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: vi@اسم المستخدم"); return True
             data=_verified_data()
@@ -5345,11 +5558,15 @@ class TalkinBot:
             self.send_private_text(sender, f"✅ تم توثيق @{target}.")
             return True
         if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
+            if not _is_verification_manager(sender):
+                return True
             prefix="uns@" if low.startswith("uns@") else text.split("@",1)[0]+"@"
             target=text[len(prefix):].strip().lstrip("@"); data=_verified_data(); data.pop(_norm_user(target),None); _save_local_json(VERIFIED_FILE,data)
             self.send_private_text(sender, f"✅ تم إلغاء توثيق @{target}.")
             return True
         if low.startswith("vip@"):
+            if not _is_verification_manager(sender):
+                return True
             target=text[4:].strip().lstrip("@");
             if not target: self.send_private_text(sender,"❌ الصيغة: Vip@اسم المستخدم"); return True
             data=_vip_data(); key=_norm_user(target)
@@ -5371,6 +5588,8 @@ class TalkinBot:
             self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
+            if not _is_verification_manager(sender):
+                return True
             target=text[text.casefold().find("vip@")+4:].strip().lstrip("@"); data=_vip_data(); data.pop(_norm_user(target),None); _save_local_json(VIP_FILE,data)
             self.send_private_text(sender, f"✅ تم إلغاء VIP عن @{target}.")
             return True
@@ -5446,14 +5665,26 @@ class TalkinBot:
             self.invite_message_template=template
             self.send_private_text(sender,f"✅ تم تغيير نص الدعوة إلى: {template}"); return True
         if low == "inv" or low.startswith("inv ") or low in ("دعوات","invite") or low.startswith(("دعوات ","invite ")):
-            parts=text.split(None,1); target_room=parts[1].strip() if len(parts)==2 else room
-            if not target_room:
-                self.send_private_text(sender,"❌ استخدم: inv اسم_الغرفة"); return True
+            # Invitations are executed only from the room where the command is sent.
+            if is_private or not room:
+                self.send_private_text(sender, "⚠️ نفّذ inv داخل الغرفة المطلوبة.")
+                return True
+            target_room = str(room).strip()
+            role_ok = self._inv_bot_owner_allowed(target_room)
+            if role_ok is False:
+                self.send_room_text(target_room, "⚠️ ارفع البوت أونر راعد المحاولة.")
+                return True
+            if role_ok is None:
+                self._pending_inv_role_check[_norm_room(target_room)] = {
+                    "sender": sender, "room": target_room,
+                }
+                self.send_room_text(target_room, "⏳ جاري التحقق من رتبة البوت...")
+                return True
             self.request_occupants(
                 target_room,
                 silent_master=False,
-                response_room=(room if room and not is_private else ""),
-                response_to=(sender if is_private else ""),
+                response_room=target_room,
+                response_to="",
             )
             return True
         m_single_invite = re.fullmatch(r"i@(.+)", text.strip(), re.I)
@@ -5724,7 +5955,11 @@ class TalkinBot:
         # not send an authorization message to other users and do not allow
         # verified/VIP users to reach the management handlers accidentally.
         is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
-        if _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)):
+        if (_looks_like_admin_command(body)
+                and not _is_master_name(frm)
+                and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
+                and not (re.fullmatch(r"sb@([^@]+)@(\d+)", body.strip(), re.I) and _is_verified_user(frm))
+                and not (is_publish_command and _is_verified_user(frm))):
             if not _is_verified_user(frm):
                 self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
@@ -5811,8 +6046,8 @@ class TalkinBot:
             return
         # Music/gifts require verification; masters are always allowed.
         if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
-            if not _is_vip_user(frm):
-                self.send_room_text(room, f"🔒 @{frm} يحتاج VIP لاستخدام الهدايا.\n{_verification_notice()}")
+            if not _is_verified_user(frm):
+                self.send_room_text(room, f"🔒 @{frm} يحتاج توثيقاً لاستخدام الهدايا.\n{_verification_notice()}")
                 return
             if self.handle_gift_command(room, body, frm):
                 return
@@ -5903,7 +6138,12 @@ class TalkinBot:
                             return
                     # Silently ignore master-only commands from everyone else.
                     is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
-                    if body and _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)) and not re.match(r"^دخول@.+$", body, re.I):
+                    if (body and _looks_like_admin_command(body)
+                            and not _is_master_name(frm)
+                            and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
+                            and not (re.fullmatch(r"sb@([^@]+)@(\d+)", body.strip(), re.I) and _is_verified_user(frm))
+                            and not (is_publish_command and _is_verified_user(frm))
+                            and not re.match(r"^دخول@.+$", body, re.I)):
                         if not _is_verified_user(frm):
                             self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
@@ -5924,11 +6164,11 @@ class TalkinBot:
                         if self.handle_music_command(self.room, body, frm):
                             return
                     if re.match(r"^sa@[^@]+@.+$", body.strip(), re.I):
-                        if _is_vip_user(frm):
+                        if _is_verified_user(frm):
                             if self.handle_gift_command(self.room, body, frm, private_to=frm):
                                 return
                         else:
-                            self.send_private_text(frm, f"🔒 @{frm} يحتاج VIP لاستخدام الهدايا.\n{_verification_notice()}")
+                            self.send_private_text(frm, f"🔒 @{frm} يحتاج توثيقاً لاستخدام الهدايا.\n{_verification_notice()}")
                             return
                     if body and _is_verified_user(frm) and self.handle_game_command(self.room, body, frm):
                         return
@@ -5939,12 +6179,17 @@ class TalkinBot:
                         cmd = parts[0].lower() if parts else ""
                         arg = parts[1].strip() if len(parts) == 2 else ""
                         if cmd in ("inv", "دعوات", "invite"):
-                            target_room = arg if arg else ctx_room
-                            self.request_occupants(
-                                target_room,
-                                silent_master=False,
-                                response_to=frm,
-                            )
+                            if not ctx_room:
+                                self.send_private_text(frm, "⚠️ نفّذ inv داخل الغرفة المطلوبة.")
+                            else:
+                                role_ok = self._inv_bot_owner_allowed(ctx_room)
+                                if role_ok is False:
+                                    self.send_private_text(frm, "⚠️ ارفع البوت أونر راعد المحاولة.")
+                                elif role_ok is None:
+                                    self._pending_inv_role_check[_norm_room(ctx_room)] = {"sender": frm, "room": ctx_room}
+                                    self.send_private_text(frm, "⏳ جاري التحقق من رتبة البوت...")
+                                else:
+                                    self.request_occupants(ctx_room, silent_master=False, response_room=ctx_room)
                         elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I):
                             target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
                             blocked_room = _norm_room(target_room)
@@ -6133,11 +6378,11 @@ class TalkinBot:
                         self.bootstrap_after_connect()
                         if BOT_MASTER:
                             now = time.time()
-                            should_notify = (
-                                now - self._last_connection_notice >= self._connection_notice_cooldown
-                            )
                             reason = self._pending_reconnect_reason
                             self._pending_reconnect_reason = ""
+                            should_notify = bool(reason and "1009" in reason) or (
+                                now - self._last_connection_notice >= self._connection_notice_cooldown
+                            )
                             if should_notify:
                                 if reason:
                                     self.send_private_text(
@@ -6207,8 +6452,12 @@ class TalkinBot:
                 if self._had_connection:
                     raw_reason = " ".join(str(e).split())
                     if "code': 1000" in raw_reason or '"code": 1000' in raw_reason:
-                        raw_reason = "الخادم أغلق WebSocket إغلاقًا طبيعيًا (1000)، وسيتم إعادة الاتصال تلقائيًا"
-                    self._pending_reconnect_reason = raw_reason[:1000]
+                        raw_reason = "الخادم أغلق WebSocket إغلاقًا طبيعيًا (1000)"
+                    if "1009" in raw_reason:
+                        raw_reason = "الخادم أغلق WebSocket بسبب حجم الرسالة (1009)" + (f" | آخر غرفة: {self.room}" if self.room else "") + " | السبب التقني: " + raw_reason[:700]
+                    elif self.room:
+                        raw_reason = f"{raw_reason[:850]} | آخر غرفة: {self.room}"
+                    self._pending_reconnect_reason = raw_reason[:1200]
                 print("[BOT] error:", repr(e), flush=True)
             if not self.stop_event.is_set():
                 delay = self._reconnect_delay
