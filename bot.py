@@ -4175,7 +4175,14 @@ class TalkinBot:
         Images are served by the existing public asset server, so this works
         on Railway without copying binary files into generated media.
         """
-        self.send_room_text(room, text)
+        # النتيجة تظهر فقط في الغرفتين اللتين شارك منهما اللاعبان.
+        rooms = []
+        seen = set()
+        for r in (first.get("room"), second.get("room")):
+            if r and str(r).casefold() not in seen:
+                rooms.append(r); seen.add(str(r).casefold())
+        for result_room in rooms:
+            self.send_room_text(result_room, text)
         filename = GAME_IMAGE_FILES.get(game_key)
         base = _public_base_url()
         image = ASSETS_DIR / filename if filename else None
@@ -4248,10 +4255,11 @@ class TalkinBot:
         base = _public_base_url()
         image = ASSETS_DIR / filename if filename else None
         if filename and base and image and image.is_file():
-            try:
-                self.send_room_media(room, f"{base}/assets/{filename}", "image")
-            except Exception as exc:
-                self.log("[GAME] wager result image failed:", repr(exc))
+            for result_room in rooms:
+                try:
+                    self.send_room_media(result_room, f"{base}/assets/{filename}", "image")
+                except Exception as exc:
+                    self.log("[GAME] wager result image failed:", result_room, repr(exc))
 
     def _queue_wager(self, room, sender, game_name, amount):
         try:
@@ -4262,7 +4270,7 @@ class TalkinBot:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
         self._cleanup_expired_wagers()
-        key = (str(room or "").casefold(), game_name.casefold())
+        key = game_name.casefold()
         waiting = None
         error = None
         with self.game_lock:
@@ -4317,7 +4325,8 @@ class TalkinBot:
             game_label=game_label, verb=verb, command=command,
             username=sender, amount=_fmt_points(amount)
         )
-        self.send_room_text(room, opening)
+        # فتح التحدي يكون إعلاناً مشتركاً في جميع الغرف التي يتواجد فيها البوت.
+        self.broadcast_all_rooms(opening)
         return True
 
     def _fruit_match(self, room, sender, emoji):
