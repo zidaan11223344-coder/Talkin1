@@ -1510,7 +1510,10 @@ def _add_points(username, amount):
     return item["points"]
 
 def _get_points(username):
-    if _is_primary_master(username): return None
+    # الماستر لديه صلاحية نقاط غير محدودة داخل الألعاب، لكن رصيد "نقاطي"
+    # يعرض فقط الرصيد المخزن فعلياً مثل بقية المستخدمين. لا نُظهر علامة
+    # اللانهاية للمستخدم، بينما تبقى صلاحية اللعب غير المحدودة مطبقة عبر
+    # _is_primary_master() في عمليات الخصم والتحقق.
     item=_points_data().get(_norm_user(username),{})
     return int(item.get("points",0) or 0)
 
@@ -1546,9 +1549,9 @@ DEFAULT_REPLY_MESSAGES = {
 
 
 def _points_summary_text(username):
+    # اعرض الرصيد المخزن للماستر مثل بقية المستخدمين. صلاحية النقاط
+    # غير المحدودة تبقى مخفية وتُطبق فقط داخل منطق الألعاب/العمليات.
     pts = _get_points(username)
-    if pts is None:
-        return "♾️ نقاطك: لا محدود\n👑 الماستر لا يُخصم منه رصيد."
     plays, level = _game_level(username)
     labels=[("رهان","bet"),("مضاربة","duel"),("مليون","million"),("حظي","luck"),("استثمار","investment"),("حظ","luck_free"),("حجر/ورق/مقص","rps"),("زرع","farm"),("فيس","fruit"),("ألعاب أخرى","misc")]
     details=[]
