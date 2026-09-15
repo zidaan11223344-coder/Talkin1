@@ -151,6 +151,7 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
     "PROFILE_STATUS_ACTIONS", "update_profile"
 ).split(",") if x.strip()]
+PROFILE_STATUS_ACTION = PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else "update_profile"
 MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
@@ -4224,7 +4225,7 @@ class TalkinBot:
             sent = False
             # Send exactly one packet.  Some Talkin server builds close the
             # WebSocket when fallback profile actions are sent back-to-back.
-            action = PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else "update_profile"
+            action = PROFILE_STATUS_ACTION
             try:
                 self.send_query(encode_query(
                     action,
@@ -4274,7 +4275,7 @@ class TalkinBot:
                 BOT_MASTER,
                 "⚠️ تعذر تحديث حالة بروفايل البوت.\n"
                 f"السبب: {str(reason)[:500]}\n"
-                f"الفعل المستخدم: {PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else 'update_profile'}",
+                f"الفعل المستخدم: {PROFILE_STATUS_ACTION}",
             )
         except Exception as exc:
             self.log("[PROFILE] failed to notify master:", repr(exc))
@@ -5137,6 +5138,12 @@ class TalkinBot:
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
+        # Do not run the verification gate for ordinary conversation.  The
+        # caller may pass every room message here, so first require a known
+        # bot/game command; unrelated text must be ignored silently.
+        if not _looks_like_bot_command(raw):
+            return False
+        low=raw.casefold()
         # All games are available to verified accounts (including VIP).
         # The master remains allowed automatically by _is_verified_user().
         # This check is intentionally inside the game handler so game commands
@@ -5144,7 +5151,6 @@ class TalkinBot:
         if not _is_verified_user(sender_name):
             self.send_room_text(room, f"🔒 @{sender_name} حسابك غير موثق لاستخدام الألعاب.\n{_verification_notice()}")
             return True
-        low=raw.casefold()
         if low in ("العاب","ألعاب","لعب","games","game"):
             self.game_help(room); return True
         if low.startswith("زرع"):
