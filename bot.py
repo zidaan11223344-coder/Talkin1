@@ -5560,19 +5560,22 @@ class TalkinBot:
                 self.send_private_text(sender, "❌ الصيغة: دخول@اسم_الغرفة"); return True
             blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
             if blocked:
-                self.connected_rooms = {
-                    r for r in self.connected_rooms if _norm_room(r) != _norm_room(target)
-                }
+                # A blocked marker is only the last server response. An
+                # explicit دخول@ command is a request to retry after the
+                # owner grants moderator/owner permission.
+                self.blocked_rooms.discard(_norm_room(target))
+                self._blocked_room_reasons.pop(_norm_room(target), None)
+                self._blocked_room_notices.discard(_norm_room(target))
+                self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != _norm_room(target)}
                 self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != _norm_room(target)}
+                self._save_blocked_rooms()
                 _save_persistent_rooms(self.known_rooms)
-                reply = f"🚫 البوت محظور من الغرفة {target}. أعطِ البوت إشرافاً أو أونر ثم أعد المحاولة: دخول@{target}"
-            else:
-                joined = self.join_room(target, requested_by=sender)
-                reply = (
-                    f"⏳ تم إرسال طلب دخول الغرفة: {target}. انتظر تأكيد الخادم."
-                    if joined else
-                    f"⚠️ الغرفة متصلة بالفعل: {target} | المتصلة فعلياً: {len(self.connected_rooms)}"
-                )
+            joined = self.join_room(target, force=True, requested_by=sender)
+            reply = (
+                f"⏳ تمت إعادة محاولة دخول الغرفة: {target}. انتظر تأكيد الخادم."
+                if joined else
+                f"⚠️ تعذر إرسال طلب دخول الغرفة: {target}."
+            )
             self.send_private_text(sender, reply)
             return True
         m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
@@ -6514,15 +6517,17 @@ class TalkinBot:
                             target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
                             blocked_room = _norm_room(target_room)
                             if blocked_room in self.blocked_rooms:
-                                self.send_private_text(frm, f"🚫 البوت محظور من الغرفة: {target_room}\nارفع البوت إشرافاً أو أونر ثم أعد المحاولة.")
-                            else:
-                                joined = self.join_room(target_room, force=True, requested_by=frm)
-                                self.send_private_text(
-                                    frm,
-                                    f"⏳ تم إرسال طلب دخول الغرفة: {target_room}. انتظر تأكيد الخادم."
-                                    if joined else
-                                    f"⚠️ تعذر إرسال طلب دخول الغرفة: {target_room}. تحقق من الاسم والصلاحية.",
-                                )
+                                self.blocked_rooms.discard(blocked_room)
+                                self._blocked_room_reasons.pop(blocked_room, None)
+                                self._blocked_room_notices.discard(blocked_room)
+                                self._save_blocked_rooms()
+                            joined = self.join_room(target_room, force=True, requested_by=frm)
+                            self.send_private_text(
+                                frm,
+                                f"⏳ تمت إعادة محاولة دخول الغرفة: {target_room}. انتظر تأكيد الخادم."
+                                if joined else
+                                f"⚠️ تعذر إرسال طلب دخول الغرفة: {target_room}. تحقق من الاسم والصلاحية.",
+                            )
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
                                 ok = self.leave_room(arg)
