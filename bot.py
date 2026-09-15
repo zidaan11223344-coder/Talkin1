@@ -2492,7 +2492,7 @@ class TalkinBot:
         self.invite_sent = set()
         self.invite_thread = None
         self.invite_lock = threading.Lock()
-        self.invite_message_template = "{sender} يدعوك للغرفة {room}"
+        self.invite_message_template = "🎁 لديك معجب مجهول 👥 في غرفة: {room}"
         self.known_rooms = set(_persistent_rooms())
         # Live rooms are session-only: unlike known_rooms (history on disk),
         # this set contains only rooms for which the current WebSocket session
@@ -2559,7 +2559,7 @@ class TalkinBot:
         self.custom_welcomes = {}
         self._load_social_features()
         threading.Thread(target=self._crop_worker, name="crop-worker", daemon=True).start()
-        self.invite_message_template = _message_template("invite", "default", "{sender} يدعوك للغرفة {room}")
+        self.invite_message_template = _message_template("invite", "default", "🎁 لديك معجب مجهول 👥 في غرفة: {room}")
 
     def _load_social_features(self):
         self.auto_replies_file = REPLIES_FILE
@@ -3330,11 +3330,11 @@ class TalkinBot:
 
     def request_occupants(self, room: str = "", silent_master: bool = False, response_room: str = "", response_to: str = ""):
 
-        """Load users from ALL rooms currently joined by the bot.
+        """Load invitation candidates ONLY from the room specified by inv.
 
-        The room argument is only the command-context room: it is used in the
-        invitation text. The source roster is collected from every room in
-        self.known_rooms, so joining another room never replaces old rooms.
+        The source roster is restricted to that single room.  This prevents
+        inv issued in one room from inviting users saved from other rooms.
+        Owners, admins and normal members of the selected room are all eligible.
         """
         with self.invite_lock:
             if self.invite_pending:
@@ -3358,15 +3358,13 @@ class TalkinBot:
         # users are loaded immediately from the persistent/DB roster.
         self._inv_response_room = response_room
         self._inv_response_to = response_to
-        active_rooms = []
-        for r in list(self.known_rooms):
-            r = str(r).strip()
-            if r and r not in active_rooms:
-                active_rooms.append(r)
-        self.log("[INV] loading users from ALL active rooms:", active_rooms)
+        # IMPORTANT: invitations are scoped to the room where inv was requested.
+        # Never merge the persistent rosters of the bot's other rooms.
+        active_rooms = [command_room] if command_room else []
+        self.log("[INV] loading users ONLY from requested room:", active_rooms)
         try:
             progress = (
-                f"⏳ جاري جمع جميع المستخدمين من {len(active_rooms)} غرفة...\n"
+                f"⏳ جاري جمع أعضاء الغرفة المطلوبة فقط...\n"
                 f"📌 نص الدعوة سيكون باسم الغرفة التي نُفّذ فيها inv: {command_room}"
             )
             if response_room:
@@ -3378,21 +3376,18 @@ class TalkinBot:
         except Exception as e:
             self.log("[INV] progress message failed:", repr(e))
 
-        # Collect the local persistent roster first. This survives bot replacement
-        # and includes users who are currently offline. Merge DB/live users below.
+        # PRIMARY SOURCE: database room_members contains the complete membership,
+        # including users who are currently offline. Query ONLY this requested room.
         all_users = []
         seen = set()
         room_counts = {}
         for source_room in active_rooms:
-            saved_users = _persistent_roster_users(source_room)
-            room_counts[source_room] = len(saved_users)
-            for username in saved_users:
-                key = _norm_user(username)
-                if key and key not in seen:
-                    seen.add(key)
-                    all_users.append(username)
-            db_users = self.db.room_users(source_room)
-            room_counts[source_room] = max(room_counts[source_room], len(db_users or []))
+            try:
+                db_users = self.db.room_users(source_room)
+            except Exception as exc:
+                db_users = []
+                self.log("[INV] DB room roster failed:", source_room, repr(exc))
+            room_counts[source_room] = len(db_users or [])
             for u in db_users or []:
                 username = str(u.get("username") or "").strip() if isinstance(u, dict) else ""
                 if not username or _norm_user(username) == _norm_user(BOT_ID):
@@ -3403,15 +3398,33 @@ class TalkinBot:
                     all_users.append(username)
 
         if all_users:
-            self.log(f"[INV] ALL rooms loaded: rooms={len(active_rooms)} unique_users={len(all_users)} counts={room_counts}")
+            self.log(f"[INV] COMPLETE ROOM ROSTER: room={command_room} total_members={len(all_users)} counts={room_counts} (offline included)")
             self.process_occupants_for_invite({
                 "db_users": [{"username": u} for u in all_users],
                 "source_rooms": active_rooms,
             })
             return
 
-        # If DB is unavailable, request occupants_list from every active room.
-        # Results are accumulated by room until all responses arrive.
+        # If the DB roster is unavailable/empty, use the saved roster for THIS
+        # room only. It can contain offline users from an earlier full roster.
+        for source_room in active_rooms:
+            saved_users = _persistent_roster_users(source_room)
+            room_counts[source_room] = max(room_counts.get(source_room, 0), len(saved_users))
+            for username in saved_users:
+                key = _norm_user(username)
+                if key and key not in seen:
+                    seen.add(key)
+                    all_users.append(username)
+
+        if all_users:
+            self.log(f"[INV] SAVED ROOM ROSTER: room={command_room} total_members={len(all_users)}")
+            self.process_occupants_for_invite({
+                "db_users": [{"username": u} for u in all_users],
+                "source_rooms": active_rooms,
+            })
+            return
+
+        # Last fallback: request the server roster for the single requested room.
         self._inv_expected_rooms = set(active_rooms)
         self._inv_live_users = []
         self._inv_live_seen = set()
@@ -3494,7 +3507,7 @@ class TalkinBot:
         try:
             text = text.format(sender=(inviter or INVITE_SENDER_NAME), room=room, username=username)
         except Exception:
-            text = f"{inviter or INVITE_SENDER_NAME} يدعوك للغرفة {room}"
+            text = f"🎁 لديك معجب مجهول 👥 في غرفة: {room}"
         self.send_query(encode_query("chat_message", type_="text", to=username, body=text))
 
         with self.invite_lock:
@@ -4138,7 +4151,9 @@ class TalkinBot:
             return _get_points(username)
         return _add_points(username, int(amount))
 
-    def _game_ready(self, username, room, cooldown=3.0):
+    def _game_ready(self, username, room, cooldown=30.0):
+        # فاصل موحّد 30 ثانية بين جميع الألعاب لكل لاعب داخل الغرفة.
+        # كل غرفة مستقلة؛ لعب لعبة في غرفة لا يمنع اللعب في غرفة أخرى.
         key=(str(room or "").casefold(), _norm_user(username))
         now=time.time()
         with self.game_lock:
@@ -4147,6 +4162,12 @@ class TalkinBot:
                 return False, int(cooldown-(now-last))+1
             self.game_cooldown[key]=now
         return True,0
+
+    def _game_cooldown_notice(self, room, username, cooldown=30.0):
+        ok, left = self._game_ready(username, room, cooldown)
+        if not ok:
+            self.send_room_text(room, f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.")
+        return ok
 
     def _send_game_result(self, room, text, game_key):
         """Send the result text, followed by the matching asset image.
@@ -4174,7 +4195,7 @@ class TalkinBot:
             "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليون — فرصة عشوائية للفوز بمليون نقطة.\n"
-            "🌱 زرع — اعرض القائمة ثم استخدم زرع@🍎، والنتيجة تصلك تلقائياً بالخاص.\n"
+            "🌱 زرع — كل محصول يمكن زراعته حتى 5 مرات معاً لكل مستخدم.\n"
             "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار")
 
     def _game_balance_ok(self, username, amount):
@@ -4203,7 +4224,7 @@ class TalkinBot:
         for _, waiting in expired:
             self.log("[GAME] expired wager", waiting.get("game"), waiting.get("user"))
 
-    def _wager_result(self, first, second, stake, game_name):
+    def _wager_result(self, room, first, second, stake, game_name):
         # The winner is selected independently of arrival/order.
         winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
         if not _is_master_name(loser.get("user")):
@@ -4222,16 +4243,15 @@ class TalkinBot:
             game=game_name, p1=first["user"], p2=second["user"],
             winner=winner["user"], loser=loser["user"], amount=_fmt_points(stake)
         )
-        self.broadcast_all_rooms(text)
+        self.send_room_text(room, text)
         filename = GAME_IMAGE_FILES.get(game_key)
         base = _public_base_url()
         image = ASSETS_DIR / filename if filename else None
         if filename and base and image and image.is_file():
-            for target_room in self._active_rooms():
-                try:
-                    self.send_room_media(target_room, f"{base}/assets/{filename}", "image")
-                except Exception as exc:
-                    self.log("[GAME] wager result image failed:", repr(exc))
+            try:
+                self.send_room_media(room, f"{base}/assets/{filename}", "image")
+            except Exception as exc:
+                self.log("[GAME] wager result image failed:", repr(exc))
 
     def _queue_wager(self, room, sender, game_name, amount):
         try:
@@ -4242,7 +4262,7 @@ class TalkinBot:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
         self._cleanup_expired_wagers()
-        key = game_name.casefold()
+        key = (str(room or "").casefold(), game_name.casefold())
         waiting = None
         error = None
         with self.game_lock:
@@ -4272,10 +4292,16 @@ class TalkinBot:
             return True
         if waiting:
             self._wager_result(
+                room,
                 waiting,
                 {"user": sender, "room": room, "stake": amount, "game": game_name},
                 amount, game_name
             )
+            # بعد اكتمال المواجهة يبدأ فاصل 30 ثانية لكلا اللاعبين.
+            with self.game_lock:
+                now = time.time()
+                self.game_cooldown[(str(room or "").casefold(), _norm_user(waiting.get("user")))] = now
+                self.game_cooldown[(str(room or "").casefold(), _norm_user(sender))] = now
             return True
         game_labels = {
             "رهان": ("رهان", "راهن", "رهان"),
@@ -4291,10 +4317,12 @@ class TalkinBot:
             game_label=game_label, verb=verb, command=command,
             username=sender, amount=_fmt_points(amount)
         )
-        self.broadcast_all_rooms(opening)
+        self.send_room_text(room, opening)
         return True
 
     def _fruit_match(self, room, sender, emoji):
+        if not self._game_cooldown_notice(room, sender):
+            return True
         fruits=("🍓","🍇","🍉","🍌","🍋","🍊","🍐","🍎","🍏","🥑","🥦","🍑","🥭","🍍","🥥","🥝","🍅","🍆","🧄","🥕","🌽","🌶️")
         if emoji not in fruits:
             self.send_room_text(room, "❌ اختر فاكهة من القائمة: " + " ".join(fruits)); return True
@@ -4320,7 +4348,8 @@ class TalkinBot:
             with self.game_lock:
                 for key, plot in list(self.crop_plots.items()):
                     try:
-                        username, crop = key.split("|", 1)
+                        parts = key.split("|", 2)
+                        username, crop = parts[0], parts[1]
                         finish=float(plot.get("finish", 0))
                         minutes=int(plot.get("minutes", 0))
                         reward=int(plot.get("reward", minutes*20))
@@ -4369,20 +4398,26 @@ class TalkinBot:
         if crop not in crops:
             self.send_room_text(room, "❌ اختر محصولاً من قائمة زرع.")
             return True
+        if not self._game_cooldown_notice(room, sender):
+            return True
         user_key=_norm_user(sender)
-        # One active crop per player.
+        # لكل مستخدم يمكن تشغيل نفس المحصول حتى 5 مرات في الوقت نفسه.
+        # المحاصيل الأخرى لها أيضاً حد 5 مرات مستقلة.
         with self.game_lock:
-            active=None
+            active_same = []
             for key, plot in self.crop_plots.items():
-                if key.split("|",1)[0] == user_key:
-                    active=(key, plot); break
-            if active:
-                _, plot=active
-                left=max(1, int((float(plot.get("finish",0))-time.time()+59)//60))
-                self.send_room_text(room, f"⏳ لديك محصول قيد الزراعة. المتبقي تقريباً: {left} دقيقة.")
+                if key.startswith(user_key + "|") and str(plot.get("crop") or "") == crop:
+                    active_same.append((key, plot))
+            if len(active_same) >= 5:
+                lefts=[]
+                for _, plot in active_same:
+                    lefts.append(max(1, int((float(plot.get("finish",0))-time.time()+59)//60)))
+                left=min(lefts) if lefts else 1
+                self.send_room_text(room, f"⏳ وصلت للحد الأقصى: 5 مرات للمحصول {crop}. أقرب حصاد بعد نحو {left} دقيقة.")
                 return True
             minutes,reward=crops[crop]
-            key=f"{user_key}|{crop}"
+            slot=uuid.uuid4().hex[:8]
+            key=f"{user_key}|{crop}|{slot}"
             self.crop_plots[key]={
                 "username":str(sender).strip().lstrip("@"),
                 "crop":crop, "minutes":minutes, "reward":reward,
@@ -4399,6 +4434,8 @@ class TalkinBot:
         return True
 
     def _lottery_game(self, room, sender, amount=0):
+        if not self._game_cooldown_notice(room, sender):
+            return True
         amount = int(amount or 0)
         if amount < 0:
             self.send_room_text(room, "❌ المبلغ غير صحيح.")
@@ -4452,6 +4489,8 @@ class TalkinBot:
         return True
 
     def _investment_bot_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender):
+            return True
         """Free investment game against the bot. No @amount and no image."""
         # Pure random outcome; no stake and no dependency on command order.
         roll=secrets.randbelow(1000)+1
@@ -4572,7 +4611,7 @@ class TalkinBot:
         if m:
             return self._lottery_game(room, sender_name, int(m.group(1)))
         if low in ("مليون","million"):
-            if not self._game_ready(sender_name, room, 3.0)[0]:
+            if not self._game_cooldown_notice(room, sender_name):
                 return True
             # Restore the first status message used by the original million game.
             self.send_room_text(room, "🔎 جاري البحث عن مليون...")
@@ -4592,6 +4631,8 @@ class TalkinBot:
         if low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
         if low in ("حجر","ورق","مقص"):
+            if not self._game_cooldown_notice(room, sender_name):
+                return True
             bot_choice=secrets.choice(("حجر","ورق","مقص"))
             win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
             if low==bot_choice: result="🤝 تعادل"; reward=5
@@ -4602,6 +4643,8 @@ class TalkinBot:
             self.send_room_text(room, f"✂️ @{sender_name}: {low} | 🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 {_fmt_points(balance)}")
             return True
         if low in ("كنز","اسرق","سرقة","رشوة"):
+            if not self._game_cooldown_notice(room, sender_name):
+                return True
             labels={"كنز":"🗺️ كنز","اسرق":"🕵️ سرقة","سرقة":"🕵️ سرقة","رشوة":"💼 رشوة"}
             won=secrets.randbelow(2)==0; reward=secrets.randbelow(31)+10 if won else 0
             balance=self._game_award(sender_name,reward)
@@ -5105,7 +5148,7 @@ class TalkinBot:
                 self.send_private_text(sender,f"✅ خرجت من جميع الغرف. العدد: {len(rooms)}")
             return True
         if low.startswith("invmsg") or low.startswith("رسالةدعوة"):
-            parts=text.split(None,1); template=parts[1].strip() if len(parts)==2 else "{sender} يدعوك للغرفة {room}"
+            parts=text.split(None,1); template=parts[1].strip() if len(parts)==2 else "🎁 لديك معجب مجهول 👥 في غرفة: {room}"
             self.invite_message_template=template
             self.send_private_text(sender,f"✅ تم تغيير نص الدعوة إلى: {template}"); return True
         if low == "inv" or low.startswith("inv ") or low in ("دعوات","invite") or low.startswith(("دعوات ","invite ")):
@@ -5448,10 +5491,16 @@ class TalkinBot:
                 publisher=str(info.get("publisher") or "").strip()
                 labels={"lk":"👍 إعجاب","lv":"❤️ حب","dl":"👎 عدم إعجاب","cm":"💬 تعليق","report":"🚨 بلاغ"}
                 source_desc = str(info.get("description") or info.get("title") or "").strip()
-                notice=f"{labels.get(action,action)}\n👤 المتفاعل: {frm}\n📌 الناشر: {publisher}"
-                if source_desc: notice += f"\n📝 وصف المنشور: {source_desc}"
+                owner_label = "صاحب الأغنية" if str(info.get("kind") or "").lower() == "music" else "اسم الناشر"
+                notice=f"لقد تفاعلت مع {labels.get(action,action)}\n👤 المتفاعل: {frm}\n📌 {owner_label}: {publisher}"
+                if source_desc: notice += f"\n📝 المحتوى: {source_desc}"
                 if extra: notice += f"\n💬 رسالة التفاعل: {extra}"
-                self.send_private_text(publisher,notice)
+                # التفاعل يظهر داخل نفس الغرفة، وتصل نسخة مطابقة أيضاً
+                # إلى صاحب الصورة/الأغنية على الخاص.
+                self.send_room_text(room, notice)
+                if publisher and _norm_user(publisher) != _norm_user(frm):
+                    private_notice = notice + f"\n🏠 الغرفة: {room}"
+                    self.send_private_text(publisher, private_notice)
                 return
 
         # نقاطي متاح للجميع ولا يحتاج توثيقاً.
