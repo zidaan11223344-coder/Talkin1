@@ -155,14 +155,12 @@ MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
 DEFAULT_BOT_BASE_STATUS = (
-    '<h3><p style="background-color:#000000;padding:20px;text-align:center;">'
-    '<font color="#b73206" size="7">بوت حمايه والعاب واغاني</font></p>'
-    '<b><h2><p style="background-color:#0C090A;">'
-    '<font color="#FFE87C">لمعرفه الالعاب والاوامر ارسل مساعده</font></p></h2></b>'
-    '<br><br><span style="color:#af0365;font-size:60px;">'
-    'لدخول الغرف ارسل دخول اسم الغرفه</span><br>'
-    '<span style="color:#66D9FF;font-size:42px;">الماستر: '
-    f'{MASTER_DISPLAY_NAME}</span></h3>'
+    '<B><H4><div style="background-color:#000000;padding:10px;text-align:center;">'
+    '<font color="#5DE2E7">بوت حماية وألعاب وأغاني</font><br>'
+    '<font color="#B388FF">لمعرفة الألعاب والأوامر أرسل: مساعدة</font><br>'
+    '<font color="#FF6EC7">لدخول الغرف أرسل: دخول اسم الغرفة</font><br>'
+    '<font color="#FF3B30">الماستر: '
+    f'{MASTER_DISPLAY_NAME}</font></div></H4></B>'
 )
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
 PROFILE_STATUS_MAX_CHARS = max(300, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "700")))
@@ -6537,8 +6535,11 @@ class TalkinBot:
                         self.ws.connect()
                         self._start_heartbeat()
                         self.log("[WS] CONNECTED:", url)
-                        self.log("[WS] custom headers:", [x.split(":",1)[0] + ": <redacted>" if x.lower().startswith(("username:", "password:")) else x for x in header_lines])
+                        self.log("[WS] custom headers:", [x.split(":",1)[0] + ": <redacted>" if x.lower().startswith(("username:","password:")) else x for x in header_lines])
                         self.bootstrap_after_connect()
+                        # Restore the configured base profile status after
+                        # every startup/reconnect, before processing messages.
+                        self._set_profile_status(self._profile_base_status or BOT_BASE_STATUS)
                         if BOT_MASTER:
                             now = time.time()
                             reason = self._pending_reconnect_reason
