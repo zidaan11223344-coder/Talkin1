@@ -4352,15 +4352,20 @@ class TalkinBot:
             timer = self._profile_status_timer
             if timer is not None:
                 timer.cancel()
-            base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
-            self._profile_base_status = base_status
-            # Show the gift details first, then preserve the normal bot profile
-            # status below them. A later gift replaces only the gift section.
+
+            # حالة الهدية + الحالة الأساسية بخط صغير لتقليل حجم الرسالة.
+            # طريقة إرسال الحالة نفسها لم تتغير.
+            small_base_status = (
+                '<font color="#FFD166" size="2">بوت حماية وألعاب وأغاني</font><br>'
+                '<font color="#4DD0E1" size="1">لمعرفة الألعاب والأوامر أرسل: مساعدة</font><br>'
+                '<font color="#FF6FCF" size="1">لدخول الغرف أرسل: دخول اسم الغرفة</font><br>'
+                '<font color="#9DFF57" size="1">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
+            )
             temporary = (
                 f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
                 f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
-                f'<br><font color="#6A1B9A">{gift_name}</font>'
-                f'<br><br>{base_status}'
+                f'<br><font color="#6A1B9A">🎁 نوع الهدية: {gift_name}</font>'
+                f'<br><br>{small_base_status}'
             )
             self._set_profile_status(temporary)
 
@@ -4375,6 +4380,7 @@ class TalkinBot:
             self._profile_status_timer = threading.Timer(GIFT_STATUS_SECONDS, restore)
             self._profile_status_timer.daemon = True
             self._profile_status_timer.start()
+
 
     def handle_gift_command(self, room: str, text: str, sender_name: str = "", private_to: str = ""):
         raw=text.strip(); m=re.match(r"^sa@([^@]+)@(.+)$",raw,re.I)
