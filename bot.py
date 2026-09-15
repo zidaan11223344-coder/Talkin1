@@ -274,6 +274,7 @@ PUBLISHED_FILE = DATA_DIR / "published_posts.json"
 GAME_STATS_FILE = DATA_DIR / "game_stats.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
 TRACKED_ROOMS_FILE = DATA_DIR / "tracked_rooms.json"
+BLOCKED_ROOMS_FILE = DATA_DIR / "blocked_rooms.json"
 ROOM_USERS_FILE = DATA_DIR / "room_users.json"
 INVITE_HISTORY_FILE = DATA_DIR / "invite_history.json"
 REPLIES_FILE = DATA_DIR / "replies.json"
@@ -288,7 +289,7 @@ MVIP_MASTERS_FILE = DATA_DIR / "mvip_masters.json"
 _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
     "messages.json", "published_posts.json", "game_stats.json", "crop_plots.json",
-    "tracked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
+    "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
     "moderation.json", "mf.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json",
 )
@@ -1716,16 +1717,70 @@ def _command_menu_for(is_master=False):
     )
 
 
-def _default_help_pages():
+def _default_help_sections():
+    """Complete help catalog. Each help page may contain multiple sections.
+
+    ``Ns`` advances to the next section within the same help page.
+    """
     return {
-        1: '📋 أوامر الإدارة\n━━━━━━━━━━━━\nk@اسم — طرد\nb@اسم — حظر\nub@اسم — فك الحظر\na@اسم — تعيين مشرف\no@اسم — تعيين مالك',
-        2: '🎵 الموسيقى\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل',
-        3: '🎮 الألعاب — القسم 1\n━━━━━━━━━━━━\nرهان@المبلغ — رهان لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون\n🌱 زرع — زراعة حتى 5 أنواع مختلفة\n\n📌 للمزيد اكتب Ns',
-        4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
-        5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
-        6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
-        7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\nvi@اسم — توثيق الألعاب\nتوثيق الكل — توثيق جميع مستخدمي الغرف\nuns@اسم — إزالة التوثيق\nVip@اسم — توثيق VIP\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
+        1: [
+            '📋 أوامر الإدارة — 1\n━━━━━━━━━━━━\nk@اسم — طرد عضو\nkick اسم — طرد عضو\nb@اسم — حظر عضو\nban اسم — حظر عضو\nbl@اسم — حظر عضو بالقائمة\nub@اسم — فك الحظر\nu@اسم — فك الحظر\nunban اسم — فك الحظر\na@اسم — تعيين إداري\nadmin اسم — تعيين إداري\no@اسم — تعيين أونر/مالك\nowner اسم — تعيين أونر/مالك',
+            '📋 أوامر الإدارة — 2\n━━━━━━━━━━━━\nتشغيل الحماية — تشغيل حماية الغرفة\nإيقاف الحماية — إيقاف حماية الغرفة\nmr@عدد — تحديد حد التكرار\nنسخ احتياطي — إنشاء نسخة احتياطية\nإعادة تشغيل البوت — إعادة تشغيل البوت\nتشغيل الماستر — تشغيل حساب الماستر\nإيقاف الماستر — إيقاف حساب الماستر\nحالة الماستر — حالة حساب الماستر\n\n📌 هذه الأوامر مخصصة للماستر/الإدارة حسب صلاحية الأمر.',
+        ],
+        2: [
+            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال:\n.sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
+            '❤️ التفاعلات والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nشبيه@اسم — البحث عن الشبيه\nشبيهك@اسم — البحث عن شبيهك\n\n📌 التفاعل يكون على كود المنشور/المحتوى المرسل من البوت.',
+        ],
+        3: [
+            '🎮 الألعاب — 1: التحديات والنقاط\n━━━━━━━━━━━━\nالعاب / ألعاب / لعب / games / game — عرض قائمة الألعاب\nرهان@المبلغ — رهان لاعب ضد لاعب\nمراهنة@المبلغ — مراهنة لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nاستثمار — استثمار مجاني مع البوت\nحظ@المبلغ — حظ بمبلغ\nحظ — حظ عشوائي\nحجر / ورق / مقص — لعبة ضد البوت',
+            '🎮 الألعاب — 2: الألعاب الفردية\n━━━━━━━━━━━━\nمليون — لعبة المليون\nزرع@رمز_المحصول — زراعة محصول\nفيس@الرمز — مطابقة/تحدي الفيس\nاسرق — سرقة عشوائية من عضو\nاسرق@اسم — سرقة من عضو محدد\nاسرق اسم — سرقة من عضو محدد\n\n🌱 الزراعة: حتى 5 أنواع مختلفة في نفس الوقت.\n📌 كل لعبة لها نظام تبريد خاص بها عند تطبيقه.',
+            '🎮 الألعاب — 3: الألعاب العالمية\n━━━━━━━━━━━━\nصيد — تحدي عالمي، الفائز +500\nسرعة — تحدي عالمي، الفائز +500\nكنز — تحدي عالمي، الفائز +500\nمصارعة — تحدي عالمي، الفائز +500\nبحث — تحدي عالمي، الفائز +500\n\n📌 أول لاعب يفتح الجولة، والثاني ينضم من أي غرفة موجود فيها البوت.\n📌 نتيجة الجولة والصورة تظهر للمشاركين فقط.',
+        ],
+        4: [
+            '🎁 الهدايا — 1\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nهدايا — عرض/فتح نظام الهدايا\ngifts — الهدايا\ngv — الهدايا\n\n🔒 المرسل والمستلم يجب أن يكونا موثقين/مسموحاً لهما بالنظام.\n💰 يتم خصم قيمة الهدية من رصيد النقاط.',
+            '📢 النشر — 2\n━━━━━━━━━━━━\nانشر — تجهيز ونشر صورة\nانشر@وصف — نشر صورة مع وصف\n\n📌 أرسل الصورة بعد أمر انشر عندما يطلب البوت ذلك.\n📌 النشر متاح للحسابات المسموح لها حسب إعدادات البوت.',
+        ],
+        5: [
+            '💰 النقاط — 1\n━━━━━━━━━━━━\nنقاطي — عرض الرصيد والمستوى وإحصاءات اللعب\npoints — عرض النقاط\nتوب — المتصدرين العام\ntop — المتصدرين العام\n\nتوب رهان — متصدروا الرهان\nتوب مضاربة — متصدروا المضاربة\nتوب حظي — متصدروا حظي\nتوب استثمار — متصدروا الاستثمار',
+            '💸 النقاط — 2: التحويل\n━━━━━━━━━━━━\nsb@اسم@عدد — تحويل نقاط لمستخدم\n\nمثال:\nsb@ahmd555@1000\n\n📌 التحويل متاح للمستخدم الموثق، ويُخصم من رصيد المرسل ويُضاف للمستلم.\n\nللاطلاع على الرصيد استخدم: نقاطي',
+        ],
+        6: [
+            '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد\n\n📌 inv يعمل داخل الغرفة المطلوبة، ويتطلب رفع البوت أونر عند الحاجة.',
+            '🏠 الغرف والترحيب — 2\n━━━━━━━━━━━━\nsay نص — إرسال نص داخل الغرفة\nقل نص — إرسال نص داخل الغرفة\n\n+sr@اسم_المستخدم@النص — إضافة رد/ترحيب مخصص (ماستر)\nsr@on — تشغيل الردود المخصصة\nsr@off — إيقاف الردود المخصصة\nswc+@اسم_الحساب@النص — إضافة ترحيب مخصص (ماستر)\nswc@on — تشغيل الترحيبات\nswc@off — إيقاف الترحيبات\n\n🛡️ حماية وتكرار الغرفة تُدار من صلاحيات الإدارة.',
+        ],
+        7: [
+            '👑 الماستر والتوثيق — 1\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترات\nl@mas — عرض ماسترات الإدارة\n\nmvip@اسم — إضافة ماستر توثيق\numvip@اسم — إزالة ماستر توثيق\nl@mvip — عرض ماسترات التوثيق',
+            '✅ التوثيق — 2\n━━━━━━━━━━━━\nvi@اسم — توثيق مستخدم\nvi — عرض الموثقين\nالموثقين — عرض الموثقين\nuns@اسم — إزالة التوثيق\nازالة توثيق@اسم — إزالة التوثيق\nتوثيق الكل — توثيق جميع مستخدمي الغرف\n\nvip@اسم — توثيق VIP\nunvip@اسم — إلغاء VIP\nvip — عرض قائمة VIP\nحسابات vip — عرض قائمة VIP',
+            '🚫 الفلتر والأوامر الإضافية — 3\n━━━━━━━━━━━━\nmf@on — تشغيل فلتر الكلمات\nmf@off — إيقاف فلتر الكلمات\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات الممنوعة\nclear@mf — حذف الكلمات الممنوعة\n\n📌 أوامر الفلتر والماستر حسب الصلاحية.\n\n━━━━━━━━━━━━\nℹ️ للتنقل: اكتب Ns',
+        ],
     }
+
+
+def _default_help_pages():
+    """First section of each help page, kept for backward compatibility."""
+    return {page: sections[0] for page, sections in _default_help_sections().items()}
+
+
+def _help_sections_from_messages():
+    defaults = _default_help_sections()
+    data = _load_local_json(MESSAGES_FILE, {})
+    raw = data.get("help_sections") if isinstance(data, dict) else None
+    if isinstance(raw, dict):
+        sections = {}
+        for key, value in raw.items():
+            try:
+                page = int(key)
+            except Exception:
+                continue
+            if isinstance(value, list):
+                cleaned = [str(v).replace("\\n", "\n") for v in value if isinstance(v, str) and v.strip()]
+                if cleaned:
+                    sections[page] = cleaned
+        if sections:
+            merged = {**defaults}
+            merged.update(sections)
+            return merged
+    return defaults
 
 def _help_pages_from_messages():
     defaults=_default_help_pages()
@@ -2537,8 +2592,13 @@ class TalkinBot:
         self._offline_support_recent = {}
         # Keep rejected rooms tracked for history, but exclude them from
         # broadcasts and reconnect attempts until the master retries them.
-        self.blocked_rooms = set()
+        raw_blocked = _load_local_json(BLOCKED_ROOMS_FILE, [])
+        if isinstance(raw_blocked, dict):
+            raw_blocked = raw_blocked.get("rooms", [])
+        self.blocked_rooms = {_norm_room(r) for r in (raw_blocked if isinstance(raw_blocked, list) else []) if _norm_room(r)}
+        self._blocked_room_reasons = {}
         self._blocked_room_notices = set()
+        self._pending_room_joins = {}
         if self.room:
             self.known_rooms.add(_norm_room(self.room))
         _save_persistent_rooms(self.known_rooms)
@@ -2577,7 +2637,8 @@ class TalkinBot:
         self.game_cooldown = defaultdict(float)
         self.guess_games = {}
         self.help_pages = {}
-        self.help_game_part = {}
+        self.help_game_part = {}  # legacy alias used by older code
+        self.help_page_part = {}
         # Global wager queues, crop timers, and fruit-match state.
         self.wager_waiting = {}
         # Global fixed-prize PvP queues: one open challenge per game name.
@@ -2750,6 +2811,37 @@ class TalkinBot:
         self._heartbeat_stop = None
         self._heartbeat_thread = None
 
+    def _save_blocked_rooms(self):
+        try:
+            _save_local_json(BLOCKED_ROOMS_FILE, {"version": 1, "rooms": sorted(self.blocked_rooms)})
+        except Exception as exc:
+            self.log("[ROOM] blocked rooms save failed", repr(exc))
+
+    def _mark_room_blocked(self, room: str, reason: str = ""):
+        room = _norm_room(room)
+        if not room:
+            return
+        self.blocked_rooms.add(room)
+        if reason:
+            self._blocked_room_reasons[room] = reason
+        self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != room}
+        self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != room}
+        self.room_users.pop(room, None)
+        _save_persistent_rooms(self.known_rooms)
+        self._save_blocked_rooms()
+        self.log("[ROOM] marked blocked/inaccessible:", room, reason)
+
+    def _room_failure_message(self, room: str, event_type: str):
+        labels = {
+            "room_unauthorized_rejoin": "🚫 البوت محظور من الغرفة",
+            "room_membership_required_rejoin": "🚫 الغرفة للأعضاء/تحتاج عضوية للبوت",
+            "room_full_rejoin": "⚠️ الغرفة ممتلئة ولا يمكن للبوت الدخول",
+            "room_wrong_password_rejoin": "🔐 الغرفة تحتاج كلمة مرور أو كلمة المرور غير صحيحة",
+            "room_needs_password_rejoin": "🔐 الغرفة تحتاج كلمة مرور",
+            "room_needs_captcha_rejoin": "🤖 الغرفة تطلب تحقق CAPTCHA ولا يمكن للبوت الدخول آلياً",
+        }
+        return labels.get(event_type, "❌ تعذر دخول البوت إلى الغرفة")
+
     def join_room(self, room: str, force: bool = False):
         """Join a room, allowing a previously-left room to be joined again.
 
@@ -2779,6 +2871,7 @@ class TalkinBot:
                 return False
             self._last_join_sent[room] = now
         self.log("[ROOM] joining", room)
+        self._pending_room_joins[_norm_room(room)] = {"room": room, "started": time.time(), "requested_by": ""}
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
         self.known_rooms.add(room)
         _save_persistent_rooms(self.known_rooms)
@@ -5063,46 +5156,30 @@ class TalkinBot:
             return True
         return False
 
-    def _send_game_help_section(self, room=None, private_to=None, part=1):
-        if part <= 1:
-            text = (
-                "🎮 الألعاب — القسم 1\n"
-                "━━━━━━━━━━━━\n"
-                "رهان@المبلغ — رهان لاعب ضد لاعب\n"
-                "مضاربة@المبلغ — مضاربة لاعب ضد لاعب\n"
-                "استثمار@المبلغ — استثمار لاعب ضد لاعب\n"
-                "حظي@المبلغ — تحدي حظ لاعب ضد لاعب\n"
-                "حظ@المبلغ — حظ عشوائي مع البوت\n"
-                "مليون — لعبة المليون\n"
-                "🌱 زرع — حتى 5 أنواع مختلفة\n"
-                "\n📌 للمزيد اكتب Ns"
-            )
+    def _send_help_section(self, room=None, private_to=None, page=1, part=1):
+        sections = _help_sections_from_messages()
+        page_sections = sections.get(int(page), [])
+        if not page_sections:
+            text = _command_help(page)
+            part = 1
         else:
-            text = (
-                "🎮 الألعاب — القسم 2\n"
-                "━━━━━━━━━━━━\n"
-                "🆕 صيد — لعبة عالمية، الجائزة 500\n"
-                "🆕 سرعة — لعبة عالمية، الجائزة 500\n"
-                "🆕 كنز — لعبة عالمية، الجائزة 500\n"
-                "🆕 مصارعة — لعبة عالمية، الجائزة 500\n"
-                "🆕 بحث — لعبة عالمية، الجائزة 500\n"
-                "🕵️ اسرق — محاولة سرقة 500 نقطة من عضو\n"
-                "\n✅ انتهى قسم الألعاب"
-            )
+            idx = max(1, min(int(part), len(page_sections))) - 1
+            text = page_sections[idx]
+            if idx < len(page_sections) - 1:
+                text += "\n\n📌 للقائمة التالية اكتب Ns"
+            else:
+                text += "\n\n✅ انتهت أقسام هذه القائمة."
         if private_to:
             self._send_help_chunks("chat_message", text, to=private_to)
         elif room:
             self._send_help_chunks("room_message", text, room=room)
 
+    def _send_game_help_section(self, room=None, private_to=None, part=1):
+        # Backward-compatible wrapper for older callers.
+        self._send_help_section(room=room, private_to=private_to, page=3, part=part)
+
     def _send_help(self, room=None, private_to=None, page=1, game_part=1):
-        if page == 3:
-            self._send_game_help_section(room=room, private_to=private_to, part=game_part)
-            return
-        text=_command_help(page)
-        if private_to:
-            self._send_help_chunks("chat_message", text, to=private_to)
-        elif room:
-            self._send_help_chunks("room_message", text, room=room)
+        self._send_help_section(room=room, private_to=private_to, page=page, part=game_part)
 
     def _handle_management_command(self, room, body, sender, is_private=False):
         # Management commands are accepted only from the master. Keep normal
@@ -5269,23 +5346,20 @@ class TalkinBot:
                 return True
             key=(str(room), _norm_user(sender))
             self.help_pages[key]=page
-            if page == 3:
-                self.help_game_part[key]=1
+            self.help_page_part[key]=1
+            self.help_game_part[key]=1
             self._send_help(room=room, private_to=sender if is_private else None, page=page, game_part=1)
             return True
         if low in ("ns","n","التالي","القائمة التالية","next"):
             key=(str(room), _norm_user(sender))
             current_page=int(self.help_pages.get(key,1) or 1)
-            if current_page == 3:
-                part=int(self.help_game_part.get(key,1) or 1)
-                part = 2 if part == 1 else 1
-                self.help_game_part[key]=part
-                self._send_help(room=room, private_to=sender if is_private else None, page=3, game_part=part)
-            else:
-                page=current_page+1
-                if page>7: page=1
-                self.help_pages[key]=page
-                self._send_help(room=room, private_to=sender if is_private else None, page=page)
+            sections = _help_sections_from_messages().get(current_page, [])
+            total = max(1, len(sections))
+            part = int(self.help_page_part.get(key, self.help_game_part.get(key,1)) or 1)
+            part = (part % total) + 1
+            self.help_page_part[key]=part
+            self.help_game_part[key]=part
+            self._send_help(room=room, private_to=sender if is_private else None, page=current_page, game_part=part)
             return True
         if low in ("نقاطي","points"):
             self.send_private_text(sender, _points_summary_text(sender))
@@ -5909,8 +5983,12 @@ class TalkinBot:
                     self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
-            self.blocked_rooms.discard(_norm_room(room))
-            self._blocked_room_notices.discard(_norm_room(room))
+            rnorm = _norm_room(room)
+            self._pending_room_joins.pop(rnorm, None)
+            self.blocked_rooms.discard(rnorm)
+            self._blocked_room_reasons.pop(rnorm, None)
+            self._blocked_room_notices.discard(rnorm)
+            self._save_blocked_rooms()
         elif event_type in ("room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin", "room_needs_captcha_rejoin", "room_needs_password_rejoin", "room_membership_required_rejoin"):
             # IMPORTANT: do not immediately send room_join here.  These events
             # can be emitted repeatedly by the server when a room rejects a
@@ -5919,14 +5997,29 @@ class TalkinBot:
             # to run_once(), while a rejoin is attempted at most once after a
             # long cooldown and never recursively from this event handler.
             self.log("[ROOM] server requested rejoin; delayed reconnect")
-            if event_type in ("room_unauthorized_rejoin", "room_membership_required_rejoin"):
+            failure_events = {"room_unauthorized_rejoin", "room_membership_required_rejoin", "room_full_rejoin", "room_wrong_password_rejoin", "room_needs_password_rejoin", "room_needs_captcha_rejoin"}
+            if event_type in failure_events:
                 blocked_room = _norm_room(room)
-                self.blocked_rooms.add(blocked_room)
-                notice=f"🚫 البوت محظور من الغرفة {room}. ارفع البوت إشرافاً أو أونر ثم أعد المحاولة: دخول {room}"
+                reason_text = self._room_failure_message(room, event_type)
+                self._pending_room_joins.pop(blocked_room, None)
+                self._mark_room_blocked(room, reason_text)
+                if event_type == "room_unauthorized_rejoin":
+                    advice = "ارفع البوت إشرافاً أو أونر ثم أعد المحاولة."
+                elif event_type == "room_membership_required_rejoin":
+                    advice = "الغرفة للأعضاء فقط؛ أضف البوت للغرفة ثم أعد المحاولة."
+                elif event_type == "room_full_rejoin":
+                    advice = "الغرفة ممتلئة؛ فرّغ مقعداً ثم أعد المحاولة."
+                elif event_type in ("room_wrong_password_rejoin", "room_needs_password_rejoin"):
+                    advice = "تأكد من كلمة مرور الغرفة ثم أعد المحاولة."
+                else:
+                    advice = "الغرفة تطلب تحققاً لا يستطيع البوت إكماله آلياً."
+                notice=f"{reason_text}: {room}\n💡 {advice}"
                 recipient=username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER
                 if recipient and blocked_room not in self._blocked_room_notices:
                     self.send_private_text(recipient, notice)
                     self._blocked_room_notices.add(blocked_room)
+                if BOT_MASTER and _norm_user(recipient) != _norm_user(BOT_MASTER):
+                    self.send_private_text(BOT_MASTER, f"⚠️ تعذر دخول البوت غرفة: {room}\n{reason_text}\nتم وضعها في الاستثناءات ولن يحاول الدخول إليها تلقائياً.")
 
         if ACK_ROOM_EVENTS and result.get("uid"):
             try:
@@ -6086,6 +6179,28 @@ class TalkinBot:
         if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
             self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، دخول@اسم_الغرفة، خروج [اسم_الغرفة]، inv، invmsg نص الدعوة لدعوة مستخدمي الغرفة")
 
+    def _process_room_list(self, rooms):
+        """Import the server room list after login/reconnect without joining it blindly."""
+        found = set()
+        def walk(obj):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    kl = str(k).casefold()
+                    if kl in ("name", "room", "room_name", "title") and isinstance(v, str) and v.strip():
+                        found.add(v.strip())
+                    walk(v)
+            elif isinstance(obj, list):
+                for v in obj: walk(v)
+        walk(rooms)
+        if not found:
+            return
+        blocked = {_norm_room(r) for r in self.blocked_rooms}
+        found = {r for r in found if _norm_room(r) not in blocked}
+        self.log("[ROOM-LIST] loaded", len(found), "rooms")
+        # Keep the historical list so reconnect can restore rooms previously selected by the master.
+        self.known_rooms.update(found)
+        _save_persistent_rooms(self.known_rooms)
+
     def on_message(self, ws, message):
         try:
             if isinstance(message, str):
@@ -6095,6 +6210,8 @@ class TalkinBot:
             self._cache_user_photos_from_result(result)
             if "room_event" in result:
                 self.handle_room_event(result)
+            if result.get("rooms"):
+                self._process_room_list(result.get("rooms"))
             if result.get("users") or result.get("room_admin"):
                 self.process_occupants_for_invite(result)
             if result.get("stream_event"):
