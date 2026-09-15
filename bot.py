@@ -17,7 +17,6 @@ import queue
 import mimetypes
 import unicodedata
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, unquote
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from collections import defaultdict
@@ -129,20 +128,6 @@ MASTER_SUPPORT_USERNAME = os.getenv(
     "∫♚∫اݪـــۛــ⃮ـاۿــ𓏺𓏺ـيّـــّٰـبــۃ∫♚∫",
 ).strip()
 MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
-# Talkin profile-status query can differ between server builds. Keep the
-# action configurable while defaulting to the native profile update name.
-PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
-    "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
-).split(",") if x.strip()]
-BOT_BASE_STATUS = os.getenv(
-    "BOT_BASE_STATUS",
-    '<B><H3><font color="#FFD700">بوت حمايه والعاب واغاني</font><br>'
-    '<font color="#00E5FF">لمعرفه الالعاب والاوامر ارسل مساعده</font><br>'
-    '<font color="#FF4FD8">لدخول الغرف ارسل دخول اسم الغرفه</font><br>'
-    '<font color="#7CFF00">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
-    '</H3></B>',
-).strip()
-GIFT_STATUS_SECONDS = 15 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
 # from the private chat, but only the configured BOT_MASTER is authorized.
@@ -174,8 +159,6 @@ def _start_master_process():
         env["MASTER_ID"] = master_id
         env["MASTER_PWD"] = master_pwd
         env["MASTER_SERVICE_ENABLED"] = "1"
-        env["GROUP_TO_JOIN"] = ""
-        env["FIRST_ROOM"] = ""
         env["PRIMARY_BOT_ID"] = BOT_ID
         # Keep the master isolated from primary BOT_ID/BOT_PWD values.
         env.pop("BOT_ID", None)
@@ -1348,7 +1331,7 @@ def _looks_like_bot_command(text):
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
     )
     prefixes = prefixes + ("bl@",)
@@ -1560,46 +1543,6 @@ def _save_moderation_config(enabled, words):
             clean.append(word)
     _save_local_json(MODERATION_FILE, {"enabled": bool(enabled), "words": clean})
     return clean
-
-def _room_moderation_data():
-    data = _load_local_json(MODERATION_FILE, {})
-    return data if isinstance(data, dict) else {}
-
-def _room_moderation_config(room):
-    data = _room_moderation_data()
-    rooms = data.get("rooms", {}) if isinstance(data.get("rooms"), dict) else {}
-    cfg = rooms.get(_norm_room(room), {})
-    if not isinstance(cfg, dict):
-        cfg = {}
-    return {
-        "enabled": bool(cfg.get("enabled", False)),
-        "repeat_limit": max(2, int(cfg.get("repeat_limit", 3) or 3)),
-        "words": [str(w).strip() for w in cfg.get("words", []) if str(w).strip()],
-    }
-
-def _save_room_moderation(room, **changes):
-    data = _room_moderation_data()
-    rooms = data.get("rooms", {}) if isinstance(data.get("rooms"), dict) else {}
-    key = _norm_room(room)
-    cfg = _room_moderation_config(room)
-    cfg.update(changes)
-    cfg["repeat_limit"] = max(2, int(cfg.get("repeat_limit", 3) or 3))
-    rooms[key] = cfg
-    data["rooms"] = rooms
-    # Keep the legacy global filter fields intact for backward compatibility.
-    _save_local_json(MODERATION_FILE, data)
-    return cfg
-
-def _room_manager(bot, room, sender):
-    if _is_master_name(sender):
-        return True
-    users = getattr(bot, "room_users", {}).get(room, {})
-    role = str(users.get(sender, "") or "").casefold()
-    if not role and isinstance(users, dict):
-        role = next((str(v or "").casefold() for k, v in users.items() if _norm_user(k) == _norm_user(sender)), "")
-    # Room protection is intentionally limited to the room creator/owner and
-    # configured masters. Ordinary room admins/moderators cannot toggle it.
-    return role in {"owner", "creator", "room_owner", "room_creator"}
 
 def _norm_filter_text(text):
     value = str(text or "").casefold()
@@ -2047,7 +1990,7 @@ def _load_sender_avatar(photo_url, size=190):
     if not photo_url or not photo_url.startswith(("http://", "https://")):
         return None
     try:
-        r = requests.get(photo_url, headers={"User-Agent":"TalkinBot/22"}, timeout=3)
+        r = requests.get(photo_url, headers={"User-Agent":"TalkinBot/22"}, timeout=8)
         if r.status_code != 200 or not r.content:
             return None
         from io import BytesIO
@@ -2065,7 +2008,7 @@ def _load_sender_avatar(photo_url, size=190):
         return None
 
 
-def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", receiver_photo_url=""):
+def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url=""):
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
 
@@ -2092,44 +2035,48 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
     _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Keep each username in a clear rectangle and place that user's photo
-    # inside the rectangle at its end.
-    box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
-    top_y=int(h*.675); bottom_y=int(h*.815)
+    # Sender avatar overlaps the lower part of the gift image, matching the
+    # requested style. No fake initial is shown when no photo is available.
+    avatar=_load_sender_avatar(sender_photo_url,170)
+    if avatar is not None:
+        ax=(w-170)//2
+        ay=int(h*.505)
+        image.alpha_composite(avatar,(ax,ay))
+        d=ImageDraw.Draw(image)
+
+    # Two rectangles. The username itself is inside its rectangle; the only
+    # extra text is the small Arabic label above it. Names are rendered from
+    # the raw strings received by the bot, with proper Arabic RTL shaping.
+    box_w=int(w*.64); box_h=int(h*.105); box_x=(w-box_w)//2
+    top_y=int(h*.705); bottom_y=int(h*.815)
     for y in (top_y,bottom_y):
-        d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
-    avatar_inputs = (sender_photo_url, receiver_photo_url)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        avatars = list(pool.map(lambda url: _load_sender_avatar(url, 96), avatar_inputs))
-    for (y, label, name, photo), avatar in zip((
-        (top_y, "المرسل", sender_name, sender_photo_url),
-        (bottom_y, "المستلم", receiver_name, receiver_photo_url),
-    ), avatars):
-        if avatar is not None:
-            image.alpha_composite(avatar, (box_x+box_w-108, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
-        _draw_centered(d,(box_x+box_w*.43,y+34),label,25,(255,224,165,255),box_w-125)
+        d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=28,fill=panel,outline=gold,width=4)
+
+    _draw_centered(d,(w/2,top_y+27),"المرسل",25,(255,224,165,255),box_w-20)
+    _draw_centered(d,(w/2,bottom_y+27),"المستلم",25,(255,224,165,255),box_w-20)
 
     # Same visual text as the chat username: no @ removal, no transliteration.
     # Use distinct high-contrast colors so sender/receiver are immediately
     # recognizable while the dark stroke keeps decorated glyphs readable.
     sender_color=(126,226,255,255)     # turquoise-blue for the sender
     receiver_color=(255,166,218,255)   # pink-magenta for the receiver
-    panel_center_x = box_x + box_w / 2
-    _draw_name_centered(d,(box_x+box_w*.43,top_y+box_h*.68),sender_name,39,sender_color,box_w-135)
-    _draw_name_centered(d,(box_x+box_w*.43,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-135)
+    _draw_name_centered(d,(w/2,top_y+box_h*.68),sender_name,39,sender_color,box_w-42)
+    _draw_name_centered(d,(w/2,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-42)
 
     out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
-    # Static output replaces the old animated GIF because motion reduced
-    # clarity in Talkin previews.  The canvas is slightly larger, and the
-    # quality is reduced only as needed to stay below 100 KiB.
-    rgb=image.convert("RGB").resize((360,370),Image.LANCZOS)
-    for quality in (88,82,76,70,64,58,52):
+    rgb=image.convert("RGB").resize((620,635),Image.LANCZOS)
+    quality=78
+    while quality>=30:
         rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
-        if out.stat().st_size < 100 * 1024:
-            break
-    if out.stat().st_size >= 100 * 1024:
-        raise RuntimeError("تعذر ضغط بطاقة الهدية إلى أقل من 100 كيلوبايت")
+        if out.stat().st_size <= 48*1024:
+            return out
+        quality-=4
+    for size in ((560,573),(500,512),(440,451),(380,390)):
+        rgb=rgb.resize(size,Image.LANCZOS)
+        rgb.save(out,"JPEG",quality=40,optimize=True,progressive=True)
+        if out.stat().st_size <= 48*1024:
+            return out
     return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
@@ -2219,10 +2166,6 @@ class TalkinBot:
         self.banned_words = set()
         self.moderation_enabled = AUTO_BAN_WORDS
         self.last_messages = defaultdict(list)
-        # Per-room consecutive-message state. Protection can trigger when the
-        # same user keeps sending messages OR when the same text is repeated,
-        # including repeated text sent by different users.
-        self._room_repeat_state = defaultdict(dict)
         # Talkin may deliver an inbound frame more than once around reconnects.
         # This cache prevents a duplicate event from executing a command again.
         self._incoming_seen = {}
@@ -2294,11 +2237,6 @@ class TalkinBot:
         self.db.sign_in()
         self.music_last = defaultdict(float)
         self.music_current = {}
-        self._profile_status_lock = threading.Lock()
-        self._profile_status_timer = None
-        self._profile_status_token = 0
-        self._profile_base_status = BOT_BASE_STATUS
-        self._profile_current_status = BOT_BASE_STATUS
         self.music_lock = threading.Lock()
         # Mini-games: free-to-play, no points are deducted.
         self.game_lock = threading.Lock()
@@ -3261,11 +3199,9 @@ class TalkinBot:
                 user_id = first_text(uf, 2).strip()
                 online = first_text(uf, 5).strip()
                 photo = first_text(uf, 3).strip()
-                status = first_text(uf, 4).strip()
-                if username:
+                if username and username != BOT_ID:
                     users.append({"username": username, "role": role or "none",
-                                  "user_id": user_id, "online": online, "photo": photo,
-                                  "status": status})
+                                  "user_id": user_id, "online": online, "photo": photo})
             except Exception as e:
                 self.log("[INV] UserItem decode failed:", repr(e))
         # De-duplicate by username while preserving server order.
@@ -3327,48 +3263,15 @@ class TalkinBot:
                     continue
                 username = str(user.get(1, "") or "").strip()
                 photo = str(user.get(3, "") or "").strip()
-                status = str(user.get(4, "") or "").strip()
-                if username and username.casefold() == BOT_ID.casefold() and status:
-                    with self._profile_status_lock:
-                        self._profile_current_status = status
-                        if self._profile_status_timer is None:
-                            self._profile_base_status = status
                 if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
             for user in self._users_from_room_admin(result.get("room_admin") or {}):
                 username = str(user.get("username") or "").strip()
                 photo = str(user.get("photo") or "").strip()
-                status = str(user.get("status") or "").strip()
-                if username and username.casefold() == BOT_ID.casefold() and status:
-                    with self._profile_status_lock:
-                        self._profile_current_status = status
-                        if self._profile_status_timer is None:
-                            self._profile_base_status = status
                 if username and photo and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
         except Exception as exc:
             self.log("[GIFT] photo cache failed:", repr(exc))
-
-    def _lookup_profile_photo(self, username):
-        """Best-effort profile-photo lookup for a gift receiver not in cache."""
-        username = str(username or "").strip().lstrip("@").casefold()
-        if not username or not getattr(self.db, "client", None):
-            return ""
-        try:
-            response = (self.db.client.table("profiles").select("*")
-                        .eq("username", username).limit(1).execute())
-            rows = getattr(response, "data", None) or []
-            if rows:
-                row = rows[0] if isinstance(rows[0], dict) else {}
-                photo = next((str(row.get(key) or "").strip() for key in
-                              ("photo_url", "photo", "avatar_url", "avatar", "image_url")
-                              if str(row.get(key) or "").strip().startswith(("http://", "https://"))), "")
-                if photo:
-                    self.user_photos[username] = photo
-                    return photo
-        except Exception as exc:
-            self.log("[GIFT] receiver photo lookup failed:", repr(exc))
-        return ""
 
     def process_occupants_for_invite(self, result):
         room = (self.invite_room or result.get("_occupants_room") or
@@ -3711,74 +3614,6 @@ class TalkinBot:
             self.log("[MEDIA] public URL check failed:",repr(exc))
             raise RuntimeError(f"الرابط العام للوسائط غير قابل للوصول: {exc}") from exc
 
-    def _set_profile_status(self, status: str):
-        """Update the bot profile status and restore it after a timed gift status.
-
-        The primary bot's base status is configured with BOT_BASE_STATUS because
-        Talkin does not expose the current profile text in the room bootstrap.
-        A new gift cancels the previous timer and replaces its temporary status.
-        PROFILE_STATUS_ACTION allows deployments using a different Talkin build
-        to select the matching profile-update action without changing code.
-        """
-        status = str(status or "").strip()
-        try:
-            sent = False
-            for action in PROFILE_STATUS_ACTIONS:
-                try:
-                    self.send_query(encode_query(
-                        action,
-                        type_="status",
-                        body=status,
-                        value=status,
-                    ))
-                    self.log("[PROFILE] status update sent via", action)
-                    sent = True
-                except Exception as exc:
-                    self.log("[PROFILE] action failed", action, repr(exc))
-            if not sent:
-                self.log("[PROFILE] all status update actions failed")
-            return sent
-        except Exception as exc:
-            self.log("[PROFILE] status update failed:", repr(exc))
-            return False
-
-    def _set_temporary_gift_status(self, sender: str, receiver: str, gift_name: str):
-        sender = str(sender or "").strip().lstrip("@")
-        receiver = str(receiver or "").strip().lstrip("@")
-        gift_name = str(gift_name or "هدية").strip()
-        # Keep sender and receiver on separate colored lines and append the
-        # configured base status below them instead of replacing it.
-        temporary = (
-            f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
-            f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
-            f'<br><font color="#FFE29A">{gift_name}</font>'
-        )
-        with self._profile_status_lock:
-            self._profile_status_token += 1
-            token = self._profile_status_token
-            timer = self._profile_status_timer
-            if timer is not None:
-                timer.cancel()
-            base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
-            self._profile_base_status = base_status
-            # Send one profile-status update only: the gift lines are above
-            # the previous/base status in the same value, not a new status.
-            self._set_profile_status(
-                temporary + (f"<br>{base_status}" if base_status else "")
-            )
-
-            def restore():
-                with self._profile_status_lock:
-                    if token != self._profile_status_token:
-                        return
-                    self._profile_status_timer = None
-                    self._set_profile_status(self._profile_base_status)
-                    self._profile_current_status = self._profile_base_status
-
-            self._profile_status_timer = threading.Timer(GIFT_STATUS_SECONDS, restore)
-            self._profile_status_timer.daemon = True
-            self._profile_status_timer.start()
-
     def handle_gift_command(self, room: str, text: str, sender_name: str = "", private_to: str = ""):
         raw=text.strip(); m=re.match(r"^sa@([^@]+)@(.+)$",raw,re.I)
         if not m: return False
@@ -3801,21 +3636,12 @@ class TalkinBot:
                 if charged:
                     _add_points(sender_name, cost)
                 raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ أنشئ Railway Public Domain أو ضع PUBLIC_BASE_URL")
-            sender_key = sender_name.casefold().lstrip("@")
-            receiver_key = target.casefold().lstrip("@")
-            # Use each account's own cached/profile image beside its own name.
-            sender_photo_url = self.user_photos.get(sender_key, "") or self._lookup_profile_photo(sender_name)
-            receiver_photo_url = self.user_photos.get(receiver_key, "") or self._lookup_profile_photo(target)
-            gift_path = render_gift_card(gift_id, sender_name, target, sender_photo_url, receiver_photo_url)
+            sender_photo_url = self.user_photos.get(sender_name.casefold(), "")
+            gift_path = render_gift_card(gift_id, sender_name, target, sender_photo_url)
             gift_url = public_base + "/gifts/" + gift_path.name
             self._verify_public_media_url(gift_url, "image")
             if not gift_path.is_file() or gift_path.stat().st_size < 64:
                 raise RuntimeError(f"ملف صورة الهدية غير صالح: {gift_path}")
-            self._set_temporary_gift_status(
-                sender_name,
-                target,
-                GIFT_CATALOG.get(str(gift_id), ("🎁", "هدية"))[1],
-            )
             if private_to:
                 self.send_private_media(private_to, gift_url, "image")
                 self.send_private_text(private_to, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
@@ -4257,9 +4083,7 @@ class TalkinBot:
         # (or in the command room when the command is public by design).
         # Publishing is intentionally also available to verified accounts.
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
-        security_command = bool(re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I) or re.match(r"^mr@\d+$", str(body or "").strip(), re.I))
-        join_command = bool(re.match(r"^(?:دخول|ادخل|join|enter)\s+", str(body or "").strip(), re.I))
-        if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)) and not join_command and not (security_command and room and _room_manager(self, room, sender)):
+        if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)):
             return False
         # A private command can be replayed by the Talkin transport with a new
         # frame/uid. Do not answer the same account-list request twice in a row.
@@ -4304,26 +4128,6 @@ class TalkinBot:
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
         low=text.casefold()
-        if low in ("تشغيل الحماية", "تشغيل الحمايه", "الحماية تشغيل", "الحمايه تشغيل"):
-            if not room or not _room_manager(self, room, sender):
-                return True
-            cfg = _save_room_moderation(room, enabled=True)
-            self.send_room_text(room, f"🛡️ حماية الغرفة شغالة. حد التكرار: {cfg['repeat_limit']} رسائل.")
-            return True
-        if low in ("إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "الحماية إيقاف", "الحمايه ايقاف"):
-            if not room or not _room_manager(self, room, sender):
-                return True
-            _save_room_moderation(room, enabled=False)
-            self.send_room_text(room, "⛔ حماية الغرفة متوقفة.")
-            return True
-        m_repeat = re.fullmatch(r"mr@(\d+)", text, re.I)
-        if m_repeat:
-            if not room or not _room_manager(self, room, sender):
-                return True
-            limit = max(2, min(50, int(m_repeat.group(1))))
-            _save_room_moderation(room, repeat_limit=limit)
-            self.send_room_text(room, f"✅ تم ضبط حماية التكرار في {room} على {limit} رسائل متتالية.")
-            return True
         if low in ("نسخ احتياطي", "نسخه احتياطيه", "backup", "full backup"):
             queued = _request_github_full_backup(self, sender)
             if queued:
@@ -4414,13 +4218,8 @@ class TalkinBot:
             parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
             if not target:
                 self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
-            blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
             joined = self.join_room(target)
-            if blocked:
-                reply = f"🚫 البوت محظور من الغرفة {target}. أعطِ البوت إشرافاً أو أونر ثم أعد المحاولة: دخول {target}"
-            else:
-                reply = f"{'✅ تم طلب دخول الغرفة' if joined else '⚠️ الغرفة متصلة بالفعل'}: {target} | المتصلة فعلياً: {len(self.connected_rooms)}"
-            self.send_private_text(sender, reply)
+            self.send_private_text(sender, f"{'✅ تم طلب دخول الغرفة' if joined else '⚠️ الغرفة مسجلة بالفعل'}: {target} | المتصلة فعلياً: {len(self.connected_rooms)}")
             return True
         m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
         if m_transfer and _is_verified_user(sender):
@@ -4949,46 +4748,16 @@ class TalkinBot:
 
         # Word filter runs before games/normal commands. It uses the same native
         # room ban operation as b@, with Arabic normalization and no public reply.
-        room_cfg = _room_moderation_config(room)
-        if room_cfg["enabled"] and not _is_master_name(frm):
-            now = time.time()
-            state = self._room_repeat_state[room]
-            last_sender = str(state.get("sender", ""))
-            last_text = str(state.get("text", ""))
-            last_at = float(state.get("at", 0.0) or 0.0)
-            same_sender = _norm_user(last_sender) == _norm_user(frm)
-            same_text = _norm_filter_text(last_text) == _norm_filter_text(body.strip())
-            within_window = now - last_at <= 30.0
-            # Both counters are consecutive counters. A different sender
-            # breaks the sender sequence; a different text breaks the text
-            # sequence. Either counter can independently cause a ban.
-            state["sender_count"] = int(state.get("sender_count", 0) or 0) + 1 if same_sender and within_window else 1
-            state["text_count"] = int(state.get("text_count", 0) or 0) + 1 if same_text and within_window else 1
-            state["sender"] = frm
-            state["text"] = body.strip()
-            state["at"] = now
-            sender_count = int(state.get("sender_count", 0) or 0)
-            text_count = int(state.get("text_count", 0) or 0)
-            limit = room_cfg["repeat_limit"]
-            if sender_count >= limit or text_count >= limit:
-                self.send_admin(room, frm, "ban")
-                self.send_room_text(room, f"🚫 تم حظر @{frm}\nالسبب: تكرار مشبوه")
-                state.clear()
+        if self.moderation_enabled and self.banned_words and not _is_master_name(frm):
+            normalized_body = _norm_filter_text(body)
+            hit = next((w for w in self.banned_words if _norm_filter_text(w) and _norm_filter_text(w) in normalized_body), None)
+            if hit:
+                try:
+                    self.send_admin(room, frm, "ban")
+                    self.log("[WORD-FILTER] native room ban", frm, "word=", hit, "room=", room)
+                except Exception as exc:
+                    self.log("[WORD-FILTER] failed:", repr(exc))
                 return
-            if sender_count == limit - 1 or text_count == limit - 1:
-                self.send_room_text(room, f"⚠️ تحذير @{frm}: الرسالة مكررة، الرسالة التالية ستؤدي إلى الحظر.")
-                return
-        filter_words = room_cfg["words"] or (sorted(self.banned_words) if self.moderation_enabled else [])
-        normalized_body = _norm_filter_text(body)
-        hit = next((w for w in filter_words if _norm_filter_text(w) and _norm_filter_text(w) in normalized_body), None)
-        if hit and not _is_master_name(frm):
-            try:
-                self.send_admin(room, frm, "ban")
-                self.send_room_text(room, f"🚫 تم حظر @{frm}\nالسبب: كلمة مسيئة")
-                self.log("[WORD-FILTER] native room ban", frm, "word=", hit, "room=", room)
-            except Exception as exc:
-                self.log("[WORD-FILTER] failed:", repr(exc))
-            return
 
         # Reactions/comments/reports: notify the original publisher privately.
         reaction=re.match(r"^(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?$", body.strip(), re.I)
@@ -5111,7 +4880,7 @@ class TalkinBot:
                             return
                     # Silently ignore master-only commands from everyone else.
                     is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
-                    if body and _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)) and not re.match(r"^(?:دخول|ادخل|join|enter)\s+", body, re.I):
+                    if body and _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)):
                         if not _is_verified_user(frm):
                             self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
@@ -5283,8 +5052,8 @@ class TalkinBot:
         # Keep every room selected by the master. A reconnect restores the
         # existing room set once; room-event handlers never leave/rejoin in a
         # loop, which avoids the visible leave/join cycle.
-        rooms_to_restore = set() if MASTER_SERVICE_ENABLED else {str(r).strip() for r in self.known_rooms if str(r).strip()}
-        if self.room and not MASTER_SERVICE_ENABLED:
+        rooms_to_restore = {str(r).strip() for r in self.known_rooms if str(r).strip()}
+        if self.room:
             rooms_to_restore.add(str(self.room).strip())
         for room in sorted(rooms_to_restore):
             self.join_room(room, force=True)
@@ -5392,7 +5161,7 @@ class TalkinBot:
             missing.append("BOT_ID (or BOT_USERNAME)")
         if not BOT_PWD:
             missing.append("BOT_PWD (or BOT_PASSWORD)")
-        if not self.room and not MASTER_SERVICE_ENABLED:
+        if not self.room:
             missing.append("GROUP_TO_JOIN (or FIRST_ROOM)")
         if missing:
             raise SystemExit(
