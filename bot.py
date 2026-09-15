@@ -132,9 +132,8 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # Talkin profile-status query can differ between server builds. Keep the
 # action configurable while defaulting to the native profile update name.
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
-    "PROFILE_STATUS_ACTIONS", "update_profile"
+    "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
 ).split(",") if x.strip()]
-MAX_PROFILE_STATUS_BYTES = int(os.getenv("MAX_PROFILE_STATUS_BYTES", "700"))
 BOT_BASE_STATUS = os.getenv(
     "BOT_BASE_STATUS",
     '<B><H3><font color="#FFD700">بوت حمايه والعاب واغاني</font><br>'
@@ -1345,7 +1344,7 @@ def _looks_like_bot_command(text):
     if not low:
         return False
     prefixes = (
-        "sa@", ".sa ", "vi@", "vip@", "unvip@", "unvi@", "ازالة توثيق@", "إزالة توثيق@",
+        "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
@@ -1358,7 +1357,7 @@ def _looks_like_bot_command(text):
 def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
     prefixes = (
-        "vi@", "vip@", "unvip@", "unvi@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
+        "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "توثيق الكل", "وثق الكل", "verify",
@@ -1656,7 +1655,7 @@ def _default_help_pages():
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
         6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
-        7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\nvi@اسم — توثيق الألعاب وإرسال إشعار للمستخدم\nunvi@اسم — إزالة التوثيق\nتوثيق الكل — توثيق جميع مستخدمي الغرف\nVip@اسم — توثيق VIP وإرسال إشعار للمستخدم\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
+        7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\nvi@اسم — توثيق الألعاب\nتوثيق الكل — توثيق جميع مستخدمي الغرف\nuns@اسم — إزالة التوثيق\nVip@اسم — توثيق VIP\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
     }
 
 def _help_pages_from_messages():
@@ -2078,13 +2077,10 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     if not files:
         raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
 
-    # Revert to the earlier elegant gift template instead of the last ornate
-    # layout. The sender photo is placed on top of the gift artwork when a
-    # public Talkin profile photo is available.
-    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
-    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
+    # Static clean gift card: use the gift artwork directly, without the old
+    # ornate/animated overlay. Keep a large canvas so the gift remains clear.
+    template=Image.new("RGBA",(1500,1650),(0,0,0,0))
     image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA")
-    image.alpha_composite(template)
     d=ImageDraw.Draw(image); w,h=template.size
     gold=(244,196,92,255); panel=(10,14,28,245)
 
@@ -2093,38 +2089,38 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
     _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Keep each username in a clear rectangle and place that user's photo
-    # inside the rectangle at its end.
-    box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
-    top_y=int(h*.675); bottom_y=int(h*.815)
+    # Keep each username in a clear rectangle. The profile photo is OUTSIDE
+    # the rectangle and sits beside it, so it never covers the username.
+    box_w=int(w*.70); box_h=int(h*.115); box_x=int(w*.22)
+    avatar_size=int(box_h*.78)
+    avatar_x=box_x+box_w+28
+    top_y=int(h*.700); bottom_y=int(h*.825)
     for y in (top_y,bottom_y):
         d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
     avatar_inputs = (sender_photo_url, receiver_photo_url)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        avatars = list(pool.map(lambda url: _load_sender_avatar(url, 96), avatar_inputs))
+        avatars = list(pool.map(lambda url: _load_sender_avatar(url, avatar_size), avatar_inputs))
     for (y, label, name, photo), avatar in zip((
         (top_y, "المرسل", sender_name, sender_photo_url),
         (bottom_y, "المستلم", receiver_name, receiver_photo_url),
     ), avatars):
         if avatar is not None:
-            image.alpha_composite(avatar, (box_x+box_w-108, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
-        _draw_centered(d,(box_x+box_w*.43,y+34),label,25,(255,224,165,255),box_w-125)
+            image.alpha_composite(avatar, (avatar_x, y+(box_h-avatar_size)//2)); d=ImageDraw.Draw(image)
+        _draw_centered(d,(box_x+box_w/2,y+box_h*.34),label,28,(255,224,165,255),box_w-50)
 
     # Same visual text as the chat username: no @ removal, no transliteration.
     # Use distinct high-contrast colors so sender/receiver are immediately
     # recognizable while the dark stroke keeps decorated glyphs readable.
     sender_color=(126,226,255,255)     # turquoise-blue for the sender
     receiver_color=(255,166,218,255)   # pink-magenta for the receiver
-    panel_center_x = box_x + box_w / 2
-    _draw_name_centered(d,(box_x+box_w*.43,top_y+box_h*.68),sender_name,39,sender_color,box_w-135)
-    _draw_name_centered(d,(box_x+box_w*.43,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-135)
+    _draw_name_centered(d,(box_x+box_w/2,top_y+box_h*.68),sender_name,46,sender_color,box_w-55)
+    _draw_name_centered(d,(box_x+box_w/2,bottom_y+box_h*.68),receiver_name,46,receiver_color,box_w-55)
 
     out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
-    # Static output replaces the old animated GIF because motion reduced
-    # clarity in Talkin previews.  The canvas is slightly larger, and the
-    # quality is reduced only as needed to stay below 100 KiB.
-    rgb=image.convert("RGB").resize((360,370),Image.LANCZOS)
+    # Static PNG/JPEG output replaces animation. Render substantially larger
+    # in both directions, then compress only as much as needed for transport.
+    rgb=image.convert("RGB").resize((600,660),Image.LANCZOS)
     for quality in (88,82,76,70,64,58,52):
         rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
         if out.stat().st_size < 100 * 1024:
@@ -3722,13 +3718,6 @@ class TalkinBot:
         to select the matching profile-update action without changing code.
         """
         status = str(status or "").strip()
-        # Query used to put the complete status in both `body` and `value`,
-        # doubling the protobuf frame and making the server close the socket
-        # with WebSocket code 1009 when a gift was sent.  Keep one copy only.
-        encoded_status = status.encode("utf-8")
-        if len(encoded_status) > MAX_PROFILE_STATUS_BYTES:
-            status = encoded_status[:MAX_PROFILE_STATUS_BYTES].decode("utf-8", "ignore").rstrip()
-            self.log("[PROFILE] status shortened to", len(status.encode("utf-8")), "bytes")
         try:
             sent = False
             for action in PROFILE_STATUS_ACTIONS:
@@ -3737,6 +3726,7 @@ class TalkinBot:
                         action,
                         type_="status",
                         body=status,
+                        value=status,
                     ))
                     self.log("[PROFILE] status update sent via", action)
                     sent = True
@@ -4580,16 +4570,11 @@ class TalkinBot:
             # Keep the bot's normal verification notice for the verified user,
             # while the master process separately relays the result to whoever
             # requested the verification.
-            self.send_private_text(
-                target,
-                f"✅ تم توثيق حسابك @{target} بنجاح.\n"
-                f"🎉 يمكنك الآن استخدام أوامر البوت.\n"
-                f"من قبل @{sender}",
-            )
+            self.send_private_text(target, f"✅ تم توثيق حسابك @{target} بنجاح.\n🎉 يمكنك الآن استخدام أوامر البوت.")
             self.send_private_text(sender, f"✅ تم توثيق @{target}.")
             return True
-        if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("unvi@"): 
-            prefix="unvi@" if low.startswith("unvi@") else text.split("@",1)[0]+"@"
+        if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("uns@"): 
+            prefix="uns@" if low.startswith("uns@") else text.split("@",1)[0]+"@"
             target=text[len(prefix):].strip().lstrip("@"); data=_verified_data(); data.pop(_norm_user(target),None); _save_local_json(VERIFIED_FILE,data)
             self.send_private_text(sender, f"✅ تم إلغاء توثيق @{target}.")
             return True
@@ -4611,13 +4596,6 @@ class TalkinBot:
                 present = any(_norm_user(u) == key for u in self.room_users.get(active_room, {}))
                 if present:
                     self.send_room_text(active_room, f"👑 عضو Vip\n👤 {target}\n🏠 الغرفة: {active_room}")
-            self.send_private_text(
-                target,
-                f"✅ تم توثيق حسابك @{target} بنجاح.\n"
-                "🎉 ويمكنك الان النشر وارسال الهدايا\n"
-                "👑 تم تفعيل الترحيب المخصص تلقائياً.\n"
-                f"من قبل @{sender}",
-            )
             self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.\n👑 تم تفعيل الترحيب المخصص تلقائياً.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
