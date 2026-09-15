@@ -5841,7 +5841,9 @@ class TalkinBot:
         # - Any configured master can stop/start games in the room where the command is issued.
         # - The primary master (BOT_MASTER) controls the global game switch for all rooms.
         if low in ("ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب"):
-            if not _is_master_name(sender):
+            # Primary master and MVIP verification masters can control games.
+            # MVIP masters affect only the room where the command is issued.
+            if not _is_verification_manager(sender):
                 return True
             if _is_primary_master(sender):
                 _set_games_global(False)
@@ -5854,7 +5856,9 @@ class TalkinBot:
             return True
 
         if low in ("تشغيل الالعاب", "تشغيل الألعاب"):
-            if not _is_master_name(sender):
+            # Primary master and MVIP verification masters can control games.
+            # MVIP masters affect only the room where the command is issued.
+            if not _is_verification_manager(sender):
                 return True
             if _is_primary_master(sender):
                 data = _game_control_data()
