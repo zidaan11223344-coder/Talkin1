@@ -146,12 +146,19 @@ MASTER_SUPPORT_USERNAME = os.getenv(
     "∫♚∫اݪـــۛــ⃮ـاۿــ𓏺𓏺ـيّـــّٰـبــۃ∫♚∫",
 ).strip()
 MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
-# Talkin profile-status query can differ between server builds. Keep the
-# action configurable while defaulting to the native profile update name.
-PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
-    "PROFILE_STATUS_ACTIONS", "update_profile"
-).split(",") if x.strip()]
-PROFILE_STATUS_ACTION = PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else "update_profile"
+# TalkinChat's APK uses Query action ``profile_update`` with type ``status``
+# and value field 11. Normalize the old incorrect alias so a stale Railway
+# variable cannot keep sending the unsupported ``update_profile`` action.
+_PROFILE_ACTION_ALIASES = {"update_profile": "profile_update"}
+PROFILE_STATUS_ACTIONS = [
+    _PROFILE_ACTION_ALIASES.get(x.strip(), x.strip())
+    for x in os.getenv("PROFILE_STATUS_ACTIONS", "profile_update").split(",")
+    if x.strip()
+]
+PROFILE_STATUS_ACTION = PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else "profile_update"
+# The Talkin server does not echo profile_update on every build. Verification
+# is opt-in; transport exceptions are still reported immediately.
+PROFILE_STATUS_VERIFY = os.getenv("PROFILE_STATUS_VERIFY", "0") == "1"
 MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
@@ -2837,7 +2844,7 @@ class TalkinBot:
         }
         return labels.get(event_type, "❌ تعذر دخول البوت إلى الغرفة")
 
-    def join_room(self, room: str, force: bool = False):
+    def join_room(self, room: str, force: bool = False, requested_by: str = ""):
         """Join a room, allowing a previously-left room to be joined again.
 
         ``known_rooms`` is persistent history, while ``connected_rooms`` is the
@@ -2866,7 +2873,11 @@ class TalkinBot:
                 return False
             self._last_join_sent[room] = now
         self.log("[ROOM] joining", room)
-        self._pending_room_joins[_norm_room(room)] = {"room": room, "started": time.time(), "requested_by": ""}
+        self._pending_room_joins[_norm_room(room)] = {
+            "room": room,
+            "started": time.time(),
+            "requested_by": str(requested_by or "").strip(),
+        }
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
         self.known_rooms.add(room)
         _save_persistent_rooms(self.known_rooms)
@@ -4240,13 +4251,14 @@ class TalkinBot:
                 ))
                 self.log("[PROFILE] status update sent via", action)
                 sent = True
-                check = threading.Timer(8.0, self._check_profile_status_delivery, args=(status,))
-                check.daemon = True
-                old_check = getattr(self, "_profile_status_check_timer", None)
-                if old_check is not None:
-                    old_check.cancel()
-                self._profile_status_check_timer = check
-                check.start()
+                if PROFILE_STATUS_VERIFY:
+                    check = threading.Timer(8.0, self._check_profile_status_delivery, args=(status,))
+                    check.daemon = True
+                    old_check = getattr(self, "_profile_status_check_timer", None)
+                    if old_check is not None:
+                        old_check.cancel()
+                    self._profile_status_check_timer = check
+                    check.start()
             except Exception as exc:
                 self.log("[PROFILE] action failed", action, repr(exc))
             if not sent:
@@ -5818,8 +5830,18 @@ class TalkinBot:
             target=m_join.group(1).strip()
             if not target:
                 self.send_private_text(sender,"❌ الصيغة: دخول@اسم_الغرفة"); return True
-            self.join_room(target)
-            self.send_private_text(sender,f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}"); return True
+            if _norm_room(target) in getattr(self, "blocked_rooms", set()):
+                self.send_private_text(
+                    sender,
+                    f"🚫 البوت محظور من الغرفة: {target}\n"
+                    "ارفع البوت إشرافاً أو أونر ثم أعد المحاولة.",
+                )
+                return True
+            if self.join_room(target, requested_by=sender):
+                self.send_private_text(sender, f"⏳ تم إرسال طلب دخول الغرفة: {target}. انتظر تأكيد الخادم.")
+            else:
+                self.send_private_text(sender, f"⚠️ تعذر إرسال طلب دخول الغرفة: {target}.")
+            return True
         if low in ("خروج","leave","exit") or low.startswith(("خروج ","leave ","exit ")):
             parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
             if target:
@@ -6085,11 +6107,14 @@ class TalkinBot:
         elif event_type in ("you_joined", "you_rejoined"):
             self.last_joined_room = room
             rnorm = _norm_room(room)
-            self._pending_room_joins.pop(rnorm, None)
+            pending_join = self._pending_room_joins.pop(rnorm, None)
             self.blocked_rooms.discard(rnorm)
             self._blocked_room_reasons.pop(rnorm, None)
             self._blocked_room_notices.discard(rnorm)
             self._save_blocked_rooms()
+            requester = str((pending_join or {}).get("requested_by", "") or "").strip()
+            if requester:
+                self.send_private_text(requester, f"✅ أكد الخادم دخول البوت إلى الغرفة: {room}")
         elif event_type in ("room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin", "room_needs_captcha_rejoin", "room_needs_password_rejoin", "room_membership_required_rejoin"):
             # IMPORTANT: do not immediately send room_join here.  These events
             # can be emitted repeatedly by the server when a room rejects a
@@ -6102,7 +6127,7 @@ class TalkinBot:
             if event_type in failure_events:
                 blocked_room = _norm_room(room)
                 reason_text = self._room_failure_message(room, event_type)
-                self._pending_room_joins.pop(blocked_room, None)
+                pending_join = self._pending_room_joins.pop(blocked_room, None)
                 self._mark_room_blocked(room, reason_text)
                 if event_type == "room_unauthorized_rejoin":
                     advice = "ارفع البوت إشرافاً أو أونر ثم أعد المحاولة."
@@ -6115,7 +6140,8 @@ class TalkinBot:
                 else:
                     advice = "الغرفة تطلب تحققاً لا يستطيع البوت إكماله آلياً."
                 notice=f"{reason_text}: {room}\n💡 {advice}"
-                recipient=username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER
+                requested_by = str((pending_join or {}).get("requested_by", "") or "").strip()
+                recipient = requested_by or (username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER)
                 if recipient and blocked_room not in self._blocked_room_notices:
                     self.send_private_text(recipient, notice)
                     self._blocked_room_notices.add(blocked_room)
@@ -6413,16 +6439,16 @@ class TalkinBot:
                         elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I):
                             target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
                             blocked_room = _norm_room(target_room)
-                            was_blocked = blocked_room in self.blocked_rooms
-                            self.blocked_rooms.discard(blocked_room)
-                            self._blocked_room_notices.discard(blocked_room)
-                            joined = self.join_room(target_room, force=True)
-                            if joined:
-                                self.send_private_text(BOT_MASTER, f"⏳ تم طلب دخول الغرفة: {target_room} | المتصلة فعلياً: {len(self.connected_rooms)}")
-                            elif was_blocked:
-                                self.send_private_text(BOT_MASTER, f"🚫 الغرفة {target_room} مسجلة كغرفة محظورة/غير متاحة. ارفع البوت إشرافاً أو أونر ثم أعد المحاولة.")
+                            if blocked_room in self.blocked_rooms:
+                                self.send_private_text(frm, f"🚫 البوت محظور من الغرفة: {target_room}\nارفع البوت إشرافاً أو أونر ثم أعد المحاولة.")
                             else:
-                                self.send_private_text(BOT_MASTER, f"⚠️ تعذر طلب دخول الغرفة: {target_room}. تحقق من اسم الغرفة وصلاحية البوت.")
+                                joined = self.join_room(target_room, force=True, requested_by=frm)
+                                self.send_private_text(
+                                    frm,
+                                    f"⏳ تم إرسال طلب دخول الغرفة: {target_room}. انتظر تأكيد الخادم."
+                                    if joined else
+                                    f"⚠️ تعذر إرسال طلب دخول الغرفة: {target_room}. تحقق من الاسم والصلاحية.",
+                                )
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
                                 ok = self.leave_room(arg)
