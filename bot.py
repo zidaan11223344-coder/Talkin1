@@ -261,6 +261,8 @@ ROOM_USERS_FILE = DATA_DIR / "room_users.json"
 INVITE_HISTORY_FILE = DATA_DIR / "invite_history.json"
 REPLIES_FILE = DATA_DIR / "replies.json"
 MODERATION_FILE = DATA_DIR / "moderation.json"
+# Dedicated persistent file for filter words added with +mf@...
+MF_FILE = DATA_DIR / "mf.json"
 
 # Known legacy state files used by older releases. This migration runs once and
 # NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
@@ -268,7 +270,7 @@ _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
     "messages.json", "published_posts.json", "game_stats.json", "crop_plots.json",
     "tracked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
-    "moderation.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
+    "moderation.json", "mf.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json",
 )
 
@@ -1534,18 +1536,45 @@ def _reply_template(key, default="", **kwargs):
         return str(text)
 
 def _load_moderation_config():
-    data = _load_local_json(MODERATION_FILE, {})
-    if not isinstance(data, dict):
-        data = {}
-    words = data.get("words")
-    if isinstance(words, dict):
-        words = list(words.keys())
+    # Prefer the dedicated mf.json file. If it does not exist yet, migrate the
+    # existing words from moderation.json into it without deleting old data.
+    mf_data = _load_local_json(MF_FILE, {})
+    moderation_data = _load_local_json(MODERATION_FILE, {})
+    if not isinstance(mf_data, dict):
+        mf_data = {}
+    if not isinstance(moderation_data, dict):
+        moderation_data = {}
+
+    words = mf_data.get("words")
     if not isinstance(words, list):
-        words = sorted(BANNED_WORDS)
+        words = moderation_data.get("words")
+        if isinstance(words, dict):
+            words = list(words.keys())
+        if not isinstance(words, list):
+            words = sorted(BANNED_WORDS)
+
     words = [str(w).strip() for w in words if str(w).strip()]
-    raw_enabled = data.get("enabled", AUTO_BAN_WORDS)
+    raw_enabled = mf_data.get("enabled", moderation_data.get("enabled", AUTO_BAN_WORDS))
     enabled = bool(raw_enabled) if isinstance(raw_enabled, (bool, int)) else AUTO_BAN_WORDS
-    return enabled, words
+
+    # Ensure the dedicated file exists immediately so filter data is visibly
+    # stored separately from the main moderation settings.
+    clean = _save_mf_config(enabled, words)
+    return enabled, clean
+
+def _save_mf_config(enabled, words):
+    clean = []
+    seen = set()
+    for word in words or []:
+        word = str(word).strip()
+        if not word:
+            continue
+        key = _norm_filter_text(word)
+        if key and key not in seen:
+            seen.add(key)
+            clean.append(word)
+    _save_local_json(MF_FILE, {"enabled": bool(enabled), "words": clean})
+    return clean
 
 def _save_moderation_config(enabled, words):
     clean = []
@@ -1559,6 +1588,7 @@ def _save_moderation_config(enabled, words):
             seen.add(key)
             clean.append(word)
     _save_local_json(MODERATION_FILE, {"enabled": bool(enabled), "words": clean})
+    _save_local_json(MF_FILE, {"enabled": bool(enabled), "words": clean})
     return clean
 
 def _room_moderation_data():
@@ -2070,7 +2100,8 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
 
     Important:
     - The ORIGINAL gift artwork is used; no new gift picture is generated.
-    - Sender/receiver avatars stay INSIDE their own name rectangles.
+    - Sender/receiver avatars are OUTSIDE their own name rectangles, on the LEFT.
+    - The name rectangles are wider to support long account names.
     - The gift artwork fills the card as much as possible without distortion.
     - The final card is rendered larger and sharpened only to compensate for
       the small source gift files.
@@ -2134,12 +2165,12 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
         header[2] - header[0] - 40,
     )
 
-    # These are the ONLY two identity panels.
-    # The avatar is placed inside the right end of each rectangle, matching
-    # the reference screenshot. It is never placed on top of the gift art.
-    box_w = int(w * .66)
+    # Two wider identity panels.
+    # IMPORTANT: the profile photos are outside the panels, on their LEFT side.
+    # This leaves the complete rectangle available for long account names.
+    box_w = int(w * .73)
     box_h = int(h * .125)
-    box_x = int(w * .27)
+    box_x = int(w * .22)
     top_y = int(h * .675)
     bottom_y = int(h * .815)
 
@@ -2153,7 +2184,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
         )
 
     avatar_size = 112
-    avatar_x = box_x + box_w - avatar_size - 16
+    avatar_x = max(8, box_x - avatar_size - 16)
     avatar_ys = (
         top_y + (box_h - avatar_size) // 2,
         bottom_y + (box_h - avatar_size) // 2,
@@ -2167,10 +2198,10 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
             )
         )
 
-    # Labels and names are centered in the remaining panel area, while the
-    # circular photo occupies its own reserved area inside the rectangle.
-    text_center_x = box_x + (box_w - avatar_size - 24) / 2
-    text_max_w = box_w - avatar_size - 42
+    # The whole rectangle is available for text because the avatar is outside.
+    # This is important for long usernames/accounts.
+    text_center_x = box_x + box_w / 2
+    text_max_w = box_w - 34
 
     for idx, (y, label, name) in enumerate(
         (
@@ -2180,6 +2211,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     ):
         avatar = avatars[idx]
         if avatar is not None:
+            # Photo is deliberately outside the rectangle on the LEFT.
             image.alpha_composite(avatar, (int(avatar_x), int(avatar_ys[idx])))
 
         _draw_centered(
@@ -4516,16 +4548,20 @@ class TalkinBot:
                 if word:
                     self.banned_words.add(word)
                     _save_moderation_config(self.moderation_enabled, sorted(self.banned_words))
+                    _save_mf_config(self.moderation_enabled, sorted(self.banned_words))
+                    self.log("[FILTER] saved to mf.json:", word)
                 return True
             if low.startswith("-mf@"):
                 word = text[4:].strip()
                 target_norm = _norm_filter_text(word)
                 self.banned_words = {w for w in self.banned_words if _norm_filter_text(w) != target_norm}
                 _save_moderation_config(self.moderation_enabled, sorted(self.banned_words))
+                _save_mf_config(self.moderation_enabled, sorted(self.banned_words))
                 return True
             if low == "clear@mf":
                 self.banned_words.clear()
                 _save_moderation_config(self.moderation_enabled, [])
+                _save_mf_config(self.moderation_enabled, [])
                 return True
             if low == "l@mf":
                 # Deliberately silent for master commands; list is available in moderation.json.
