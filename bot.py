@@ -3311,7 +3311,8 @@ class TalkinBot:
     def reply_text(self, room: str, text: str, private_to: str = ""):
         return self.send_private_text(private_to, text) if private_to else self.send_room_text(room, text)
 
-    def request_occupants(self, room: str = "", silent_master: bool = False):
+    def request_occupants(self, room: str = "", silent_master: bool = False, response_room: str = "", response_to: str = ""):
+
         """Load users from ALL rooms currently joined by the bot.
 
         The room argument is only the command-context room: it is used in the
@@ -3320,7 +3321,13 @@ class TalkinBot:
         """
         with self.invite_lock:
             if self.invite_pending:
-                self.send_private_text(BOT_MASTER, "⏳ ما زلت أجمع معلومات الغرف، انتظر حتى تكتمل العملية.")
+                msg = "⏳ ما زلت أجمع معلومات الغرف، انتظر حتى تكتمل العملية."
+                if response_room:
+                    self.send_room_text(response_room, msg)
+                elif response_to:
+                    self.send_private_text(response_to, msg)
+                else:
+                    self.send_private_text(BOT_MASTER, msg)
                 return
             self.invite_pending = True
             self.invite_silent_master = bool(silent_master)
@@ -3328,6 +3335,12 @@ class TalkinBot:
             self.invite_sent.clear()
 
         command_room = self.invite_room
+        response_room = str(response_room or "").strip()
+        response_to = str(response_to or "").strip()
+        # Keep the destination available to the async invite worker even when
+        # users are loaded immediately from the persistent/DB roster.
+        self._inv_response_room = response_room
+        self._inv_response_to = response_to
         active_rooms = []
         for r in list(self.known_rooms):
             r = str(r).strip()
@@ -3335,13 +3348,18 @@ class TalkinBot:
                 active_rooms.append(r)
         self.log("[INV] loading users from ALL active rooms:", active_rooms)
         try:
-            self.send_private_text(
-                BOT_MASTER,
+            progress = (
                 f"⏳ جاري جمع جميع المستخدمين من {len(active_rooms)} غرفة...\n"
                 f"📌 نص الدعوة سيكون باسم الغرفة التي نُفّذ فيها inv: {command_room}"
             )
+            if response_room:
+                self.send_room_text(response_room, progress)
+            elif response_to:
+                self.send_private_text(response_to, progress)
+            else:
+                self.send_private_text(BOT_MASTER, progress)
         except Exception as e:
-            self.log("[INV] private progress message failed:", repr(e))
+            self.log("[INV] progress message failed:", repr(e))
 
         # Collect the local persistent roster first. This survives bot replacement
         # and includes users who are currently offline. Merge DB/live users below.
@@ -3381,11 +3399,19 @@ class TalkinBot:
         self._inv_live_users = []
         self._inv_live_seen = set()
         self._inv_command_room = command_room
+        self._inv_response_room = response_room
+        self._inv_response_to = response_to
         if not active_rooms:
             with self.invite_lock:
                 self.invite_pending = False
                 self.invite_silent_master = False
-            self.send_private_text(BOT_MASTER, "⚠️ لا توجد غرف نشطة حالياً. استخدم: دخول@اسم_الغرفة")
+            msg = "⚠️ لا توجد غرف نشطة حالياً. استخدم: دخول@اسم_الغرفة"
+            if response_room:
+                self.send_room_text(response_room, msg)
+            elif response_to:
+                self.send_private_text(response_to, msg)
+            else:
+                self.send_private_text(BOT_MASTER, msg)
             return
         for source_room in active_rooms:
             try:
@@ -3509,6 +3535,8 @@ class TalkinBot:
     def _finish_invites(self, room, usernames):
         """Send invitations in a worker so the main receive loop stays alive."""
         silent_master = bool(self.invite_silent_master)
+        response_room = str(getattr(self, "_inv_response_room", "") or "").strip()
+        response_to = str(getattr(self, "_inv_response_to", "") or "").strip()
         count = 0
         try:
             for username in usernames:
@@ -3524,21 +3552,33 @@ class TalkinBot:
             if not silent_master:
                 try:
                     if count == 0:
-                        self.send_private_text(BOT_MASTER,
-                            f"⚠️ لم تُرسل أي دعوة نظام. DB client={'نعم' if self.db.client else 'لا'} | "
+                        msg = (
+                            f"⚠️ لم تُرسل أي دعوة. DB client={'نعم' if self.db.client else 'لا'} | "
                             f"Supabase room_id={self.db.last_room_id or 'غير موجود'} | "
                             f"room_members={self.db.last_member_count} | profiles={self.db.last_profile_count} | "
-                            f"آخر خطأ={self.db.last_error or 'راجع سجل Pydroid'}")
+                            f"آخر خطأ={self.db.last_error or 'راجع سجل البوت'}"
+                        )
+                        if response_room:
+                            self.send_room_text(response_room, msg)
+                        elif response_to:
+                            self.send_private_text(response_to, msg)
+                        else:
+                            self.send_private_text(BOT_MASTER, msg)
                 except Exception:
                     pass
                 try:
-                    self.send_private_text(
-                        BOT_MASTER,
+                    msg = (
                         f"✅ تم جمع معلومات الغرفة. عدد المستخدمين: {len(usernames)}\n"
                         f"📨 تم إرسال الدعوة العادية على الخاص إلى: {count} مستخدم."
                     )
+                    if response_room:
+                        self.send_room_text(response_room, msg)
+                    elif response_to:
+                        self.send_private_text(response_to, msg)
+                    else:
+                        self.send_private_text(BOT_MASTER, msg)
                 except Exception as e:
-                    self.log("[INV] final private result failed:", repr(e))
+                    self.log("[INV] final result failed:", repr(e))
         finally:
             with self.invite_lock:
                 self.invite_pending = False
@@ -4471,7 +4511,7 @@ class TalkinBot:
                     return
                 public_url = f"{base}/lookalikes/{local.name}"
                 # The phrase is intentionally a playful result, not an identity claim.
-                self.send_room_text(room, f"👤 شبيهك هو @{target}")
+                self.send_room_text(room, f"👤 شبيه @{target} هو")
                 self.send_room_media(room, public_url, "image")
             except Exception as exc:
                 self.log("[LOOKALIKE] failed:", repr(exc))
@@ -4641,6 +4681,35 @@ class TalkinBot:
                 )
             else:
                 self.send_private_text(sender, "⚠️ تعذر بدء النسخ الاحتياطي؛ تأكد من تفعيل GITHUB_SYNC وإعداد مستودع Talkin4.")
+            return True
+        # Master-only self restart. The reply stays in the same channel where
+        # the master issued the command, then the current Python process is replaced.
+        if low in ("اعاده تشغيل البوت", "اعادة تشغيل البوت", "إعاده تشغيل البوت", "إعادة تشغيل البوت", "restart bot", "restart"):
+            reply = "🔄 جاري إعادة تشغيل البوت..."
+            if is_private:
+                self.send_private_text(sender, reply)
+            elif room:
+                self.send_room_text(room, reply)
+            else:
+                self.send_private_text(sender, reply)
+
+            def _restart_process():
+                try:
+                    time.sleep(1.2)
+                    self.stop_event.set()
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                except Exception as exc:
+                    self.log("[BOT] restart failed:", repr(exc))
+                    try:
+                        self.stop_event.clear()
+                        if is_private:
+                            self.send_private_text(sender, f"❌ تعذر إعادة تشغيل البوت: {exc}")
+                        elif room:
+                            self.send_room_text(room, f"❌ تعذر إعادة تشغيل البوت: {exc}")
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_restart_process, name="bot-restart", daemon=True).start()
             return True
         # `اوامر` shows the organized menu only.
         if low in ("اوامر","الاوامر","help","مساعدة"):
@@ -4993,7 +5062,12 @@ class TalkinBot:
             parts=text.split(None,1); target_room=parts[1].strip() if len(parts)==2 else room
             if not target_room:
                 self.send_private_text(sender,"❌ استخدم: inv اسم_الغرفة"); return True
-            self.request_occupants(target_room, silent_master=True)
+            self.request_occupants(
+                target_room,
+                silent_master=False,
+                response_room=(room if room and not is_private else ""),
+                response_to=(sender if is_private else ""),
+            )
             return True
         m_single_invite = re.fullmatch(r"i@(.+)", text.strip(), re.I)
         if m_single_invite:
@@ -5003,10 +5077,17 @@ class TalkinBot:
                 self.send_private_text(sender, "❌ الصيغة: i@اسم_المستخدم داخل غرفة.")
                 return True
             try:
-                sent = self.send_private_invite(target, target_room, inviter=sender)
-                self.send_private_text(sender, f"✅ تم إرسال دعوة @{target} إلى الغرفة {target_room}." if sent else f"⚠️ الدعوة @{target} أُرسلت سابقًا أو تعذر إرسالها.")
+                msg = f"✅ تم إرسال دعوة @{target} إلى الغرفة {target_room}." if sent else f"⚠️ الدعوة @{target} أُرسلت سابقًا أو تعذر إرسالها."
+                if is_private:
+                    self.send_private_text(sender, msg)
+                else:
+                    self.send_room_text(room, msg)
             except Exception as exc:
-                self.send_private_text(sender, f"❌ تعذر إرسال الدعوة إلى @{target}: {exc}")
+                msg = f"❌ تعذر إرسال الدعوة إلى @{target}: {exc}"
+                if is_private:
+                    self.send_private_text(sender, msg)
+                else:
+                    self.send_room_text(room, msg)
             return True
         if low.startswith("say ") or low.startswith("قل "):
             parts=text.split(None,1); msg=parts[1].strip() if len(parts)==2 else ""
@@ -5466,7 +5547,11 @@ class TalkinBot:
                         arg = parts[1].strip() if len(parts) == 2 else ""
                         if cmd in ("inv", "دعوات", "invite"):
                             target_room = arg if arg else ctx_room
-                            self.request_occupants(target_room, silent_master=True)
+                            self.request_occupants(
+                                target_room,
+                                silent_master=False,
+                                response_to=frm,
+                            )
                         elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I):
                             target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
                             blocked_room = _norm_room(target_room)
