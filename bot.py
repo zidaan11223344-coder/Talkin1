@@ -166,7 +166,7 @@ DEFAULT_BOT_BASE_STATUS = (
 )
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
 PROFILE_STATUS_MAX_CHARS = max(300, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "700")))
-GIFT_STATUS_SECONDS = 15 * 60
+GIFT_STATUS_SECONDS = 5 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
 # from the private chat, but only the configured BOT_MASTER is authorized.
