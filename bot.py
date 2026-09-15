@@ -4336,7 +4336,7 @@ class TalkinBot:
             temporary = (
                 f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
                 f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
-                f'<br><font color="#FFE29A">{gift_name}</font>'
+                f'<br><font color="#6A1B9A">{gift_name}</font>'
                 f'<br><br>{base_status}'
             )
             self._set_profile_status(temporary)
