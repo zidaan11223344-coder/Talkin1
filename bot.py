@@ -73,6 +73,8 @@ if YOUTUBE_COOKIES:
 # Gift images copied verbatim from the supplied Giant Chat bot assets/.
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
+TEMP_GIFT_DIR = Path(tempfile.gettempdir()) / "talkin_gifts"
+TEMP_GIFT_DIR.mkdir(parents=True, exist_ok=True)
 GIFT_IMAGE_FILES = {
     str(i): [ASSETS_DIR / f"gift_{i:02d}_1.png", ASSETS_DIR / f"gift_{i:02d}_2.png", ASSETS_DIR / f"gift_{i:02d}_3.png"]
     for i in range(1, 15)
@@ -2106,16 +2108,10 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     if not files:
         raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
 
-    # Use the highest-resolution available original gift image.
-    def _image_area(path):
-        try:
-            with Image.open(path) as src:
-                return int(src.width) * int(src.height)
-        except Exception:
-            return 0
-
-    files.sort(key=_image_area, reverse=True)
-    gift_path = files[0]
+    # There are three artwork variants for each gift (…_1, …_2, …_3).
+    # Pick a different variant at random on every gift send so the bot does
+    # not stay permanently stuck on the first/highest-resolution image.
+    gift_path = random.choice(files)
 
     template_path = BASE_DIR / "assets" / "gift_template_elegant.png"
     if template_path.is_file():
@@ -2350,7 +2346,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
         if path.startswith("/assets/"):
             rel=path[len("/assets/"):].lstrip("/"); root=ASSETS_DIR.resolve(); target=(ASSETS_DIR/rel).resolve()
         elif path.startswith("/gifts/"):
-            rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
+            rel=path[len("/gifts/"):].lstrip("/"); root=TEMP_GIFT_DIR.resolve(); target=(TEMP_GIFT_DIR/rel).resolve()
         elif path.startswith("/media/"):
             rel=path[len("/media/"):].lstrip("/"); root=(BASE_DIR/"generated_music").resolve(); target=(BASE_DIR/"generated_music"/rel).resolve()
         elif path.startswith("/lookalikes/"):
@@ -2411,7 +2407,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
 def start_asset_server():
     if not ASSET_HTTP_ENABLED: return None
     try:
-        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
+        (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
         print(f"[MEDIA] HTTP server listening on :{ASSET_HTTP_PORT}",flush=True)
@@ -4072,6 +4068,12 @@ class TalkinBot:
             else:
                 gift_text = f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة"
                 self._broadcast_gift_to_all_rooms(gift_url, gift_text, room)
+            # Remove the temporary personalized copy after sending. The source
+            # artwork remains untouched in assets/ and is used again next time.
+            try:
+                gift_path.unlink(missing_ok=True)
+            except Exception:
+                pass
         except Exception as e:
             self.report_master_error("إرسال صورة الهدية", e, room)
             self.reply_text(room, "❌ تعذر إرسال صورة الهدية. تم إرسال الخطأ الحقيقي للماستر.", private_to)
