@@ -5030,7 +5030,8 @@ class TalkinBot:
                 present = any(_norm_user(u) == key for u in self.room_users.get(active_room, {}))
                 if present:
                     self.send_room_text(active_room, f"👑 عضو Vip\n👤 {target}\n🏠 الغرفة: {active_room}")
-            self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.\n👑 تم تفعيل الترحيب المخصص تلقائياً.")
+            self.send_private_text(target, f"✅ تم توثيق حسابك @{target}\n بنجاح.\n🎉 ويمكنك الان النشر وارسال الهدايا\n👑 تم تفعيل الترحيب المخصص تلقائياً.\nمن قبل @{sender}")
+            self.send_private_text(sender, f"✅ تم منح VIP لـ @{target}.")
             return True
         if low.startswith("unvip@") or low.startswith("un vip@"):
             target=text[text.casefold().find("vip@")+4:].strip().lstrip("@"); data=_vip_data(); data.pop(_norm_user(target),None); _save_local_json(VIP_FILE,data)
