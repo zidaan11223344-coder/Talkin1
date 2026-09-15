@@ -2870,6 +2870,7 @@ class TalkinBot:
         if self.room:
             rooms.add(str(self.room).strip())
         rooms.update(str(r).strip() for r in self.room_users.keys() if str(r).strip())
+        rooms.update(str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip())
         blocked = {_norm_room(r) for r in getattr(self, "blocked_rooms", set())}
         return sorted(r for r in rooms if _norm_room(r) not in blocked)
 
@@ -4170,19 +4171,8 @@ class TalkinBot:
         return ok
 
     def _send_game_result(self, room, text, game_key):
-        """Send the result text, followed by the matching asset image.
-
-        Images are served by the existing public asset server, so this works
-        on Railway without copying binary files into generated media.
-        """
-        # النتيجة تظهر فقط في الغرفتين اللتين شارك منهما اللاعبان.
-        rooms = []
-        seen = set()
-        for r in (first.get("room"), second.get("room")):
-            if r and str(r).casefold() not in seen:
-                rooms.append(r); seen.add(str(r).casefold())
-        for result_room in rooms:
-            self.send_room_text(result_room, text)
+        """Send a solo-game result only to the room where that game was played."""
+        self.send_room_text(room, text)
         filename = GAME_IMAGE_FILES.get(game_key)
         base = _public_base_url()
         image = ASSETS_DIR / filename if filename else None
@@ -4231,31 +4221,54 @@ class TalkinBot:
         for _, waiting in expired:
             self.log("[GAME] expired wager", waiting.get("game"), waiting.get("user"))
 
-    def _wager_result(self, room, first, second, stake, game_name):
-        # The winner is selected independently of arrival/order.
+    def _wager_result(self, first, second, game_name):
+        """Resolve a global PvP wager and publish the result only to both origin rooms."""
         winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
+        winner_stake = int(winner.get("stake", 0) or 0)
+        loser_stake = int(loser.get("stake", 0) or 0)
+
+        # Each player risks the amount they entered. The winner receives the
+        # opponent's stake; the winner's own stake is returned implicitly.
         if not _is_master_name(loser.get("user")):
-            _add_points(loser.get("user"), -stake)
+            _add_points(loser.get("user"), -loser_stake)
         if not _is_master_name(winner.get("user")):
-            _add_points(winner.get("user"), stake)
+            _add_points(winner.get("user"), loser_stake)
+
         game_key = {
             "رهان":"bet", "مراهنة":"bet", "مضاربة":"duel", "مضاربه":"duel",
             "استثمار":"investment", "حظي":"luck"
         }.get(game_name, game_name.casefold())
-        _record_game(loser.get("user"), game_key, -stake, stake)
-        _record_game(winner.get("user"), game_key, stake, stake)
+        _record_game(loser.get("user"), game_key, -loser_stake, loser_stake)
+        _record_game(winner.get("user"), game_key, loser_stake, loser_stake)
+
         text = _reply_template(
             "wager_result",
             DEFAULT_REPLY_MESSAGES["wager_result"],
-            game=game_name, p1=first["user"], p2=second["user"],
-            winner=winner["user"], loser=loser["user"], amount=_fmt_points(stake)
+            game=game_name,
+            p1=first["user"], p2=second["user"],
+            winner=winner["user"], loser=loser["user"],
+            amount=_fmt_points(loser_stake),
         )
-        self.send_room_text(room, text)
+
+        # IMPORTANT: the queue is global across rooms, but the result is local
+        # to exactly the two rooms where the two players entered the game.
+        result_rooms = []
+        seen_rooms = set()
+        for target in (first.get("room"), second.get("room")):
+            target = str(target or "").strip()
+            key = target.casefold()
+            if target and key not in seen_rooms:
+                seen_rooms.add(key)
+                result_rooms.append(target)
+
+        for result_room in result_rooms:
+            self.send_room_text(result_room, text)
+
         filename = GAME_IMAGE_FILES.get(game_key)
         base = _public_base_url()
         image = ASSETS_DIR / filename if filename else None
         if filename and base and image and image.is_file():
-            for result_room in rooms:
+            for result_room in result_rooms:
                 try:
                     self.send_room_media(result_room, f"{base}/assets/{filename}", "image")
                 except Exception as exc:
@@ -4269,7 +4282,10 @@ class TalkinBot:
         if amount <= 0:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
+
         self._cleanup_expired_wagers()
+        # GLOBAL queue: the same game challenge is shared by every room.
+        # Do NOT include room in this key.
         key = game_name.casefold()
         waiting = None
         error = None
@@ -4277,6 +4293,9 @@ class TalkinBot:
             waiting = self.wager_waiting.get(key)
             if waiting and _norm_user(waiting["user"]) == _norm_user(sender):
                 return True
+
+            # A player cannot spend points that are already committed to another
+            # open global challenge. The current challenge itself is excluded.
             reserved = sum(
                 int(w.get("stake", 0) or 0) for k, w in self.wager_waiting.items()
                 if k != key and _norm_user(w.get("user")) == _norm_user(sender)
@@ -4284,33 +4303,44 @@ class TalkinBot:
             if not _is_primary_master(sender):
                 balance = _get_points(sender)
                 if balance < amount + reserved:
-                    error = _reply_template("game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"], balance=_fmt_points(balance))
-            if error is None and waiting and int(waiting["stake"]) != amount:
-                # Never replace another player's open challenge with a different amount.
-                return True
+                    error = _reply_template(
+                        "game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"],
+                        balance=_fmt_points(balance)
+                    )
+
             if error is None and waiting:
+                # A second player may enter ANY amount, even from another room.
+                # Their room and stake are both preserved for the final result.
                 self.wager_waiting.pop(key, None)
             elif error is None:
                 self.wager_waiting[key] = {
-                    "user": sender, "room": room, "stake": amount,
-                    "game": game_name, "created": time.time()
+                    "user": sender,
+                    "room": room,
+                    "stake": amount,
+                    "game": game_name,
+                    "created": time.time(),
                 }
+
         if error:
             self.send_room_text(room, error)
             return True
+
         if waiting:
-            self._wager_result(
-                room,
-                waiting,
-                {"user": sender, "room": room, "stake": amount, "game": game_name},
-                amount, game_name
-            )
-            # بعد اكتمال المواجهة يبدأ فاصل 30 ثانية لكلا اللاعبين.
+            second = {
+                "user": sender,
+                "room": room,
+                "stake": amount,
+                "game": game_name,
+            }
+            self._wager_result(waiting, second, game_name)
+
+            # Cooldown is local to each player's own room after the match.
             with self.game_lock:
                 now = time.time()
-                self.game_cooldown[(str(room or "").casefold(), _norm_user(waiting.get("user")))] = now
+                self.game_cooldown[(str(waiting.get("room") or "").casefold(), _norm_user(waiting.get("user")))] = now
                 self.game_cooldown[(str(room or "").casefold(), _norm_user(sender))] = now
             return True
+
         game_labels = {
             "رهان": ("رهان", "راهن", "رهان"),
             "مراهنة": ("رهان", "راهن", "رهان"),
@@ -4325,7 +4355,8 @@ class TalkinBot:
             game_label=game_label, verb=verb, command=command,
             username=sender, amount=_fmt_points(amount)
         )
-        # فتح التحدي يكون إعلاناً مشتركاً في جميع الغرف التي يتواجد فيها البوت.
+        # GLOBAL challenge announcement: every tracked bot room sees the same
+        # open challenge, regardless of where the first player started it.
         self.broadcast_all_rooms(opening)
         return True
 
@@ -4596,6 +4627,13 @@ class TalkinBot:
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
+        # All games are available to verified accounts (including VIP).
+        # The master remains allowed automatically by _is_verified_user().
+        # This check is intentionally inside the game handler so game commands
+        # can never become master-only because of an external command gate.
+        if not _is_verified_user(sender_name):
+            self.send_room_text(room, f"🔒 @{sender_name} حسابك غير موثق لاستخدام الألعاب.\n{_verification_notice()}")
+            return True
         low=raw.casefold()
         if low in ("العاب","ألعاب","لعب","games","game"):
             self.game_help(room); return True
