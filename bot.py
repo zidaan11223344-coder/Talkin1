@@ -142,7 +142,7 @@ BOT_BASE_STATUS = os.getenv(
     '<font color="#7CFF00">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
     '</H3></B>',
 ).strip()
-GIFT_STATUS_SECONDS = 15 * 60
+GIFT_STATUS_SECONDS = 5 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
 # from the private chat, but only the configured BOT_MASTER is authorized.
@@ -3811,11 +3811,10 @@ class TalkinBot:
             self._verify_public_media_url(gift_url, "image")
             if not gift_path.is_file() or gift_path.stat().st_size < 64:
                 raise RuntimeError(f"ملف صورة الهدية غير صالح: {gift_path}")
-            self._set_temporary_gift_status(
-                sender_name,
-                target,
-                GIFT_CATALOG.get(str(gift_id), ("🎁", "هدية"))[1],
-            )
+            # IMPORTANT: Do not update the Talkin profile status during gift sending.
+            # Profile-update packets can make some Talkin server builds close the
+            # WebSocket (previously seen as close code 1009). The gift card and
+            # room/private message are independent of the profile status.
             if private_to:
                 self.send_private_media(private_to, gift_url, "image")
                 self.send_private_text(private_to, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
