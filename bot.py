@@ -4217,18 +4217,20 @@ class TalkinBot:
                 status = re.sub(r"\s+", " ", status)[:PROFILE_STATUS_MAX_CHARS]
         try:
             sent = False
-            for action in PROFILE_STATUS_ACTIONS:
-                try:
-                    self.send_query(encode_query(
-                        action,
-                        type_="status",
-                        body=status,
-                        value=status,
-                    ))
-                    self.log("[PROFILE] status update sent via", action)
-                    sent = True
-                except Exception as exc:
-                    self.log("[PROFILE] action failed", action, repr(exc))
+            # Send exactly one packet.  Some Talkin server builds close the
+            # WebSocket when fallback profile actions are sent back-to-back.
+            action = PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else "update_profile"
+            try:
+                self.send_query(encode_query(
+                    action,
+                    type_="status",
+                    body=status,
+                    value=status,
+                ))
+                self.log("[PROFILE] status update sent via", action)
+                sent = True
+            except Exception as exc:
+                self.log("[PROFILE] action failed", action, repr(exc))
             if not sent:
                 self.log("[PROFILE] all status update actions failed")
             return sent
@@ -4240,8 +4242,8 @@ class TalkinBot:
         sender = str(sender or "").strip().lstrip("@")
         receiver = str(receiver or "").strip().lstrip("@")
         gift_name = str(gift_name or "هدية").strip()
-        # Keep sender and receiver on separate colored lines and append the
-        # configured base status below them instead of replacing it.
+        # Keep sender and receiver on separate colored lines and replace the
+        # old profile status completely for the duration of the gift.
         temporary = (
             f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
             f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
@@ -4255,11 +4257,10 @@ class TalkinBot:
                 timer.cancel()
             base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
             self._profile_base_status = base_status
-            # Send one profile-status update only: the gift lines are above
-            # the previous/base status in the same value, not a new status.
-            self._set_profile_status(
-                temporary + (f"<br>{base_status}" if base_status else "")
-            )
+            # Send one profile-status update only.  Do not append the old
+            # status: that makes the packet unnecessarily large and can cause
+            # some server builds to disconnect the bot.
+            self._set_profile_status(temporary)
 
             def restore():
                 with self._profile_status_lock:
