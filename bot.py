@@ -1407,9 +1407,9 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
+        "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليون", "فحص صوره المليون", "فحص_صورة_المليون",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "صيد", "سرعة", "كنز", "مصارعة", "بحث", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
-        "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
     return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game") or low in {x.casefold() for x in GAME_COMMANDS}
@@ -1420,7 +1420,7 @@ def _looks_like_admin_command(text):
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
-        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "توثيق الكل", "وثق الكل", "verify",
+        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "is@", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
 
@@ -1539,7 +1539,7 @@ DEFAULT_REPLY_MESSAGES = {
     "master_denied": "",
     "game_invalid_amount": "❌ المبلغ يجب أن يكون أكبر من صفر.",
     "game_insufficient": "❌ رصيدك غير كافٍ. رصيدك الحالي: {balance} نقطة.",
-    "wager_open": "🎯 {game_label} جديد\n━━━━━━━━━━━━\n👤 {verb}: @{username}\n💰 المبلغ: {amount} نقطة\n\n🤝 للمشاركة ارسل: {command}@{amount}\n━━━━━━━━━━━━",
+    "wager_open": "🎯 {game_label} جديد\n━━━━━━━━━━━━\n👤 {verb}: @{username} 𝃛\n💰 المبلغ: {amount}\n🤝 للمشاركة ارسل: {command}@المبلغ\n━━━━━━━━━━━━",
     "wager_result": "🏆 انتهى {game}\n━━━━━━━━━━━━\n🥊 @{p1} × @{p2}\n\n👑 الفائز: @{winner}\n💰 مبلغ الجولة: {amount} نقطة\n🎁 مكسب الفائز: +{amount} نقطة\n📉 الخاسر: @{loser} (-{amount} نقطة)\n━━━━━━━━━━━━",
     "luck_result": "🍀✨ حظ\n━━━━━━━━━━━━\n👤 اللاعب: @{username}\n🎯 النتيجة: {result}\n💰 الرهان: {amount} نقطة\n💵 التغير: {delta} نقطة\n💳 الرصيد: {balance} نقطة",
 }
@@ -2365,6 +2365,73 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     return out
 
 
+def render_million_card(winner_name, winner_photo_url=""):
+    """Use the existing game_million.jpg and add a per-win winner overlay.
+
+    The original million artwork is never replaced. A fresh output file is
+    generated for each win, containing the current winner name and, when
+    available, the winner's current profile photo.
+    """
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+
+    source = ASSETS_DIR / GAME_IMAGE_FILES.get("million", "game_million.jpg")
+    if not source.is_file():
+        raise FileNotFoundError(f"صورة المليون غير موجودة: {source}")
+
+    image = Image.open(source).convert("RGBA")
+    # Keep the original dimensions of the existing million artwork.
+    w, h = image.size
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(overlay)
+
+    # Elegant dark winner panel near the bottom; artwork itself remains intact.
+    panel_h = max(150, int(h * 0.25))
+    panel_y = max(0, h - panel_h - int(h * 0.035))
+    margin = max(18, int(w * 0.045))
+    panel = (margin, panel_y, w - margin, h - int(h * 0.035))
+    d.rounded_rectangle(panel, radius=max(16, int(w * 0.025)),
+                        fill=(8, 12, 24, 225), outline=(244, 196, 92, 255), width=max(2, int(w * 0.006)))
+
+    # Current winner avatar, fetched from the current profile URL (not cached by
+    # the million game itself).
+    avatar = _load_sender_avatar(winner_photo_url, max(90, int(h * 0.14)))
+    if avatar is not None:
+        ax = panel[0] + max(12, int(w * 0.025))
+        ay = panel_y + (panel_h - avatar.height) // 2
+        overlay.alpha_composite(avatar, (ax, ay))
+        text_left = ax + avatar.width + max(14, int(w * 0.025))
+    else:
+        text_left = panel[0] + max(18, int(w * 0.035))
+
+    text_right = panel[2] - max(18, int(w * 0.035))
+    text_center = ((text_left + text_right) / 2, panel_y + panel_h * 0.32)
+    _draw_centered(d, text_center, "🏆 الفائز بالمليون", max(22, int(h * 0.055)),
+                   (255, 224, 145, 255), max(80, text_right - text_left))
+    _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
+                        "@" + str(winner_name or ""), max(24, int(h * 0.065)),
+                        (255, 255, 255, 255), max(80, text_right - text_left))
+
+    image = Image.alpha_composite(image, overlay).convert("RGB")
+    out_dir = BASE_DIR / "generated_million"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Keep only a small rolling set; never create a per-user permanent image.
+    try:
+        old = sorted((x for x in out_dir.iterdir() if x.is_file()),
+                     key=lambda x: x.stat().st_mtime, reverse=True)
+        for fp in old[19:]:
+            try: fp.unlink()
+            except Exception: pass
+    except Exception:
+        pass
+    out = out_dir / f"million_{uuid.uuid4().hex}.jpg"
+    for quality in (92, 88, 84, 80, 76):
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        if out.stat().st_size <= 300 * 1024:
+            break
+    return out
+
+
 # ============================================================
 # شبيه المستخدم: بحث تلقائي عن صورة من الويب وإرسالها للغرفة.
 # لا ننشئ صورة جديدة؛ نستخدم صورة حقيقية من نتائج البحث العامة.
@@ -2396,8 +2463,13 @@ def _extract_image_urls_from_bing(html_text):
     return urls
 
 
-def _search_lookalike_image(query):
-    """Search Bing Images and return the first downloadable image URL."""
+def _search_lookalike_image(query, exclude_urls=None):
+    """Search Bing Images and return a fresh/random image URL.
+
+    No username->image cache is kept: every command performs a new search and
+    randomly chooses from several current Bing results, so the same account can
+    receive a different lookalike image on every invocation.
+    """
     q = str(query or "").strip()
     if not q:
         return None
@@ -2415,7 +2487,15 @@ def _search_lookalike_image(query):
         )
         r.raise_for_status()
         urls = _extract_image_urls_from_bing(r.text)
-        return urls[0] if urls else None
+        excluded = {str(x).strip() for x in (exclude_urls or []) if str(x).strip()}
+        fresh = [u for u in urls if u not in excluded]
+        if not fresh:
+            fresh = urls
+        if not fresh:
+            return None
+        # Randomize the result so repeated commands do not keep returning the
+        # first Bing image for the same username.
+        return secrets.choice(fresh[:12])
     except Exception:
         return None
 
@@ -2461,6 +2541,8 @@ class _MediaHandler(SimpleHTTPRequestHandler):
             rel=path[len("/assets/"):].lstrip("/"); root=ASSETS_DIR.resolve(); target=(ASSETS_DIR/rel).resolve()
         elif path.startswith("/gifts/"):
             rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
+        elif path.startswith("/million/"):
+            rel=path[len("/million/"):].lstrip("/"); root=(BASE_DIR/"generated_million").resolve(); target=(BASE_DIR/"generated_million"/rel).resolve()
         elif path.startswith("/media/"):
             rel=path[len("/media/"):].lstrip("/"); root=(BASE_DIR/"generated_music").resolve(); target=(BASE_DIR/"generated_music"/rel).resolve()
         elif path.startswith("/lookalikes/"):
@@ -2571,6 +2653,7 @@ class TalkinBot:
         self.reaction_targets = {}
         self.publish_pending = {}
         self.invite_pending = False
+        self.invites_enabled = True
         self.invite_silent_master = False
         self.invite_room = ""
         self.invite_sent = set()
@@ -3543,6 +3626,13 @@ class TalkinBot:
         inv issued in one room from inviting users saved from other rooms.
         Owners, admins and normal members of the selected room are all eligible.
         """
+        if not getattr(self, "invites_enabled", True):
+            target = str(response_to or BOT_MASTER or "").strip()
+            if target:
+                self.send_private_text(target, "🛑 الدعوات متوقفة حالياً. أرسل: تشغيل الدعوات")
+            elif response_room:
+                self.send_room_text(response_room, "🛑 الدعوات متوقفة حالياً.")
+            return
         with self.invite_lock:
             if self.invite_pending:
                 msg = "⏳ ما زلت أجمع معلومات الغرف، انتظر حتى تكتمل العملية."
@@ -3694,6 +3784,8 @@ class TalkinBot:
             return False, detail
 
     def send_private_invite(self, username: str, room: str, inviter: str = ""):
+        if not getattr(self, "invites_enabled", True):
+            return False
         """Send a NORMAL private chat invitation, not a system/RPC invitation.
 
         The room name is always the exact room in which the `inv` command was
@@ -3778,6 +3870,9 @@ class TalkinBot:
         try:
             for username in usernames:
                 try:
+                    if not getattr(self, "invites_enabled", True):
+                        self.log("[INV] stopped: invitations disabled by master")
+                        break
                     if self.send_private_invite(username, room):
                         count += 1
                     # Small pacing gap, but never blocks the WebSocket reader.
@@ -5203,6 +5298,34 @@ class TalkinBot:
         if not _looks_like_bot_command(raw):
             return False
         low=raw.casefold()
+
+        # Master-only diagnostic: send the current million-game image privately
+        # to the master, without publishing it in the room.
+        if low in ("فحص صورة المليون", "فحص صوره المليون", "فحص_صورة_المليون"):
+            if not _is_master_name(sender_name):
+                self.send_room_text(room, "🔒 هذا الأمر مخصص للماستر فقط.")
+                return True
+            recipient = sender_name if sender_name else BOT_MASTER
+            if not recipient:
+                self.log("[GAME] million image check skipped: master recipient is not configured")
+                return True
+            image = ASSETS_DIR / GAME_IMAGE_FILES.get("million", "game_million.jpg")
+            if not image.is_file():
+                self.send_private_text(recipient, "❌ صورة المليون غير موجودة في مجلد assets.")
+                return True
+            base = _public_base_url()
+            if not base:
+                self.send_private_text(recipient, "❌ لا يوجد رابط عام لصورة المليون. تأكد من PUBLIC_BASE_URL أو Railway Domain.")
+                return True
+            url = f"{base}/assets/{image.name}"
+            try:
+                self._verify_public_media_url(url, "image")
+                self.send_private_media(recipient, url, "image")
+                self.send_private_text(recipient, "✅ هذه هي صورة المليون الحالية.")
+            except Exception as exc:
+                self.send_private_text(recipient, f"❌ تعذر إرسال صورة المليون: {exc}")
+            return True
+
         # All games are available to verified accounts (including VIP).
         # The master remains allowed automatically by _is_verified_user().
         # This check is intentionally inside the game handler so game commands
@@ -5242,20 +5365,72 @@ class TalkinBot:
         if low in ("مليون","million"):
             if not self._game_cooldown_notice(room, sender_name, 30.0, "مليون"):
                 return True
-            # Restore the first status message used by the original million game.
-            self.send_room_text(room, "🔎 جاري البحث عن مليون...")
+
+            self.send_room_text(
+                room,
+                f"🎰✨ لعبة المليون ✨🎰\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"✅ @{sender_name}\n"
+                f"🔎 جاري البحث عن مليون...\n"
+                f"━━━━━━━━━━━━━━"
+            )
             time.sleep(1.0)
-            won=(secrets.randbelow(100)==0)
-            reward=1000000 if won else 0
-            _record_game(sender_name,"million",reward,0)
+            won = (secrets.randbelow(100) == 0)
+            reward = 1000000 if won else 0
+            _record_game(sender_name, "million", reward, 0)
+
             if won:
-                self._game_award(sender_name,reward)
-                self._send_game_result(room,
-                    f"🎰✨ مليون\n━━━━━━━━━━━━\n"
-                    f"🏆 مبروك @{sender_name}!\n"
-                    f"💰 الجائزة: +1m نقطة", "million")
+                self._game_award(sender_name, reward)
+                # Prefer the latest live profile URL; DB lookup is only a fallback.
+                winner_key = _norm_user(sender_name)
+                winner_photo = self.user_photos.get(winner_key, "")
+                if not winner_photo:
+                    winner_photo = self._lookup_profile_photo(sender_name)
+
+                zeros = "⭐" * 6  # 1,000,000 contains six zeros.
+                self.send_room_text(
+                    room,
+                    f"🏆✨ مبروك! تم الحصول على المليون ✨🏆\n"
+                    f"━━━━━━━━━━━━━━━━\n"
+                    f"✅ @{sender_name}\n"
+                    f"💰 لقد حصلت علي مليون\n"
+                    f"🔢 رقم المليون: 1,000,000\n"
+                    f"🎉 مبروك يا بطل!\n"
+                    f"{zeros}\n"
+                    f"━━━━━━━━━━━━━━━━"
+                )
+
+                try:
+                    card = render_million_card(sender_name, winner_photo)
+                    base = _public_base_url()
+                    if base and card.is_file():
+                        url = f"{base}/million/{card.name}"
+                        self._verify_public_media_url(url, "image")
+                        self.send_room_media(room, url, "image")
+                        # Publish the same generated winner card to every room.
+                        for target_room in self._active_rooms():
+                            if str(target_room).casefold() == str(room).casefold():
+                                continue
+                            try:
+                                self.send_room_text(
+                                    target_room,
+                                    f"🏆✨ تم الحصول على المليون!\n👑 الفائز: @{sender_name}\n💰 1,000,000\n{zeros}"
+                                )
+                                self.send_room_media(target_room, url, "image")
+                            except Exception as exc:
+                                self.log("[GAME] million publish failed:", target_room, repr(exc))
+                    else:
+                        self.log("[GAME] million card public URL unavailable")
+                except Exception as exc:
+                    self.log("[GAME] million winner card failed:", repr(exc))
             else:
-                self.send_room_text(room, f"🎰🍀 مليون\n━━━━━━━━━━━━\nحظ أوفر @{sender_name} في الجولة القادمة!")
+                self.send_room_text(
+                    room,
+                    f"🎰🍀 لعبة المليون\n━━━━━━━━━━━━━━\n"
+                    f"❌ @{sender_name} لم يحصل على المليون هذه المرة.\n"
+                    f"🍀 حظاً أوفر في المحاولة القادمة!\n"
+                    f"━━━━━━━━━━━━━━"
+                )
             return True
         if low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
@@ -5514,6 +5689,48 @@ class TalkinBot:
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
+        # Invitation switch: only the configured master account can control it.
+        if low in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات"):
+            if not _is_primary_master(sender):
+                return True
+            if low == "تشغيل الدعوات":
+                self.invites_enabled = True
+                self.send_private_text(sender, "✅ تم تشغيل الدعوات.")
+            else:
+                self.invites_enabled = False
+                self.send_private_text(sender, "🛑 تم إيقاف الدعوات.")
+            return True
+
+        # is@username: report the rooms where the user is currently present.
+        m_is = re.fullmatch(r"is@(.+)", text.strip(), re.I)
+        if m_is:
+            target = m_is.group(1).strip().lstrip("@")
+            if not target:
+                self.send_private_text(sender, "❌ الصيغة: is@اسم المستخدم")
+                return True
+            if not _is_primary_master(sender):
+                return True
+            key = _norm_user(target)
+            active_rooms = set()
+            active_rooms.update(str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip())
+            active_rooms.update(str(r).strip() for r in getattr(self, "room_users", {}).keys() if str(r).strip())
+            if getattr(self, "room", None):
+                active_rooms.add(str(self.room).strip())
+            matches = []
+            for active_room in sorted(active_rooms):
+                users = getattr(self, "room_users", {}).get(active_room, {}) or {}
+                for username in users:
+                    if _norm_user(username) == key:
+                        matches.append((active_room, username))
+                        break
+            if matches:
+                lines = [f"🔎 نتيجة البحث عن @{target}", f"🟢 متصل في {len(matches)} غرفة:"]
+                lines.extend(f"🏠 {room_name} — @{username}" for room_name, username in matches)
+                self.send_private_text(sender, "\n".join(lines))
+            else:
+                self.send_private_text(sender, f"🔴 @{target} غير متصل حالياً في أي غرفة ظاهرة للبوت.")
+            return True
+
         # Word-filter controls are master-only and persist in moderation.json.
         if low == "mf@on" or low == "mf@off" or low.startswith("+mf@") or low.startswith("-mf@") or low == "l@mf" or low == "clear@mf":
             if not _is_master_name(sender):
@@ -5547,8 +5764,11 @@ class TalkinBot:
                 _save_mf_config(self.moderation_enabled, [])
                 return True
             if low == "l@mf":
-                # Deliberately silent for master commands; list is available in moderation.json.
-                self.log("[FILTER] words=", sorted(self.banned_words))
+                words = sorted(self.banned_words, key=lambda x: _norm_filter_text(x))
+                if words:
+                    self.send_private_text(sender, "🚫 كلمات الفلتر:\n" + "\n".join(f"• {w}" for w in words))
+                else:
+                    self.send_private_text(sender, "🚫 قائمة الفلتر فارغة حالياً.")
                 return True
 
         # Joining a room: ONLY the master command دخول@اسم_الغرفة is accepted.
@@ -5894,6 +6114,9 @@ class TalkinBot:
             self.invite_message_template=template
             self.send_private_text(sender,f"✅ تم تغيير نص الدعوة إلى: {template}"); return True
         if low == "inv" or low.startswith("inv ") or low in ("دعوات","invite") or low.startswith(("دعوات ","invite ")):
+            if not getattr(self, "invites_enabled", True):
+                self.send_private_text(sender, "🛑 الدعوات متوقفة حالياً. أرسل: تشغيل الدعوات")
+                return True
             # Invitations are executed only from the room where the command is sent.
             if is_private or not room:
                 self.send_private_text(sender, "⚠️ نفّذ inv داخل الغرفة المطلوبة.")
@@ -6500,8 +6723,37 @@ class TalkinBot:
                         parts = body.split(None, 1)
                         cmd = parts[0].lower() if parts else ""
                         arg = parts[1].strip() if len(parts) == 2 else ""
-                        if cmd in ("inv", "دعوات", "invite"):
-                            if not ctx_room:
+                        if body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
+                            if body.strip().casefold() == "تشغيل الدعوات":
+                                self.invites_enabled = True
+                                self.send_private_text(frm, "✅ تم تشغيل الدعوات.")
+                            else:
+                                self.invites_enabled = False
+                                self.send_private_text(frm, "🛑 تم إيقاف الدعوات.")
+                        elif re.fullmatch(r"is@(.+)", body.strip(), re.I) and _is_primary_master(frm):
+                            target = re.fullmatch(r"is@(.+)", body.strip(), re.I).group(1).strip().lstrip("@")
+                            key = _norm_user(target)
+                            active_rooms = set()
+                            active_rooms.update(str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip())
+                            active_rooms.update(str(r).strip() for r in getattr(self, "room_users", {}).keys() if str(r).strip())
+                            if self.room:
+                                active_rooms.add(str(self.room).strip())
+                            matches = []
+                            for active_room in sorted(active_rooms):
+                                for username in (getattr(self, "room_users", {}).get(active_room, {}) or {}):
+                                    if _norm_user(username) == key:
+                                        matches.append((active_room, username))
+                                        break
+                            if matches:
+                                lines = [f"🔎 نتيجة البحث عن @{target}", f"🟢 متصل في {len(matches)} غرفة:"]
+                                lines.extend(f"🏠 {room_name} — @{username}" for room_name, username in matches)
+                                self.send_private_text(frm, "\n".join(lines))
+                            else:
+                                self.send_private_text(frm, f"🔴 @{target} غير متصل حالياً في أي غرفة ظاهرة للبوت.")
+                        elif cmd in ("inv", "دعوات", "invite"):
+                            if not getattr(self, "invites_enabled", True):
+                                self.send_private_text(frm, "🛑 الدعوات متوقفة حالياً. أرسل: تشغيل الدعوات")
+                            elif not ctx_room:
                                 self.send_private_text(frm, "⚠️ نفّذ inv داخل الغرفة المطلوبة.")
                             else:
                                 role_ok = self._inv_bot_owner_allowed(ctx_room)
