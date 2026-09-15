@@ -2432,6 +2432,65 @@ def render_million_card(winner_name, winner_photo_url=""):
     return out
 
 
+def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
+    """Create a fresh publish card from the submitted image, like the million card.
+
+    The submitted artwork is kept at its original dimensions. A fresh bottom
+    panel is added containing the publisher avatar and username. A new file is
+    generated for every publication so different posts never share one cached
+    image.
+    """
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+    if not source_url:
+        raise ValueError("رابط صورة النشر فارغ")
+    from io import BytesIO
+    r = requests.get(source_url, headers={"User-Agent":"Mozilla/5.0", "Accept":"image/*,*/*;q=0.8"}, timeout=(6,20))
+    r.raise_for_status()
+    if len(r.content) > 10 * 1024 * 1024:
+        raise ValueError("صورة النشر كبيرة جداً")
+    image = Image.open(BytesIO(r.content)).convert("RGBA")
+    w, h = image.size
+    overlay = Image.new("RGBA", image.size, (0,0,0,0))
+    d = ImageDraw.Draw(overlay)
+    panel_h = max(130, int(h * 0.22))
+    panel_y = max(0, h - panel_h - max(10, int(h * 0.03)))
+    margin = max(14, int(w * 0.04))
+    panel = (margin, panel_y, w - margin, h - max(10, int(h * 0.03)))
+    d.rounded_rectangle(panel, radius=max(14, int(w * 0.022)),
+                        fill=(8,12,24,225), outline=(244,196,92,255),
+                        width=max(2, int(w * 0.005)))
+    avatar = _load_sender_avatar(publisher_photo_url, max(72, int(h * 0.13)))
+    if avatar is not None:
+        ax = panel[0] + max(10, int(w * 0.022))
+        ay = panel_y + (panel_h - avatar.height)//2
+        overlay.alpha_composite(avatar, (ax, ay))
+        left = ax + avatar.width + max(12, int(w * 0.022))
+    else:
+        left = panel[0] + max(14, int(w * 0.03))
+    right = panel[2] - max(14, int(w * 0.03))
+    center = (left + right) / 2
+    _draw_centered(d, (center, panel_y + panel_h*0.32), "🖼️ منشور جديد",
+                   max(20, int(h*0.05)), (255,224,145,255), max(80, right-left))
+    _draw_name_centered(d, (center, panel_y + panel_h*0.70),
+                        "@" + str(publisher_name or ""), max(22, int(h*0.06)),
+                        (255,255,255,255), max(80, right-left))
+    image = Image.alpha_composite(image, overlay).convert("RGB")
+    out_dir = BASE_DIR / "generated_publish"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        old = sorted((x for x in out_dir.iterdir() if x.is_file()), key=lambda x:x.stat().st_mtime, reverse=True)
+        for fp in old[29:]:
+            try: fp.unlink()
+            except Exception: pass
+    except Exception: pass
+    out = out_dir / f"publish_{uuid.uuid4().hex}.jpg"
+    for quality in (92,88,84,80,76):
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        if out.stat().st_size <= 350 * 1024: break
+    return out
+
+
 # ============================================================
 # شبيه المستخدم: بحث تلقائي عن صورة من الويب وإرسالها للغرفة.
 # لا ننشئ صورة جديدة؛ نستخدم صورة حقيقية من نتائج البحث العامة.
@@ -2543,6 +2602,8 @@ class _MediaHandler(SimpleHTTPRequestHandler):
             rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
         elif path.startswith("/million/"):
             rel=path[len("/million/"):].lstrip("/"); root=(BASE_DIR/"generated_million").resolve(); target=(BASE_DIR/"generated_million"/rel).resolve()
+        elif path.startswith("/publish/"):
+            rel=path[len("/publish/"):].lstrip("/"); root=(BASE_DIR/"generated_publish").resolve(); target=(BASE_DIR/"generated_publish"/rel).resolve()
         elif path.startswith("/media/"):
             rel=path[len("/media/"):].lstrip("/"); root=(BASE_DIR/"generated_music").resolve(); target=(BASE_DIR/"generated_music"/rel).resolve()
         elif path.startswith("/lookalikes/"):
@@ -2603,7 +2664,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
 def start_asset_server():
     if not ASSET_HTTP_ENABLED: return None
     try:
-        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
+        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
         print(f"[MEDIA] HTTP server listening on :{ASSET_HTTP_PORT}",flush=True)
@@ -4003,12 +4064,19 @@ class TalkinBot:
                     users_info.append({"username": username, "role": "none", "user_id": str(user.get("user_id") or "")})
 
         # Some server builds return ResultMessage.users directly.
+        # IMPORTANT: read the bot's own role BEFORE excluding the bot from
+        # the invitation roster. Otherwise an owner bot is always seen as
+        # having an unknown role and `inv` gets stuck on "جاري التحقق".
         for user in (result.get("users") or []):
             if not isinstance(user, dict):
                 continue
             username = str(user.get(1, "") or "").strip()
             role = str(user.get(6, "") or "none").strip().lower()
-            if username and username != BOT_ID:
+            if username and _norm_user(username) == _norm_user(BOT_ID):
+                if role:
+                    self.bot_room_roles[_norm_room(room)] = role
+                continue
+            if username:
                 users_info.append({"username": username, "role": role or "none"})
 
         # Actual occupants_list response: RoomAdmin field 10 contains the
@@ -4028,7 +4096,7 @@ class TalkinBot:
         if pending_role is not None:
             bot_role = self._bot_room_role(room)
             if bot_role not in {"owner", "creator", "room_owner", "room_creator"}:
-                self.send_room_text(room, "⚠️ ارفع البوت أونر راعد المحاولة.")
+                self.send_room_text(room, "⚠️ ارفع البوت أونر ثم أعد المحاولة.")
                 return
 
         # Cache the complete room list, including role categories. The disk
@@ -5135,6 +5203,8 @@ class TalkinBot:
             self.send_room_text(room, "❌ الصيغة: شبيه@اسم_المستخدم")
             return True
         # Avoid several expensive web searches by the same user at once.
+        # Also remember a small rolling set of the last images used for this
+        # target, so the same person does not keep receiving the same image.
         busy = getattr(self, "_lookalike_busy", set())
         key = (_norm_user(sender), str(room))
         if key in busy:
@@ -5148,11 +5218,28 @@ class TalkinBot:
             try:
                 # Searching the username itself usually gives the most relevant
                 # public results; Arabic "شبيه" is added to broaden lookalike-style results.
-                query = f"{target} شبيه"
-                image_url = _search_lookalike_image(query)
+                recent = getattr(self, "_lookalike_recent", {})
+                target_key = _norm_user(target)
+                excluded = set(recent.get(target_key, []))
+                # Vary the search slightly on every request as an extra guard
+                # against a search engine returning the same first result.
+                variants = ("شبيه", "lookalike", "similar", "شبيه شخص")
+                query = f"{target} {secrets.choice(variants)}"
+                image_url = _search_lookalike_image(query, exclude_urls=excluded)
+                if image_url and image_url in excluded:
+                    # If all current results were previously used, clear the
+                    # rolling history and allow a genuinely new search result.
+                    excluded.clear()
+                    image_url = _search_lookalike_image(query)
                 if not image_url:
                     self.send_room_text(room, f"❌ لم أجد صورة مناسبة لـ @{target}.")
                     return
+                # Record the source URL only after we have a successfully
+                # downloaded image. Keep a short history per target.
+                history = list(recent.get(target_key, []))
+                history.append(image_url)
+                recent[target_key] = history[-8:]
+                self._lookalike_recent = recent
                 local = _download_lookalike_image(image_url, target)
                 if not local:
                     self.send_room_text(room, f"❌ وجدت نتيجة لكن تعذر تحميل الصورة لـ @{target}.")
@@ -6140,13 +6227,13 @@ class TalkinBot:
             target_room = str(room).strip()
             role_ok = self._inv_bot_owner_allowed(target_room)
             if role_ok is False:
-                self.send_room_text(target_room, "⚠️ ارفع البوت أونر راعد المحاولة.")
+                self.send_room_text(target_room, "⚠️ ارفع البوت أونر ثم أعد المحاولة.")
                 return True
             if role_ok is None:
                 self._pending_inv_role_check[_norm_room(target_room)] = {
                     "sender": sender, "room": target_room,
                 }
-                self.send_room_text(target_room, "⏳ جاري التحقق من رتبة البوت...")
+                self.send_room_text(target_room, "⏳ جاري التحقق من رتبة البوت...\n👑 يجب أن يكون البوت أونر لإكمال الدعوات.")
                 return True
             self.request_occupants(
                 target_room,
@@ -6255,11 +6342,30 @@ class TalkinBot:
             like=reaction_codes["like"], love=reaction_codes["love"], dislike=reaction_codes["dislike"],
             comment=reaction_codes["comment"], report=reaction_codes["report"], room=source_room
         )
+        # Build a fresh card for this publication: submitted image + current
+        # publisher photo + username, using the same visual treatment as the
+        # million winner card. The generated URL is unique for every publish.
+        publish_url = media_url
+        try:
+            publisher_key = _norm_user(sender)
+            publisher_photo = self.user_photos.get(publisher_key, "")
+            if not publisher_photo:
+                publisher_photo = self._lookup_profile_photo(sender)
+            card = render_publish_card(media_url, sender, publisher_photo)
+            base = _public_base_url()
+            if base:
+                publish_url = f"{base}/publish/{card.name}"
+                self._verify_public_media_url(publish_url, "image")
+            else:
+                self.log("[PUBLISH] public base URL unavailable; using original media URL")
+        except Exception as exc:
+            self.log("[PUBLISH] template render failed; using original image:", repr(exc))
+
         ok=0
         errors=[]
         for target in rooms:
             try:
-                self.send_room_media(target,media_url,"image")
+                self.send_room_media(target,publish_url,"image")
                 self.send_room_text(target,caption)
                 ok+=1
             except Exception as e:
@@ -6774,7 +6880,7 @@ class TalkinBot:
                             else:
                                 role_ok = self._inv_bot_owner_allowed(ctx_room)
                                 if role_ok is False:
-                                    self.send_private_text(frm, "⚠️ ارفع البوت أونر راعد المحاولة.")
+                                    self.send_private_text(frm, "⚠️ ارفع البوت أونر ثم أعد المحاولة.")
                                 elif role_ok is None:
                                     self._pending_inv_role_check[_norm_room(ctx_room)] = {"sender": frm, "room": ctx_room}
                                     self.send_private_text(frm, "⏳ جاري التحقق من رتبة البوت...")
