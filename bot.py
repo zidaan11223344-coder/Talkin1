@@ -4756,6 +4756,9 @@ class TalkinBot:
             # does not create a false cooldown.
             return True
 
+        # Opening message is explicit per game so the user-facing wording
+        # cannot fall back to an old generic message. The participation line
+        # always shows the placeholder "المبلغ" rather than the actual stake.
         game_labels = {
             "رهان": ("رهان", "راهن", "رهان"),
             "مراهنة": ("رهان", "راهن", "رهان"),
@@ -4765,10 +4768,13 @@ class TalkinBot:
             "حظي": ("حظي", "راهن", "حظي"),
         }
         game_label, verb, command = game_labels.get(game_name, (game_name, "لاعب", game_name))
-        opening = _reply_template(
-            "wager_open", DEFAULT_REPLY_MESSAGES["wager_open"],
-            game_label=game_label, verb=verb, command=command,
-            username=sender, amount=_fmt_points(amount)
+        opening = (
+            f"🎯 {game_label} جديد\n"
+            "━━━━━━━━━━━━\n"
+            f"👤 {verb}: @{sender} 𝃛\n"
+            f"💰 المبلغ: {_fmt_points(amount)}\n"
+            f"🤝 للمشاركة ارسل: {command}@المبلغ\n"
+            "━━━━━━━━━━━━"
         )
         # GLOBAL challenge announcement: every tracked bot room sees the same
         # open challenge, regardless of where the first player started it.
@@ -5317,11 +5323,21 @@ class TalkinBot:
             if not base:
                 self.send_private_text(recipient, "❌ لا يوجد رابط عام لصورة المليون. تأكد من PUBLIC_BASE_URL أو Railway Domain.")
                 return True
-            url = f"{base}/assets/{image.name}"
             try:
+                # Create a fresh JPEG copy for every inspection. This avoids
+                # client/CDN caching of the original assets URL and sends the
+                # actual million template through the same media route used by
+                # the bot's private gift images.
+                if not PIL_AVAILABLE:
+                    raise RuntimeError("Pillow غير مثبت")
+                check_dir = BASE_DIR / "generated_million"
+                check_dir.mkdir(parents=True, exist_ok=True)
+                check_path = check_dir / f"million_check_{uuid.uuid4().hex}.jpg"
+                Image.open(image).convert("RGB").save(check_path, "JPEG", quality=94, optimize=True)
+                url = f"{base}/million/{check_path.name}"
                 self._verify_public_media_url(url, "image")
                 self.send_private_media(recipient, url, "image")
-                self.send_private_text(recipient, "✅ هذه هي صورة المليون الحالية.")
+                self.send_private_text(recipient, "✅ تم إرسال صورة المليون بالقالب في الخاص.")
             except Exception as exc:
                 self.send_private_text(recipient, f"❌ تعذر إرسال صورة المليون: {exc}")
             return True
