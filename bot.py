@@ -289,6 +289,7 @@ POINTS_FILE = DATA_DIR / "points.json"
 MESSAGES_FILE = DATA_DIR / "messages.json"
 PUBLISHED_FILE = DATA_DIR / "published_posts.json"
 GAME_STATS_FILE = DATA_DIR / "game_stats.json"
+GAME_CONTROL_FILE = DATA_DIR / "game_control.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
 TRACKED_ROOMS_FILE = DATA_DIR / "tracked_rooms.json"
 BLOCKED_ROOMS_FILE = DATA_DIR / "blocked_rooms.json"
@@ -305,7 +306,7 @@ MVIP_MASTERS_FILE = DATA_DIR / "mvip_masters.json"
 # NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
 _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
-    "messages.json", "published_posts.json", "game_stats.json", "crop_plots.json",
+    "messages.json", "published_posts.json", "game_stats.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
     "moderation.json", "mf.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json",
@@ -1365,6 +1366,48 @@ def _remember_roster(room, users):
     _save_persistent_rosters(rosters)
 
 
+def _game_control_data():
+    data = _load_local_json(GAME_CONTROL_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    rooms = data.get("disabled_rooms", [])
+    if not isinstance(rooms, list):
+        rooms = []
+    data["disabled_rooms"] = [str(r).strip() for r in rooms if str(r).strip()]
+    data["global_enabled"] = bool(data.get("global_enabled", True))
+    return data
+
+def _save_game_control(data):
+    _save_local_json(GAME_CONTROL_FILE, data)
+
+def _games_enabled_for_room(room):
+    data = _game_control_data()
+    if not bool(data.get("global_enabled", True)):
+        return False
+    key = _norm_room(room)
+    disabled = {_norm_room(r) for r in data.get("disabled_rooms", [])}
+    return key not in disabled
+
+def _disable_games_room(room):
+    data = _game_control_data()
+    key = _norm_room(room)
+    rooms = [str(r).strip() for r in data.get("disabled_rooms", []) if str(r).strip()]
+    if key and key not in {_norm_room(r) for r in rooms}:
+        rooms.append(str(room).strip())
+    data["disabled_rooms"] = rooms
+    _save_game_control(data)
+
+def _enable_games_room(room):
+    data = _game_control_data()
+    key = _norm_room(room)
+    data["disabled_rooms"] = [r for r in data.get("disabled_rooms", []) if _norm_room(r) != key]
+    _save_game_control(data)
+
+def _set_games_global(enabled):
+    data = _game_control_data()
+    data["global_enabled"] = bool(enabled)
+    _save_game_control(data)
+
 def _master_list():
     data=_load_local_json(MASTERS_FILE, [])
     return data if isinstance(data,list) else []
@@ -1409,7 +1452,7 @@ def _looks_like_bot_command(text):
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليون", "فحص صوره المليون", "فحص_صورة_المليون",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "صيد", "سرعة", "كنز", "مصارعة", "بحث", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
-        "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
     return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game") or low in {x.casefold() for x in GAME_COMMANDS}
@@ -1420,7 +1463,7 @@ def _looks_like_admin_command(text):
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
-        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "is@", "توثيق الكل", "وثق الكل", "verify",
+        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
 
@@ -5437,6 +5480,9 @@ class TalkinBot:
             return True
         if low in ("العاب","ألعاب","لعب","games","game"):
             self.game_help(room); return True
+        if not _games_enabled_for_room(room):
+            self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
+            return True
         if low.startswith("زرع"):
             return self._crop_command(room, sender_name, raw)
         if low.startswith("فيس"):
@@ -5791,6 +5837,38 @@ class TalkinBot:
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
+        # Game switch:
+        # - Any configured master can stop/start games in the room where the command is issued.
+        # - The primary master (BOT_MASTER) controls the global game switch for all rooms.
+        if low in ("ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب"):
+            if not _is_master_name(sender):
+                return True
+            if _is_primary_master(sender):
+                _set_games_global(False)
+                self.send_private_text(sender, "🛑 تم إيقاف الألعاب في جميع الغرف.")
+            elif room:
+                _disable_games_room(room)
+                self.send_room_text(room, "🛑 تم إيقاف الألعاب في هذه الغرفة فقط.")
+            else:
+                self.send_private_text(sender, "⚠️ نفّذ الأمر داخل الغرفة لإيقاف الألعاب فيها.")
+            return True
+
+        if low in ("تشغيل الالعاب", "تشغيل الألعاب"):
+            if not _is_master_name(sender):
+                return True
+            if _is_primary_master(sender):
+                data = _game_control_data()
+                data["global_enabled"] = True
+                data["disabled_rooms"] = []
+                _save_game_control(data)
+                self.send_private_text(sender, "✅ تم تشغيل الألعاب في جميع الغرف.")
+            elif room:
+                _enable_games_room(room)
+                self.send_room_text(room, "✅ تم تشغيل الألعاب في هذه الغرفة فقط.")
+            else:
+                self.send_private_text(sender, "⚠️ نفّذ الأمر داخل الغرفة لتشغيل الألعاب فيها.")
+            return True
+
         # Invitation switch: only the configured master account can control it.
         if low in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات"):
             if not _is_primary_master(sender):
