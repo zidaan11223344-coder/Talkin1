@@ -2069,65 +2069,104 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
 
-    # Keep the usernames exactly as supplied by Talkin/command. Do not
-    # translate, transliterate, or otherwise change their characters.
     sender_name = str(sender_name or "")
     receiver_name = str(receiver_name or "")
-    files=[p for p in GIFT_IMAGE_FILES.get(str(gift_id),[]) if p.is_file()]
+    files = [p for p in GIFT_IMAGE_FILES.get(str(gift_id), []) if p.is_file()]
     if not files:
         raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
 
-    # Revert to the earlier elegant gift template instead of the last ornate
-    # layout. The sender photo is placed on top of the gift artwork when a
-    # public Talkin profile photo is available.
-    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
-    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
-    image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA")
+    # Keep the original gift artwork/template. Only the two profile areas are
+    # changed: avatars are OUTSIDE the username rectangles and rendered large.
+    template_path = BASE_DIR / "assets" / "gift_template_elegant.png"
+    template = (
+        Image.open(template_path).convert("RGBA")
+        if template_path.is_file()
+        else Image.new("RGBA", (1239, 1270), (0, 0, 0, 0))
+    )
+    image = _fit_crop(Image.open(random.choice(files)), template.size).convert("RGBA")
     image.alpha_composite(template)
-    d=ImageDraw.Draw(image); w,h=template.size
-    gold=(244,196,92,255); panel=(10,14,28,245)
 
-    header=(int(w*.27),65,int(w*.73),205)
-    d.rounded_rectangle(header,radius=48,fill=panel,outline=gold,width=4)
-    gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
-    _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
+    d = ImageDraw.Draw(image)
+    w, h = template.size
+    gold = (244, 196, 92, 255)
+    panel = (10, 14, 28, 245)
 
-    # Keep each username in a clear rectangle and place that user's photo
-    # inside the rectangle at its end.
-    box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
-    top_y=int(h*.675); bottom_y=int(h*.815)
-    for y in (top_y,bottom_y):
-        d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
+    # Gift title.
+    header = (int(w * .27), 65, int(w * .73), 205)
+    d.rounded_rectangle(header, radius=48, fill=panel, outline=gold, width=4)
+    gift_name = GIFT_CATALOG.get(str(gift_id), ("🎁", "هدية"))[1]
+    _draw_centered(
+        d, ((header[0] + header[2]) / 2, 135),
+        "هدية " + gift_name, 42, (255, 222, 155, 255),
+        header[2] - header[0] - 50
+    )
+
+    # Large clear username rectangles. They are intentionally moved left so
+    # the profile photo has its own space OUTSIDE the rectangle.
+    box_x = int(w * .17)
+    box_w = int(w * .61)
+    box_h = int(h * .125)
+    top_y = int(h * .675)
+    bottom_y = int(h * .815)
+
+    for y in (top_y, bottom_y):
+        d.rounded_rectangle(
+            (box_x, y, box_x + box_w, y + box_h),
+            radius=32, fill=panel, outline=gold, width=5
+        )
+
+    # 170px avatars: circular, sharp, and completely outside the name boxes.
+    avatar_size = 170
     avatar_inputs = (sender_photo_url, receiver_photo_url)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        avatars = list(pool.map(lambda url: _load_sender_avatar(url, 96), avatar_inputs))
-    for (y, label, name, photo), avatar in zip((
-        (top_y, "المرسل", sender_name, sender_photo_url),
-        (bottom_y, "المستلم", receiver_name, receiver_photo_url),
-    ), avatars):
+        avatars = list(pool.map(
+            lambda url: _load_sender_avatar(url, avatar_size), avatar_inputs
+        ))
+
+    avatar_x = min(w - avatar_size - 18, box_x + box_w + 22)
+
+    rows = (
+        (top_y, "المرسل", sender_name),
+        (bottom_y, "المستلم", receiver_name),
+    )
+
+    for (y, label, name), avatar in zip(rows, avatars):
+        # Avatar is beside the rectangle, never inside it.
         if avatar is not None:
-            image.alpha_composite(avatar, (box_x+box_w-108, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
-        _draw_centered(d,(box_x+box_w*.43,y+34),label,25,(255,224,165,255),box_w-125)
+            avatar_y = y + (box_h - avatar_size) // 2
+            image.alpha_composite(avatar, (avatar_x, avatar_y))
+            d = ImageDraw.Draw(image)
 
-    # Same visual text as the chat username: no @ removal, no transliteration.
-    # Use distinct high-contrast colors so sender/receiver are immediately
-    # recognizable while the dark stroke keeps decorated glyphs readable.
-    sender_color=(126,226,255,255)     # turquoise-blue for the sender
-    receiver_color=(255,166,218,255)   # pink-magenta for the receiver
-    panel_center_x = box_x + box_w / 2
-    _draw_name_centered(d,(box_x+box_w*.43,top_y+box_h*.68),sender_name,39,sender_color,box_w-135)
-    _draw_name_centered(d,(box_x+box_w*.43,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-135)
+        # Label and username remain entirely inside the rectangle.
+        text_center_x = box_x + box_w * .50
+        _draw_centered(
+            d, (text_center_x, y + 34), label, 25,
+            (255, 224, 165, 255), box_w - 35
+        )
 
-    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
-    out.parent.mkdir(parents=True,exist_ok=True)
-    # Static output replaces the old animated GIF because motion reduced
-    # clarity in Talkin previews.  The canvas is slightly larger, and the
-    # quality is reduced only as needed to stay below 100 KiB.
-    rgb=image.convert("RGB").resize((360,370),Image.LANCZOS)
-    for quality in (88,82,76,70,64,58,52):
-        rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
+    sender_color = (126, 226, 255, 255)
+    receiver_color = (255, 166, 218, 255)
+
+    _draw_name_centered(
+        d, (box_x + box_w * .50, top_y + box_h * .68),
+        sender_name, 42, sender_color, box_w - 35
+    )
+    _draw_name_centered(
+        d, (box_x + box_w * .50, bottom_y + box_h * .68),
+        receiver_name, 42, receiver_color, box_w - 35
+    )
+
+    out = BASE_DIR / "generated_gifts" / f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # Higher output resolution for clearer profile photos and usernames.
+    # Compress only as much as needed to stay below the server's 100 KiB limit.
+    rgb = image.convert("RGB").resize((600, 615), Image.LANCZOS)
+    for quality in (88, 82, 76, 70, 64, 58, 52, 46, 40):
+        rgb.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
         if out.stat().st_size < 100 * 1024:
             break
+
     if out.stat().st_size >= 100 * 1024:
         raise RuntimeError("تعذر ضغط بطاقة الهدية إلى أقل من 100 كيلوبايت")
     return out
@@ -4303,6 +4342,32 @@ class TalkinBot:
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
         low=text.casefold()
+
+        # Master-only: restart the current bot process cleanly.
+        # The command is intentionally handled here so it works from private chat
+        # and from a room, while the management-command gate already restricts it
+        # to the configured master account.
+        if low in ("اعاده تشغيل البوت", "إعادة تشغيل البوت", "اعادة تشغيل البوت", "restart bot", "restart"):
+            if not _is_master_name(sender):
+                return True
+            self.send_private_text(sender, "🔄 جاري إعادة تشغيل البوت...")
+
+            def _restart_process():
+                try:
+                    time.sleep(1.2)
+                    self.stop_event.set()
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                except Exception as exc:
+                    self.log("[BOT] restart failed:", repr(exc))
+                    self.stop_event.clear()
+                    try:
+                        self.send_private_text(sender, f"❌ تعذر إعادة تشغيل البوت: {exc}")
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_restart_process, name="bot-restart", daemon=True).start()
+            return True
+
         if low in ("تشغيل الحماية", "تشغيل الحمايه", "الحماية تشغيل", "الحمايه تشغيل"):
             if not room or not _room_manager(self, room, sender):
                 return True
