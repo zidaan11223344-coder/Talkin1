@@ -5913,6 +5913,10 @@ class TalkinBot:
         bot data that should be persisted to GitHub.
         """
         now = time.time()
+        if not hasattr(self, "_incoming_seen"):
+            self._incoming_seen = {}
+        if not hasattr(self, "_incoming_seen_lock"):
+            self._incoming_seen_lock = threading.Lock()
         event_id = str(event_id or "").strip()
         if event_id:
             key = (str(kind), "id", event_id)
@@ -5942,6 +5946,8 @@ class TalkinBot:
         room = str(event.get(13, self.room))
         if room and room != BOT_MASTER:
             self.known_rooms.add(room)
+            if not hasattr(self, "connected_rooms"):
+                self.connected_rooms = set()
             self.connected_rooms.add(room)
             _save_persistent_rooms(self.known_rooms)
         event_id = str(event.get(41, ""))
