@@ -1659,19 +1659,32 @@ def _command_menu():
     return _command_menu_for(False)
 
 def _command_menu_for(is_master=False):
-    # Help menu is public: every user can view all seven pages.
+    # help1 (الإدارة) and help7 (الماستر والفلتر) are master-only.
+    # help2..help6 are public.
+    if is_master:
+        return (
+            "📚 أوامر البوت\n"
+            "━━━━━━━━━━━━\n"
+            "help1 — الإدارة\n"
+            "help2 — الموسيقى والتفاعلات\n"
+            "help3 — الألعاب\n"
+            "help4 — الهدايا والنشر\n"
+            "help5 — النقاط\n"
+            "help6 — الغرف\n"
+            "help7 — الماستر والفلتر\n"
+            "━━━━━━━━━━━━\n"
+            "اكتب help1 إلى help7 لعرض الأوامر"
+        )
     return (
         "📚 أوامر البوت\n"
         "━━━━━━━━━━━━\n"
-        "help1 — الإدارة\n"
         "help2 — الموسيقى والتفاعلات\n"
         "help3 — الألعاب\n"
         "help4 — الهدايا والنشر\n"
         "help5 — النقاط\n"
         "help6 — الغرف\n"
-        "help7 — الماستر والفلتر\n"
         "━━━━━━━━━━━━\n"
-        "اكتب help1 إلى help7 لعرض الأوامر"
+        "اكتب help2 إلى help6 لعرض الأوامر"
     )
 
 
@@ -4608,6 +4621,26 @@ class TalkinBot:
         # response routing enabled so the master receives the result privately
         # (or in the command room when the command is public by design).
         # Publishing is intentionally also available to verified accounts.
+        # Public help: menu and pages must be available to ALL users,
+        # whether verified, unverified, or master. Handle them before the
+        # master-only management gate below.
+        _body_text = str(body or "").strip()
+        _body_low = _body_text.casefold()
+        if _body_low in ("اوامر", "الاوامر", "help", "مساعدة"):
+            menu = _command_menu_for(False)
+            if is_private:
+                self.send_private_text(sender, menu)
+            elif room:
+                self.send_room_text(room, menu)
+            return True
+        _m_public_help = re.fullmatch(r"help([1-7])", _body_low)
+        if _m_public_help:
+            _page = int(_m_public_help.group(1))
+            if _page in (1, 7) and not _is_master_name(sender):
+                return False
+            self._send_help(room=room, private_to=sender if is_private else None, page=_page)
+            return True
+
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
         security_command = bool(re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I) or re.match(r"^mr@\d+$", str(body or "").strip(), re.I))
         join_command = bool(re.match(r"^دخول@.+$", str(body or "").strip(), re.I))
@@ -4716,6 +4749,16 @@ class TalkinBot:
             threading.Thread(target=_restart_process, name="bot-restart", daemon=True).start()
             return True
         # `اوامر` shows the organized menu only.
+        if low in ("اوامر الماستر", "اوامر_الماستر"):
+            if not _is_master_name(sender):
+                return False
+            target = sender if is_private else None
+            menu = _command_menu_for(True)
+            if target:
+                self.send_private_text(target, menu)
+            else:
+                self.send_room_text(room, menu)
+            return True
         if low in ("اوامر","الاوامر","help","مساعدة"):
             target = sender if is_private else None
             menu = _command_menu_for(_is_master_name(sender))
@@ -4727,6 +4770,8 @@ class TalkinBot:
         m_help = re.fullmatch(r"help([1-7])", low)
         if m_help:
             page=int(m_help.group(1))
+            if page in (1, 7) and not _is_master_name(sender):
+                return True
             self.help_pages[(str(room), _norm_user(sender))]=page
             self._send_help(room=room, private_to=sender if is_private else None, page=page)
             return True
