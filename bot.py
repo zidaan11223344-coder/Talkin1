@@ -73,8 +73,16 @@ if YOUTUBE_COOKIES:
 # Gift images copied verbatim from the supplied Giant Chat bot assets/.
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
+# Gift source images: accept PNG/JPG/JPEG from assets/.
+# This keeps the bot working even if the original PNG files are replaced by JPG files.
 GIFT_IMAGE_FILES = {
-    str(i): [ASSETS_DIR / f"gift_{i:02d}_1.png", ASSETS_DIR / f"gift_{i:02d}_2.png", ASSETS_DIR / f"gift_{i:02d}_3.png"]
+    str(i): [
+        path
+        for variant in (1, 2, 3)
+        for ext in ("png", "jpg", "jpeg")
+        for path in [ASSETS_DIR / f"gift_{i:02d}_{variant}.{ext}"]
+        if path.is_file()
+    ]
     for i in range(1, 15)
 }
 # الألعاب وصورها معطلة بناءً على إعداد البوت المطلوب؛ لا تُرسل صور ألعاب.
