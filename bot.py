@@ -176,7 +176,7 @@ BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
 # short custom value without changing the source code.
 BOT_FIRST_CONNECTION_STATUS = os.getenv("BOT_FIRST_CONNECTION_STATUS", BOT_BASE_STATUS).strip()
 PROFILE_STATUS_MAX_CHARS = max(300, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "700")))
-GIFT_STATUS_SECONDS = 5 * 60
+GIFT_STATUS_SECONDS = 2 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
 # from the private chat, but only the configured BOT_MASTER is authorized.
@@ -1408,7 +1408,7 @@ def _looks_like_bot_command(text):
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "صيد", "سرعة", "كنز", "مصارعة", "بحث", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
@@ -4353,19 +4353,13 @@ class TalkinBot:
             if timer is not None:
                 timer.cancel()
 
-            # حالة الهدية + الحالة الأساسية بخط صغير لتقليل حجم الرسالة.
-            # طريقة إرسال الحالة نفسها لم تتغير.
-            small_base_status = (
-                '<font color="#FFD166" size="2">بوت حماية وألعاب وأغاني</font><br>'
-                '<font color="#4DD0E1" size="1">لمعرفة الألعاب والأوامر أرسل: مساعدة</font><br>'
-                '<font color="#FF6FCF" size="1">لدخول الغرف أرسل: دخول اسم الغرفة</font><br>'
-                '<font color="#9DFF57" size="1">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
-            )
+            # Keep the gift status short and independent from the base status.
+            # This uses the exact same profile-status sending method, but avoids
+            # the larger combined payload that previously caused WebSocket 1009.
             temporary = (
                 f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
                 f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
                 f'<br><font color="#6A1B9A">🎁 نوع الهدية: {gift_name}</font>'
-                f'<br><br>{small_base_status}'
             )
             self._set_profile_status(temporary)
 
@@ -4380,7 +4374,6 @@ class TalkinBot:
             self._profile_status_timer = threading.Timer(GIFT_STATUS_SECONDS, restore)
             self._profile_status_timer.daemon = True
             self._profile_status_timer.start()
-
 
     def handle_gift_command(self, room: str, text: str, sender_name: str = "", private_to: str = ""):
         raw=text.strip(); m=re.match(r"^sa@([^@]+)@(.+)$",raw,re.I)
