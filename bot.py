@@ -1651,20 +1651,9 @@ def _command_menu():
     return _command_menu_for(False)
 
 def _command_menu_for(is_master=False):
-    if not is_master:
-        return (
-            "📚 أوامر البوت للمستخدمين\n"
-            "━━━━━━━━━━━━\n"
-            "help2 — الموسيقى والتفاعلات (.sa اسم، sher@اسم)\n"
-            "help3 — الألعاب\n"
-            "help4 — الهدايا والنشر\n"
-            "help5 — النقاط\n"
-            "help6 — الغرف\n"
-            "━━━━━━━━━━━━\n"
-            "اكتب: help2 أو help3 أو help4 أو help5 أو help6"
-        )
+    # Help menu is public: every user can view all seven pages.
     return (
-        "📚 جميع أوامر البوت للماستر\n"
+        "📚 أوامر البوت\n"
         "━━━━━━━━━━━━\n"
         "help1 — الإدارة\n"
         "help2 — الموسيقى والتفاعلات\n"
@@ -1674,7 +1663,7 @@ def _command_menu_for(is_master=False):
         "help6 — الغرف\n"
         "help7 — الماستر والفلتر\n"
         "━━━━━━━━━━━━\n"
-        "اكتب اسم القائمة مثل: help1"
+        "اكتب help1 إلى help7 لعرض الأوامر"
     )
 
 
