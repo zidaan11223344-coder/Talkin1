@@ -149,7 +149,7 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # Talkin profile-status query can differ between server builds. Keep the
 # action configurable while defaulting to the native profile update name.
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
-    "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
+    "PROFILE_STATUS_ACTIONS", "update_profile"
 ).split(",") if x.strip()]
 MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
@@ -4230,11 +4230,32 @@ class TalkinBot:
             except Exception as exc:
                 self.log("[PROFILE] action failed", action, repr(exc))
             if not sent:
-                self.log("[PROFILE] all status update actions failed")
+                self.log("[PROFILE] status update failed: no packet sent")
+                self._notify_profile_status_failure("لم يتم إرسال حزمة تحديث الحالة.")
             return sent
         except Exception as exc:
             self.log("[PROFILE] status update failed:", repr(exc))
+            self._notify_profile_status_failure(f"{type(exc).__name__}: {exc}")
             return False
+
+    def _notify_profile_status_failure(self, reason: str):
+        """Notify the master once per cooldown when profile status cannot be sent."""
+        if not BOT_MASTER:
+            return
+        now = time.time()
+        last = float(getattr(self, "_last_profile_status_error_notice", 0.0) or 0.0)
+        if now - last < 300.0:
+            return
+        self._last_profile_status_error_notice = now
+        try:
+            self.send_private_text(
+                BOT_MASTER,
+                "⚠️ تعذر تحديث حالة بروفايل البوت.\n"
+                f"السبب: {str(reason)[:500]}\n"
+                f"الفعل المستخدم: {PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else 'update_profile'}",
+            )
+        except Exception as exc:
+            self.log("[PROFILE] failed to notify master:", repr(exc))
 
     def _set_temporary_gift_status(self, sender: str, receiver: str, gift_name: str):
         sender = str(sender or "").strip().lstrip("@")
