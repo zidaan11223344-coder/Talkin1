@@ -3665,19 +3665,28 @@ class TalkinBot:
         return ""
 
     def _inv_bot_owner_allowed(self, room):
+        """Validate the bot's room privilege without blocking a valid owner.
+
+        The live occupants response is not reliable as a pre-check on every
+        command: after a leave/rejoin the local role cache is empty until the
+        next roster event arrives.  If the bot is already known to be in the
+        requested room, let the normal invite request proceed and let the
+        server permission check be authoritative.  A cached non-owner role is
+        still rejected immediately.
+        """
         role = self._bot_room_role(room)
         if role in {"owner", "creator", "room_owner", "room_creator"}:
             return True
         if role in {"admin", "moderator", "mod", "member", "user", "none"}:
-            return False
-        # Unknown role: ask the server for a fresh occupants list; the result
-        # handler will complete the check and continue the invitation flow.
-        try:
-            self.send_query(encode_query("room_admin", type_="occupants_list", room=room, to=BOT_ID, value="none"))
-            return None
-        except Exception as exc:
-            self.log("[INV] bot-role refresh failed", room, repr(exc))
-            return False
+            # If role was explicitly learned from a live roster, reject it.
+            # Otherwise "none" can simply mean the cache has not populated yet.
+            live = getattr(self, "room_users", {}).get(str(room), {}) or {}
+            bot_seen = any(_norm_user(u) == _norm_user(BOT_ID) for u in live)
+            if role != "none" or bot_seen:
+                return False
+        # Do not make the master wait on a role-refresh round trip.  The bot's
+        # authenticated account and the invite RPC/API remain the final authority.
+        return True
 
     def request_occupants(self, room: str = "", silent_master: bool = False, response_room: str = "", response_to: str = ""):
 
@@ -3734,61 +3743,17 @@ class TalkinBot:
         except Exception as e:
             self.log("[INV] progress message failed:", repr(e))
 
-        # PRIMARY SOURCE: database room_members contains the complete membership,
-        # including users who are currently offline. Query ONLY this requested room.
-        all_users = []
-        seen = set()
-        room_counts = {}
-        for source_room in active_rooms:
-            try:
-                db_users = self.db.room_users(source_room)
-            except Exception as exc:
-                db_users = []
-                self.log("[INV] DB room roster failed:", source_room, repr(exc))
-            room_counts[source_room] = len(db_users or [])
-            for u in db_users or []:
-                username = str(u.get("username") or "").strip() if isinstance(u, dict) else ""
-                if not username or _norm_user(username) == _norm_user(BOT_ID):
-                    continue
-                key = _norm_user(username)
-                if key not in seen:
-                    seen.add(key)
-                    all_users.append(username)
-
-        if all_users:
-            self.log(f"[INV] COMPLETE ROOM ROSTER: room={command_room} total_members={len(all_users)} counts={room_counts} (offline included)")
-            self.process_occupants_for_invite({
-                "db_users": [{"username": u} for u in all_users],
-                "source_rooms": active_rooms,
-            })
-            return
-
-        # If the DB roster is unavailable/empty, use the saved roster for THIS
-        # room only. It can contain offline users from an earlier full roster.
-        for source_room in active_rooms:
-            saved_users = _persistent_roster_users(source_room)
-            room_counts[source_room] = max(room_counts.get(source_room, 0), len(saved_users))
-            for username in saved_users:
-                key = _norm_user(username)
-                if key and key not in seen:
-                    seen.add(key)
-                    all_users.append(username)
-
-        if all_users:
-            self.log(f"[INV] SAVED ROOM ROSTER: room={command_room} total_members={len(all_users)}")
-            self.process_occupants_for_invite({
-                "db_users": [{"username": u} for u in all_users],
-                "source_rooms": active_rooms,
-            })
-            return
-
-        # Last fallback: request the server roster for the single requested room.
+        # IMPORTANT: inv must read the CURRENT room settings/roster from Talkin itself.
+        # Do not use Supabase, persistent roster, or an old cached member list here.
+        # The room's occupants_list response contains the UserItem entries from
+        # the room settings (owner/admin/member categories).
         self._inv_expected_rooms = set(active_rooms)
         self._inv_live_users = []
         self._inv_live_seen = set()
         self._inv_command_room = command_room
         self._inv_response_room = response_room
         self._inv_response_to = response_to
+
         if not active_rooms:
             with self.invite_lock:
                 self.invite_pending = False
@@ -3801,8 +3766,10 @@ class TalkinBot:
             else:
                 self.send_private_text(BOT_MASTER, msg)
             return
+
         for source_room in active_rooms:
             try:
+                self.log("[INV] requesting CURRENT room settings roster:", source_room)
                 self.send_query(encode_query(
                     "room_admin", type_="occupants_list", room=source_room,
                     to=BOT_ID, value="none"
@@ -3810,6 +3777,7 @@ class TalkinBot:
             except Exception as e:
                 self.log("[INV] occupants request failed", source_room, repr(e))
                 self._inv_expected_rooms.discard(source_room)
+
         if not self._inv_expected_rooms:
             with self.invite_lock:
                 self.invite_pending = False
@@ -4056,12 +4024,18 @@ class TalkinBot:
                 return
             result = {"db_users": [{"username": u} for u in self._inv_live_users]}
 
+        # `inv` is intentionally live-only. A db_users payload is accepted only
+        # for compatibility with older callers, never generated by request_occupants.
         users_info = []
         for user in (result.get("db_users") or []):
             if isinstance(user, dict):
                 username = str(user.get("username") or "").strip()
-                if username and username != BOT_ID:
-                    users_info.append({"username": username, "role": "none", "user_id": str(user.get("user_id") or "")})
+                if username:
+                    users_info.append({
+                        "username": username,
+                        "role": str(user.get("role") or "none").strip().lower() or "none",
+                        "user_id": str(user.get("user_id") or ""),
+                    })
 
         # Some server builds return ResultMessage.users directly.
         # IMPORTANT: read the bot's own role BEFORE excluding the bot from
@@ -4091,6 +4065,15 @@ class TalkinBot:
                 if bot_role:
                     self.bot_room_roles[_norm_room(room)] = bot_role
                 break
+
+        # The bot itself belongs to the room settings list but must not receive
+        # an invitation and must not be counted as an ordinary member.
+        filtered_users = []
+        for u in users_info:
+            if _norm_user(u.get("username")) == _norm_user(BOT_ID):
+                continue
+            filtered_users.append(u)
+        users_info = filtered_users
 
         pending_role = getattr(self, "_pending_inv_role_check", {}).pop(_norm_room(room), None)
         if pending_role is not None:
@@ -4132,18 +4115,31 @@ class TalkinBot:
                 self.invite_silent_master = False
             return
 
-        # Categorize exactly as the room settings list does.
-        owners = [u["username"] for u in users_info if u.get("role") == "owner"]
-        admins = [u["username"] for u in users_info if u.get("role") == "admin"]
-        members = [u["username"] for u in users_info if u.get("role") not in ("owner", "admin")]
-        self.log(f"[INV] room={room} total={len(users_info)} owners={len(owners)} admins={len(admins)} members={len(members)}")
+        # These counts come from the CURRENT room UserItem role field, not from
+        # Supabase or any saved roster. Keep the three categories separate.
+        owner_roles = {"owner", "creator", "room_owner", "room_creator"}
+        admin_roles = {"admin", "moderator", "mod"}
+        member_roles = {"member", "user", "none", ""}
+        owners = [u["username"] for u in users_info if str(u.get("role") or "").casefold() in owner_roles]
+        admins = [u["username"] for u in users_info if str(u.get("role") or "").casefold() in admin_roles]
+        members = [u["username"] for u in users_info if str(u.get("role") or "").casefold() in member_roles]
+        unknown = [u["username"] for u in users_info if str(u.get("role") or "").casefold() not in owner_roles | admin_roles | member_roles]
+        self.log(f"[INV] CURRENT ROOM SETTINGS: room={room} total={len(users_info)} owners={len(owners)} admins={len(admins)} members={len(members)} unknown={len(unknown)}")
+        if unknown:
+            self.log("[INV] unknown role values:", sorted({str(u.get("role") or "") for u in users_info if str(u.get("role") or "").casefold() not in owner_roles | admin_roles | member_roles}))
 
-        # Master gets the progress/result privately; no public room spam.
+        # Master gets the exact live room-settings counts privately.
         try:
-            self.send_private_text(
-                BOT_MASTER,
-                f"📋 تم تحميل إعدادات الغرفة. الكل: {len(users_info)} | المالكين: {len(owners)} | المشرفين: {len(admins)} | الأعضاء: {len(members)}"
+            summary = (
+                f"📋 إعدادات الغرفة الحالية\n"
+                f"━━━━━━━━━━━━\n"
+                f"👥 إجمالي الأعضاء: {len(users_info)}\n"
+                f"👑 الأونرات: {len(owners)}\n"
+                f"🛡️ المشرفين: {len(admins)}\n"
+                f"👤 الأعضاء: {len(members)}\n"
+                f"━━━━━━━━━━━━"
             )
+            self.send_private_text(BOT_MASTER, summary)
         except Exception as e:
             self.log("[INV] role summary failed:", repr(e))
 
