@@ -138,7 +138,7 @@ BOT_BASE_STATUS = os.getenv(
     "BOT_BASE_STATUS",
     '<B><H3><font color="#FFD700">بوت حمايه والعاب واغاني</font><br>'
     '<font color="#00E5FF">لمعرفه الالعاب والاوامر ارسل مساعده</font><br>'
-    '<font color="#FF4FD8">لدخول الغرف ارسل دخول اسم الغرفه</font><br>'
+    '<font color="#FF4FD8">لدخول الغرف ارسل دخول@اسم الغرفه</font><br>'
     '<font color="#7CFF00">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
     '</H3></B>',
 ).strip()
@@ -1346,7 +1346,7 @@ def _looks_like_bot_command(text):
     prefixes = (
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
-        "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
+        "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "خروج",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
@@ -1359,7 +1359,7 @@ def _looks_like_admin_command(text):
     prefixes = (
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
-        "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
+        "i@", "inv", "دعوات", "invite", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
@@ -1654,7 +1654,7 @@ def _default_help_pages():
         3: '🎮 الألعاب\n━━━━━━━━━━━━\nرهان@المبلغ — رهان (للموثقين)\nمضاربة@المبلغ — مضاربة\nاستثمار@المبلغ — استثمار\nحظي@المبلغ — حظي ثنائي\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون',
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
-        6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
+        6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
         7: '👑 الماستر والفلتر\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترز\nvi@اسم — توثيق الألعاب\nتوثيق الكل — توثيق جميع مستخدمي الغرف\nuns@اسم — إزالة التوثيق\nVip@اسم — توثيق VIP\nunVip@اسم — إلغاء VIP\nmf@on / mf@off — تشغيل أو إيقاف الفلتر\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات\nclear@mf — حذف الكلمات',
     }
 
@@ -3160,7 +3160,7 @@ class TalkinBot:
             with self.invite_lock:
                 self.invite_pending = False
                 self.invite_silent_master = False
-            self.send_private_text(BOT_MASTER, "⚠️ لا توجد غرف نشطة حالياً. استخدم: دخول اسم_الغرفة")
+            self.send_private_text(BOT_MASTER, "⚠️ لا توجد غرف نشطة حالياً. استخدم: دخول@اسم_الغرفة")
             return
         for source_room in active_rooms:
             try:
@@ -3811,11 +3811,7 @@ class TalkinBot:
             self._verify_public_media_url(gift_url, "image")
             if not gift_path.is_file() or gift_path.stat().st_size < 64:
                 raise RuntimeError(f"ملف صورة الهدية غير صالح: {gift_path}")
-            self._set_temporary_gift_status(
-                sender_name,
-                target,
-                GIFT_CATALOG.get(str(gift_id), ("🎁", "هدية"))[1],
-            )
+            # Gift sending must NEVER update the profile status. Some Talkin server builds close the WebSocket when a profile-status packet is sent during a gift.
             if private_to:
                 self.send_private_media(private_to, gift_url, "image")
                 self.send_private_text(private_to, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
@@ -4258,7 +4254,7 @@ class TalkinBot:
         # Publishing is intentionally also available to verified accounts.
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
         security_command = bool(re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I) or re.match(r"^mr@\d+$", str(body or "").strip(), re.I))
-        join_command = bool(re.match(r"^(?:دخول|ادخل|join|enter)\s+", str(body or "").strip(), re.I))
+        join_command = bool(re.match(r"^دخول@.+$", str(body or "").strip(), re.I))
         if not _is_master_name(sender) and not (is_publish and _is_verified_user(sender)) and not join_command and not (security_command and room and _room_manager(self, room, sender)):
             return False
         # A private command can be replayed by the Talkin transport with a new
@@ -4409,15 +4405,16 @@ class TalkinBot:
                 self.log("[FILTER] words=", sorted(self.banned_words))
                 return True
 
-        # Joining a room is intentionally available to verified and unverified users.
-        if low.startswith(("دخول ", "join ", "ادخل ", "enter ")):
-            parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
+        # Joining a room: ONLY the master command دخول@اسم_الغرفة is accepted.
+        m_join = re.fullmatch(r"دخول@(.+)", text, re.I)
+        if m_join:
+            target = m_join.group(1).strip()
             if not target:
-                self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
+                self.send_private_text(sender, "❌ الصيغة: دخول@اسم_الغرفة"); return True
             blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
             joined = self.join_room(target)
             if blocked:
-                reply = f"🚫 البوت محظور من الغرفة {target}. أعطِ البوت إشرافاً أو أونر ثم أعد المحاولة: دخول {target}"
+                reply = f"🚫 البوت محظور من الغرفة {target}. أعطِ البوت إشرافاً أو أونر ثم أعد المحاولة: دخول@{target}"
             else:
                 reply = f"{'✅ تم طلب دخول الغرفة' if joined else '⚠️ الغرفة متصلة بالفعل'}: {target} | المتصلة فعلياً: {len(self.connected_rooms)}"
             self.send_private_text(sender, reply)
@@ -4656,10 +4653,11 @@ class TalkinBot:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المالك فيها."); return True
             self.request_admin_action(room,target,"owner",sender)
             return True
-        if low.startswith(("دخول ","join ","ادخل ","enter ")):
-            parts=text.split(None,1); target=parts[1].strip() if len(parts)==2 else ""
+        m_join = re.fullmatch(r"دخول@(.+)", text, re.I)
+        if m_join:
+            target=m_join.group(1).strip()
             if not target:
-                self.send_private_text(sender,"❌ الصيغة: دخول اسم_الغرفة"); return True
+                self.send_private_text(sender,"❌ الصيغة: دخول@اسم_الغرفة"); return True
             self.join_room(target)
             self.send_private_text(sender,f"✅ دخلت الغرفة: {target} | الغرف الحالية: {len(self.known_rooms)}"); return True
         if low in ("خروج","leave","exit") or low.startswith(("خروج ","leave ","exit ")):
@@ -5014,7 +5012,7 @@ class TalkinBot:
         # restricted to masters. Unverified command attempts receive one clear
         # notice instead of being silently ignored.
         is_verified = _is_verified_user(frm)
-        if not is_verified and _looks_like_bot_command(body) and not body.strip().casefold().startswith(("دخول ", "join ", "ادخل ", "enter ")):
+        if not is_verified and _looks_like_bot_command(body) and not re.match(r"^دخول@.+$", body.strip(), re.I):
             self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
         # Music/gifts require verification; masters are always allowed.
@@ -5057,7 +5055,7 @@ class TalkinBot:
             return
 
         if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
-            self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، دخول اسم_الغرفة، خروج [اسم_الغرفة]، inv، invmsg نص الدعوة لدعوة مستخدمي الغرفة")
+            self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، دخول@اسم_الغرفة، خروج [اسم_الغرفة]، inv، invmsg نص الدعوة لدعوة مستخدمي الغرفة")
 
     def on_message(self, ws, message):
         try:
@@ -5111,11 +5109,11 @@ class TalkinBot:
                             return
                     # Silently ignore master-only commands from everyone else.
                     is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
-                    if body and _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)) and not re.match(r"^(?:دخول|ادخل|join|enter)\s+", body, re.I):
+                    if body and _looks_like_admin_command(body) and not _is_master_name(frm) and not (is_publish_command and _is_verified_user(frm)) and not re.match(r"^دخول@.+$", body, re.I):
                         if not _is_verified_user(frm):
                             self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
-                    if body and not _is_verified_user(frm) and _looks_like_bot_command(body) and not body.strip().casefold().startswith(("دخول ", "join ", "ادخل ", "enter ")):
+                    if body and not _is_verified_user(frm) and _looks_like_bot_command(body) and not re.match(r"^دخول@.+$", body.strip(), re.I):
                         self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
                     if body and body.casefold() in ("نقاطي", "points"):
@@ -5149,8 +5147,8 @@ class TalkinBot:
                         if cmd in ("inv", "دعوات", "invite"):
                             target_room = arg if arg else ctx_room
                             self.request_occupants(target_room, silent_master=True)
-                        elif cmd in ("دخول", "join", "ادخل", "enter") and arg:
-                            target_room = arg
+                        elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I):
+                            target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
                             blocked_room = _norm_room(target_room)
                             self.blocked_rooms.discard(blocked_room)
                             self._blocked_room_notices.discard(blocked_room)
