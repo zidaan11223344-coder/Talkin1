@@ -2936,6 +2936,12 @@ class TalkinBot:
         room = str(room or "").strip()
         if not room:
             return False
+        if _norm_room(room) in getattr(self, "blocked_rooms", set()):
+            self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != _norm_room(room)}
+            self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != _norm_room(room)}
+            _save_persistent_rooms(self.known_rooms)
+            self.log("[ROOM] leave suppressed (room is blocked):", room)
+            return False
         self.send_query(encode_query("room_leave", room=room))
         with self._join_lock:
             self.known_rooms.discard(room)
@@ -4317,13 +4323,6 @@ class TalkinBot:
         sender = str(sender or "").strip().lstrip("@")
         receiver = str(receiver or "").strip().lstrip("@")
         gift_name = str(gift_name or "هدية").strip()
-        # Keep sender and receiver on separate colored lines and replace the
-        # old profile status completely for the duration of the gift.
-        temporary = (
-            f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
-            f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
-            f'<br><font color="#FFE29A">{gift_name}</font>'
-        )
         with self._profile_status_lock:
             self._profile_status_token += 1
             token = self._profile_status_token
@@ -4332,9 +4331,14 @@ class TalkinBot:
                 timer.cancel()
             base_status = str(self._profile_current_status or self._profile_base_status or "").strip()
             self._profile_base_status = base_status
-            # Send one profile-status update only.  Do not append the old
-            # status: that makes the packet unnecessarily large and can cause
-            # some server builds to disconnect the bot.
+            # Show the gift details first, then preserve the normal bot profile
+            # status below them. A later gift replaces only the gift section.
+            temporary = (
+                f'<font color="#66D9FF">🎁 المرسل: {sender}</font>'
+                f'<br><font color="#FF9ED8">🎁 المستقبل: {receiver}</font>'
+                f'<br><font color="#FFE29A">{gift_name}</font>'
+                f'<br><br>{base_status}'
+            )
             self._set_profile_status(temporary)
 
             def restore():
@@ -5532,11 +5536,20 @@ class TalkinBot:
             if not target:
                 self.send_private_text(sender, "❌ الصيغة: دخول@اسم_الغرفة"); return True
             blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
-            joined = self.join_room(target)
             if blocked:
+                self.connected_rooms = {
+                    r for r in self.connected_rooms if _norm_room(r) != _norm_room(target)
+                }
+                self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != _norm_room(target)}
+                _save_persistent_rooms(self.known_rooms)
                 reply = f"🚫 البوت محظور من الغرفة {target}. أعطِ البوت إشرافاً أو أونر ثم أعد المحاولة: دخول@{target}"
             else:
-                reply = f"{'✅ تم طلب دخول الغرفة' if joined else '⚠️ الغرفة متصلة بالفعل'}: {target} | المتصلة فعلياً: {len(self.connected_rooms)}"
+                joined = self.join_room(target, requested_by=sender)
+                reply = (
+                    f"⏳ تم إرسال طلب دخول الغرفة: {target}. انتظر تأكيد الخادم."
+                    if joined else
+                    f"⚠️ الغرفة متصلة بالفعل: {target} | المتصلة فعلياً: {len(self.connected_rooms)}"
+                )
             self.send_private_text(sender, reply)
             return True
         m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
