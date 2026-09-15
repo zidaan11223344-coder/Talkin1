@@ -4162,10 +4162,11 @@ class TalkinBot:
             return _get_points(username)
         return _add_points(username, int(amount))
 
-    def _game_ready(self, username, room, cooldown=30.0):
-        # فاصل موحّد 30 ثانية بين جميع الألعاب لكل لاعب داخل الغرفة.
-        # كل غرفة مستقلة؛ لعب لعبة في غرفة لا يمنع اللعب في غرفة أخرى.
-        key=(str(room or "").casefold(), _norm_user(username))
+    def _game_ready(self, username, room, cooldown=30.0, game_name=""):
+        # فاصل 30 ثانية لكل لعبة على حدة لكل لاعب.
+        # لعب لعبة أخرى لا يفعّل فاصل هذه اللعبة، والفاصل موحّد عبر الغرف.
+        game_key=_norm_user(game_name) or "general"
+        key=(game_key, _norm_user(username))
         now=time.time()
         with self.game_lock:
             last=self.game_cooldown.get(key,0.0)
@@ -4174,8 +4175,8 @@ class TalkinBot:
             self.game_cooldown[key]=now
         return True,0
 
-    def _game_cooldown_notice(self, room, username, cooldown=30.0):
-        ok, left = self._game_ready(username, room, cooldown)
+    def _game_cooldown_notice(self, room, username, cooldown=30.0, game_name=""):
+        ok, left = self._game_ready(username, room, cooldown, game_name)
         if not ok:
             self.send_room_text(room, f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.")
         return ok
@@ -4294,10 +4295,13 @@ class TalkinBot:
         if amount <= 0:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
+        # The 30-second interval belongs to this game only; another game can be played immediately.
+        if not self._game_cooldown_notice(room, sender, 30.0, game_name):
+            return True
 
         self._cleanup_expired_wagers()
         # GLOBAL queue: the same game challenge is shared by every room.
-        # Do NOT include room in this key.
+        # Same-room play is allowed; room is intentionally NOT part of the key.
         key = game_name.casefold()
         waiting = None
         error = None
@@ -4321,7 +4325,7 @@ class TalkinBot:
                     )
 
             if error is None and waiting:
-                # A second player may enter ANY amount, even from another room.
+                # A second player may enter ANY amount, from the same room or another room.
                 # Their room and stake are both preserved for the final result.
                 self.wager_waiting.pop(key, None)
             elif error is None:
@@ -4346,11 +4350,9 @@ class TalkinBot:
             }
             self._wager_result(waiting, second, game_name)
 
-            # Cooldown is local to each player's own room after the match.
-            with self.game_lock:
-                now = time.time()
-                self.game_cooldown[(str(waiting.get("room") or "").casefold(), _norm_user(waiting.get("user")))] = now
-                self.game_cooldown[(str(room or "").casefold(), _norm_user(sender))] = now
+            # _game_ready already recorded the 30-second cooldown per game/user.
+            # It is independent of room, so changing rooms or using another game
+            # does not create a false cooldown.
             return True
 
         game_labels = {
@@ -4436,9 +4438,9 @@ class TalkinBot:
                     self.log("[GAME] fixed result image failed:",result_room,repr(exc))
 
     def _queue_fixed_game(self, room, sender, game_name, prize=500):
-        """Global two-player queue for the new fixed-prize games."""
+        """Global two-player queue; both players may enter from the same room or different rooms."""
         prize=int(prize)
-        if not self._game_cooldown_notice(room,sender):
+        if not self._game_cooldown_notice(room,sender,30.0,game_name):
             return True
         if not _is_primary_master(sender) and _get_points(sender) < prize:
             self.send_room_text(room,f"❌ تحتاج {prize} نقطة للمشاركة في {game_name}. رصيدك: {_fmt_points(_get_points(sender))}")
@@ -4454,10 +4456,8 @@ class TalkinBot:
         if waiting:
             second={"user":sender,"room":room}
             self._fixed_game_result(waiting,second,game_name,prize)
-            with self.game_lock:
-                now=time.time()
-                self.game_cooldown[(str(waiting.get("room") or "").casefold(),_norm_user(waiting.get("user")))]=now
-                self.game_cooldown[(str(room or "").casefold(),_norm_user(sender))]=now
+            # Cooldown was already recorded by _game_ready using only game + user.
+            # Same-room participation remains allowed.
             return True
 
         challenge=(
@@ -4478,7 +4478,7 @@ class TalkinBot:
         return True
 
     def _fruit_match(self, room, sender, emoji):
-        if not self._game_cooldown_notice(room, sender):
+        if not self._game_cooldown_notice(room, sender, 30.0, "فيس"):
             return True
         fruits=("🍓","🍇","🍉","🍌","🍋","🍊","🍐","🍎","🍏","🥑","🥦","🍑","🥭","🍍","🥥","🥝","🍅","🍆","🧄","🥕","🌽","🌶️")
         if emoji not in fruits:
@@ -4555,7 +4555,7 @@ class TalkinBot:
         if crop not in crops:
             self.send_room_text(room, "❌ اختر محصولاً من قائمة زرع.")
             return True
-        if not self._game_cooldown_notice(room, sender):
+        if not self._game_cooldown_notice(room, sender, 30.0, "زرع"):
             return True
         user_key=_norm_user(sender)
         # لكل مستخدم يمكن تشغيل نفس المحصول حتى 5 مرات في الوقت نفسه.
@@ -4591,7 +4591,7 @@ class TalkinBot:
         return True
 
     def _lottery_game(self, room, sender, amount=0):
-        if not self._game_cooldown_notice(room, sender):
+        if not self._game_cooldown_notice(room, sender, 30.0, game_name):
             return True
         amount = int(amount or 0)
         if amount < 0:
@@ -4646,7 +4646,7 @@ class TalkinBot:
         return True
 
     def _investment_bot_game(self, room, sender):
-        if not self._game_cooldown_notice(room, sender):
+        if not self._game_cooldown_notice(room, sender, 30.0, "استثمار"):
             return True
         """Free investment game against the bot. No @amount and no image."""
         # Pure random outcome; no stake and no dependency on command order.
@@ -4752,53 +4752,69 @@ class TalkinBot:
                 self.log("[GAME] steal result image failed:", repr(exc))
 
     def _room_member_usernames_for_steal(self, room, exclude_username=""):
-        """Return a randomizable member list from the current room.
-        Prefer the live occupants cache, then the complete room_members DB list.
-        """
+        """Return a complete/randomizable member list from the current room."""
         excluded = {_norm_user(exclude_username), _norm_user(BOT_ID)}
-        # Masters are protected from theft because their balance is unlimited.
-        protected_masters = set()
         candidates = []
+        seen = set()
+
+        def add_user(value):
+            u = str(value or "").strip().lstrip("@").strip()
+            key = _norm_user(u)
+            if not u or not key or key in excluded or key in seen or _is_master_name(u):
+                return
+            seen.add(key)
+            candidates.append(u)
+
+        # Live cache first.
         live = self.room_users.get(room, {}) if room else {}
-        for username in live.keys() if isinstance(live, dict) else []:
-            u = str(username or "").strip().lstrip("@")
-            if u and _norm_user(u) not in excluded and _norm_user(u) not in protected_masters and not _is_master_name(u) and _norm_user(u) not in {_norm_user(x) for x in candidates}:
-                candidates.append(u)
-        if not candidates and getattr(self, "db", None):
+        if isinstance(live, dict):
+            for username in live.keys():
+                add_user(username)
+
+        # Complete persistent roster next, including members who are offline.
+        try:
+            for username in _persistent_roster_users(room):
+                add_user(username)
+        except Exception as exc:
+            self.log("[GAME] persistent steal roster lookup failed:", repr(exc))
+
+        # Native DB roster as an additional fallback/source.
+        if getattr(self, "db", None):
             try:
                 for item in self.db.room_users(room) or []:
-                    u = str(item.get("username") or "").strip().lstrip("@")
-                    if u and _norm_user(u) not in excluded and _norm_user(u) not in protected_masters and not _is_master_name(u) and _norm_user(u) not in {_norm_user(x) for x in candidates}:
-                        candidates.append(u)
+                    if isinstance(item, dict):
+                        add_user(item.get("username"))
+                    else:
+                        add_user(item)
             except Exception as exc:
                 self.log("[GAME] steal room member lookup failed:", repr(exc))
         return candidates
 
-    def _steal_game(self, room, sender):
-        if not self._game_cooldown_notice(room, sender):
+    def _steal_game(self, room, sender, requested_victim=""):
+        if not self._game_cooldown_notice(room, sender, 30.0, "اسرق"):
             return True
 
         members = self._room_member_usernames_for_steal(room, sender)
-        self.send_room_text(room, f"🕵️ @{sender} جاري البحث عن الضحية...\n🔎 يتم اختيار أحد أعضاء الغرفة عشوائياً.")
+        self.send_room_text(room, f"🕵️ @{sender} جاري البحث عن الضحية...")
         if not members:
             self.send_room_text(room, "❌ فشلت السرقة: لا يوجد عضو آخر متاح للسرقة حالياً.")
             self._send_steal_image(room, "اسرق_فشل")
-            return True
-
-        victim = secrets.choice(members)
-
-        # Sometimes the thief is caught before the attempt succeeds.
-        # This is only a playful in-game message; no real report is made.
-        if secrets.randbelow(5) == 0:
-            self.send_room_text(
-                room,
-                f"🚨 @{sender} حاول سرقة @{victim}...\n"
-                f"🚔 السرقة حرام، تم إبلاغ الشرطة! 😁\n"
-                f"❌ لم تتم السرقة."
-            )
-            self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
             return True
+
+        # `اسرق` = choose a victim randomly; `اسرق@username` / `اسرق username` = target that member.
+        victim = ""
+        if requested_victim:
+            wanted = _norm_user(requested_victim)
+            for candidate in members:
+                if _norm_user(candidate) == wanted:
+                    victim = candidate
+                    break
+            if not victim:
+                self.send_room_text(room, f"❌ لم أجد @{requested_victim} ضمن أعضاء الغرفة.")
+                return True
+        else:
+            victim = secrets.choice(members)
 
         victim_balance = _get_points(victim)
         if victim_balance < 500:
@@ -4807,6 +4823,18 @@ class TalkinBot:
                 f"🕵️ @{sender} حاول سرقة @{victim}...\n"
                 f"❌ فشلت السرقة، المسروق @{victim} مفلس.\n"
                 f"💰 رصيده: {_fmt_points(victim_balance)}"
+            )
+            self._send_steal_image(room, "اسرق_فشل")
+            _record_game(sender, "steal", 0, 500)
+            return True
+
+        # The result is random each attempt: usually success, sometimes the police catch the thief.
+        if secrets.randbelow(100) >= 70:
+            self.send_room_text(
+                room,
+                f"🚨 @{sender} حاول سرقة @{victim}...\n"
+                f"🚔 السرقة حرام، تم إبلاغ الشرطة! 😁\n"
+                f"❌ لم تتم السرقة."
             )
             self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
@@ -4869,7 +4897,7 @@ class TalkinBot:
         if m:
             return self._lottery_game(room, sender_name, int(m.group(1)))
         if low in ("مليون","million"):
-            if not self._game_cooldown_notice(room, sender_name):
+            if not self._game_cooldown_notice(room, sender_name, 30.0, "مليون"):
                 return True
             # Restore the first status message used by the original million game.
             self.send_room_text(room, "🔎 جاري البحث عن مليون...")
@@ -4889,7 +4917,7 @@ class TalkinBot:
         if low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
         if low in ("حجر","ورق","مقص"):
-            if not self._game_cooldown_notice(room, sender_name):
+            if not self._game_cooldown_notice(room, sender_name, 30.0, "حجر_ورق_مقص"):
                 return True
             bot_choice=secrets.choice(("حجر","ورق","مقص"))
             win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
@@ -4900,10 +4928,14 @@ class TalkinBot:
             _record_game(sender_name,"rps",reward,0)
             self.send_room_text(room, f"✂️ @{sender_name}: {low} | 🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 {_fmt_points(balance)}")
             return True
+        # Steal: random victim with `اسرق`, or a named room member with `اسرق@username` / `اسرق username`.
+        m=re.fullmatch(r"اسرق(?:@|\s+@?)([^@\s]+)", raw, re.I)
+        if m:
+            return self._steal_game(room, sender_name, m.group(1).strip().lstrip("@"))
         if low == "اسرق":
             return self._steal_game(room, sender_name)
         if low in ("سرقة", "رشوة"):
-            if not self._game_cooldown_notice(room, sender_name):
+            if not self._game_cooldown_notice(room, sender_name, 30.0, "سرقة" if low == "سرقة" else "رشوة"):
                 return True
             label = "🕵️ سرقة" if low == "سرقة" else "💼 رشوة"
             won = secrets.randbelow(2) == 0
