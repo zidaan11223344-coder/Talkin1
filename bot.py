@@ -2615,7 +2615,9 @@ class TalkinBot:
         self.music_current = {}
         self._profile_status_lock = threading.Lock()
         self._profile_status_timer = None
+        self._profile_status_check_timer = None
         self._profile_status_token = 0
+        self._profile_status_pending = ""
         self._profile_base_status = BOT_BASE_STATUS
         self._profile_current_status = BOT_BASE_STATUS
         self.music_lock = threading.Lock()
@@ -3785,6 +3787,8 @@ class TalkinBot:
                 if username and username.casefold() == BOT_ID.casefold() and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
+                        if status == getattr(self, "_profile_status_pending", ""):
+                            self._profile_status_pending = ""
                         if self._profile_status_timer is None and not BOT_BASE_STATUS:
                             self._profile_base_status = status
                 if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
@@ -3796,6 +3800,8 @@ class TalkinBot:
                 if username and username.casefold() == BOT_ID.casefold() and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
+                        if status == getattr(self, "_profile_status_pending", ""):
+                            self._profile_status_pending = ""
                         if self._profile_status_timer is None and not BOT_BASE_STATUS:
                             self._profile_base_status = status
                 if username and photo and photo.startswith(("http://", "https://")):
@@ -4201,6 +4207,7 @@ class TalkinBot:
         to select the matching profile-update action without changing code.
         """
         status = str(status or "").strip()
+        self._profile_status_pending = status
         if len(status) > PROFILE_STATUS_MAX_CHARS:
             # Keep the important formatted lines when a server has a short
             # profile-status limit; never send a partial/unclosed HTML block.
@@ -4227,6 +4234,13 @@ class TalkinBot:
                 ))
                 self.log("[PROFILE] status update sent via", action)
                 sent = True
+                check = threading.Timer(8.0, self._check_profile_status_delivery, args=(status,))
+                check.daemon = True
+                old_check = getattr(self, "_profile_status_check_timer", None)
+                if old_check is not None:
+                    old_check.cancel()
+                self._profile_status_check_timer = check
+                check.start()
             except Exception as exc:
                 self.log("[PROFILE] action failed", action, repr(exc))
             if not sent:
@@ -4237,6 +4251,14 @@ class TalkinBot:
             self.log("[PROFILE] status update failed:", repr(exc))
             self._notify_profile_status_failure(f"{type(exc).__name__}: {exc}")
             return False
+
+    def _check_profile_status_delivery(self, expected: str):
+        """Warn the master when the server accepts but does not echo a status."""
+        pending = str(getattr(self, "_profile_status_pending", "") or "").strip()
+        if pending == expected:
+            self._notify_profile_status_failure(
+                "تم إرسال الحزمة لكن الخادم لم يؤكد ظهور الحالة بعد 8 ثوانٍ."
+            )
 
     def _notify_profile_status_failure(self, reason: str):
         """Notify the master once per cooldown when profile status cannot be sent."""
