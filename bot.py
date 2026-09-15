@@ -1687,22 +1687,20 @@ def _message_template(section,key,default,**kwargs):
 def _command_menu():
     return _command_menu_for(False)
 
-def _command_menu_for(is_master=False):
-    # help1 (الإدارة) and help7 (الماستر والفلتر) are master-only.
-    # help2..help6 are public.
-    if is_master:
+def _command_menu_for(is_master=False, is_private=False):
+    # help1 contains management commands and is shown only to masters in private chat.
+    if is_master and is_private:
         return (
             "📚 أوامر البوت\n"
             "━━━━━━━━━━━━\n"
-            "help1 — الإدارة\n"
+            "help1 — أوامر الإدارة\n"
             "help2 — الموسيقى والتفاعلات\n"
             "help3 — الألعاب\n"
             "help4 — الهدايا والنشر\n"
             "help5 — النقاط\n"
             "help6 — الغرف\n"
-            "help7 — الماستر والفلتر\n"
             "━━━━━━━━━━━━\n"
-            "اكتب help1 إلى help7 لعرض الأوامر"
+            "اكتب\nhelp1 إلى help6 لعرض الأوامر"
         )
     return (
         "📚 أوامر البوت\n"
@@ -1747,11 +1745,6 @@ def _default_help_sections():
         6: [
             '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد\n\n📌 inv يعمل داخل الغرفة المطلوبة، ويتطلب رفع البوت أونر عند الحاجة.',
             '🏠 الغرف والترحيب — 2\n━━━━━━━━━━━━\nsay نص — إرسال نص داخل الغرفة\nقل نص — إرسال نص داخل الغرفة\n\n+sr@اسم_المستخدم@النص — إضافة رد/ترحيب مخصص (ماستر)\nsr@on — تشغيل الردود المخصصة\nsr@off — إيقاف الردود المخصصة\nswc+@اسم_الحساب@النص — إضافة ترحيب مخصص (ماستر)\nswc@on — تشغيل الترحيبات\nswc@off — إيقاف الترحيبات\n\n🛡️ حماية وتكرار الغرفة تُدار من صلاحيات الإدارة.',
-        ],
-        7: [
-            '👑 الماستر والتوثيق — 1\n━━━━━━━━━━━━\nmas@اسم — إضافة ماستر\numas@اسم — إزالة ماستر\nالمسترات — عرض الماسترات\nl@mas — عرض ماسترات الإدارة\n\nmvip@اسم — إضافة ماستر توثيق\numvip@اسم — إزالة ماستر توثيق\nl@mvip — عرض ماسترات التوثيق',
-            '✅ التوثيق — 2\n━━━━━━━━━━━━\nvi@اسم — توثيق مستخدم\nvi — عرض الموثقين\nالموثقين — عرض الموثقين\nuns@اسم — إزالة التوثيق\nازالة توثيق@اسم — إزالة التوثيق\nتوثيق الكل — توثيق جميع مستخدمي الغرف\n\nvip@اسم — توثيق VIP\nunvip@اسم — إلغاء VIP\nvip — عرض قائمة VIP\nحسابات vip — عرض قائمة VIP',
-            '🚫 الفلتر والأوامر الإضافية — 3\n━━━━━━━━━━━━\nmf@on — تشغيل فلتر الكلمات\nmf@off — إيقاف فلتر الكلمات\n+mf@كلمة — إضافة كلمة ممنوعة\n-mf@كلمة — إزالة كلمة ممنوعة\nl@mf — عرض الكلمات الممنوعة\nclear@mf — حذف الكلمات الممنوعة\n\n📌 أوامر الفلتر والماستر حسب الصلاحية.\n\n━━━━━━━━━━━━\nℹ️ للتنقل: اكتب Ns',
         ],
     }
 
@@ -5192,16 +5185,16 @@ class TalkinBot:
         _body_text = str(body or "").strip()
         _body_low = _body_text.casefold()
         if _body_low in ("اوامر", "الاوامر", "help", "مساعدة"):
-            menu = _command_menu_for(False)
+            menu = _command_menu_for(_is_master_name(sender), is_private=is_private)
             if is_private:
                 self.send_private_text(sender, menu)
             elif room:
                 self.send_room_text(room, menu)
             return True
-        _m_public_help = re.fullmatch(r"help([1-7])", _body_low)
+        _m_public_help = re.fullmatch(r"help([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
-            if _page in (1, 7) and not _is_master_name(sender):
+            if _page == 1 and (not _is_master_name(sender) or not is_private):
                 return False
             self._send_help(room=room, private_to=sender if is_private else None, page=_page)
             return True
@@ -5325,7 +5318,7 @@ class TalkinBot:
             if not _is_master_name(sender):
                 return False
             target = sender if is_private else None
-            menu = _command_menu_for(True)
+            menu = _command_menu_for(True, is_private=is_private)
             if target:
                 self.send_private_text(target, menu)
             else:
@@ -5333,16 +5326,16 @@ class TalkinBot:
             return True
         if low in ("اوامر","الاوامر","help","مساعدة"):
             target = sender if is_private else None
-            menu = _command_menu_for(_is_master_name(sender))
+            menu = _command_menu_for(_is_master_name(sender), is_private=is_private)
             if target:
                 self.send_private_text(target, menu)
             else:
                 self.send_room_text(room, menu)
             return True
-        m_help = re.fullmatch(r"help([1-7])", low)
+        m_help = re.fullmatch(r"help([1-6])", low)
         if m_help:
             page=int(m_help.group(1))
-            if page in (1, 7) and not _is_master_name(sender):
+            if page == 1 and (not _is_master_name(sender) or not is_private):
                 return True
             key=(str(room), _norm_user(sender))
             self.help_pages[key]=page
