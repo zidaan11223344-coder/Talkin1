@@ -42,7 +42,7 @@ try:
 except Exception:
     yt_dlp = None
 try:
-    from PIL import Image, ImageDraw, ImageFont, features
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter, features
     PIL_AVAILABLE = True
 except Exception:
     Image = ImageDraw = ImageFont = None
@@ -2066,88 +2066,170 @@ def _load_sender_avatar(photo_url, size=190):
 
 
 def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", receiver_photo_url=""):
+    """Render the gift card exactly as the Talkin reference layout.
+
+    Important:
+    - The ORIGINAL gift artwork is used; no new gift picture is generated.
+    - Sender/receiver avatars stay INSIDE their own name rectangles.
+    - The gift artwork fills the card as much as possible without distortion.
+    - The final card is rendered larger and sharpened only to compensate for
+      the small source gift files.
+    """
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
 
-    # Keep the usernames exactly as supplied by Talkin/command. Do not
-    # translate, transliterate, or otherwise change their characters.
     sender_name = str(sender_name or "")
     receiver_name = str(receiver_name or "")
-    files=[p for p in GIFT_IMAGE_FILES.get(str(gift_id),[]) if p.is_file()]
+
+    files = [p for p in GIFT_IMAGE_FILES.get(str(gift_id), []) if p.is_file()]
     if not files:
         raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
 
-    # Prefer the square gift variants.  The old renderer randomly selected
-    # 280x187 variants and then stretched them to the full card, which made
-    # the actual gift artwork visibly blurry.  Square variants preserve much
-    # more of the original artwork when the card is enlarged.
-    square_files=[]
-    for p in files:
+    # Use the highest-resolution available original gift image.
+    def _image_area(path):
         try:
-            with Image.open(p) as src:
-                if src.width == src.height and src.width >= 280:
-                    square_files.append(p)
+            with Image.open(path) as src:
+                return int(src.width) * int(src.height)
         except Exception:
-            pass
-    if square_files:
-        files=square_files
+            return 0
 
-    # Revert to the earlier elegant gift template instead of the last ornate
-    # layout. The sender photo is placed on top of the gift artwork when a
-    # public Talkin profile photo is available.
-    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
-    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
-    image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA")
+    files.sort(key=_image_area, reverse=True)
+    gift_path = files[0]
+
+    template_path = BASE_DIR / "assets" / "gift_template_elegant.png"
+    if template_path.is_file():
+        template = Image.open(template_path).convert("RGBA")
+    else:
+        template = Image.new("RGBA", (1239, 1270), (0, 0, 0, 0))
+
+    # Work at a genuinely large final canvas.  Keep the template's original
+    # aspect ratio so the frame is enlarged horizontally and vertically
+    # without being stretched.
+    target_w = 900
+    target_h = max(1, round(target_w * template.height / template.width))
+    template = template.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+    # The gift itself remains proportional.  Since the supplied gift artwork
+    # is square, a center crop into the nearly-square card preserves its
+    # important details instead of squeezing it.
+    gift_src = Image.open(gift_path).convert("RGBA")
+    image = _fit_crop(gift_src, (target_w, target_h)).convert("RGBA")
     image.alpha_composite(template)
-    d=ImageDraw.Draw(image); w,h=template.size
-    gold=(244,196,92,255); panel=(10,14,28,245)
 
-    header=(int(w*.27),65,int(w*.73),205)
-    d.rounded_rectangle(header,radius=48,fill=panel,outline=gold,width=4)
-    gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
-    _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
+    d = ImageDraw.Draw(image)
+    w, h = image.size
+    gold = (244, 196, 92, 255)
+    panel = (10, 14, 28, 248)
 
-    # Keep each username in a clear rectangle and place that user's photo
-    # inside the rectangle at its end.
-    box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
-    top_y=int(h*.675); bottom_y=int(h*.815)
-    for y in (top_y,bottom_y):
-        d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
-    avatar_inputs = (sender_photo_url, receiver_photo_url)
+    # Gift title.
+    header = (int(w * .27), int(h * .052), int(w * .73), int(h * .162))
+    d.rounded_rectangle(header, radius=30, fill=panel, outline=gold, width=4)
+    gift_name = GIFT_CATALOG.get(str(gift_id), ("🎁", "هدية"))[1]
+    _draw_centered(
+        d,
+        ((header[0] + header[2]) / 2, header[1] + (header[3] - header[1]) / 2),
+        "هدية " + gift_name,
+        32,
+        (255, 222, 155, 255),
+        header[2] - header[0] - 40,
+    )
+
+    # These are the ONLY two identity panels.
+    # The avatar is placed inside the right end of each rectangle, matching
+    # the reference screenshot. It is never placed on top of the gift art.
+    box_w = int(w * .66)
+    box_h = int(h * .125)
+    box_x = int(w * .27)
+    top_y = int(h * .675)
+    bottom_y = int(h * .815)
+
+    for y in (top_y, bottom_y):
+        d.rounded_rectangle(
+            (box_x, y, box_x + box_w, y + box_h),
+            radius=24,
+            fill=panel,
+            outline=gold,
+            width=4,
+        )
+
+    avatar_size = 112
+    avatar_x = box_x + box_w - avatar_size - 16
+    avatar_ys = (
+        top_y + (box_h - avatar_size) // 2,
+        bottom_y + (box_h - avatar_size) // 2,
+    )
+
     with ThreadPoolExecutor(max_workers=2) as pool:
-        avatars = list(pool.map(lambda url: _load_sender_avatar(url, 96), avatar_inputs))
-    for (y, label, name, photo), avatar in zip((
-        (top_y, "المرسل", sender_name, sender_photo_url),
-        (bottom_y, "المستلم", receiver_name, receiver_photo_url),
-    ), avatars):
+        avatars = list(
+            pool.map(
+                lambda url: _load_sender_avatar(url, avatar_size),
+                (sender_photo_url, receiver_photo_url),
+            )
+        )
+
+    # Labels and names are centered in the remaining panel area, while the
+    # circular photo occupies its own reserved area inside the rectangle.
+    text_center_x = box_x + (box_w - avatar_size - 24) / 2
+    text_max_w = box_w - avatar_size - 42
+
+    for idx, (y, label, name) in enumerate(
+        (
+            (top_y, "المرسل", sender_name),
+            (bottom_y, "المستلم", receiver_name),
+        )
+    ):
+        avatar = avatars[idx]
         if avatar is not None:
-            image.alpha_composite(avatar, (box_x+box_w-108, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
-        _draw_centered(d,(box_x+box_w*.43,y+34),label,25,(255,224,165,255),box_w-125)
+            image.alpha_composite(avatar, (int(avatar_x), int(avatar_ys[idx])))
 
-    # Same visual text as the chat username: no @ removal, no transliteration.
-    # Use distinct high-contrast colors so sender/receiver are immediately
-    # recognizable while the dark stroke keeps decorated glyphs readable.
-    sender_color=(126,226,255,255)     # turquoise-blue for the sender
-    receiver_color=(255,166,218,255)   # pink-magenta for the receiver
-    panel_center_x = box_x + box_w / 2
-    _draw_name_centered(d,(box_x+box_w*.43,top_y+box_h*.68),sender_name,39,sender_color,box_w-135)
-    _draw_name_centered(d,(box_x+box_w*.43,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-135)
+        _draw_centered(
+            d,
+            (text_center_x, y + int(box_h * .27)),
+            label,
+            22,
+            (255, 224, 165, 255),
+            text_max_w,
+        )
 
-    out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
-    out.parent.mkdir(parents=True,exist_ok=True)
-    # Static output replaces the old animated GIF because motion reduced
-    # clarity in Talkin previews.  The canvas is slightly larger, and the
-    # quality is reduced only as needed to stay below 100 KiB.
-    # Send a genuinely larger card so Talkin can display the same clear look
-    # as the reference screenshot.  640x656 is almost twice the old 360x370
-    # linear resolution while keeping the original vertical proportions.
-    rgb=image.convert("RGB").resize((640,656),Image.LANCZOS)
-    for quality in (92,88,84,80,76,72,68,64,60,56,52,48):
-        rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
-        if out.stat().st_size <= 95 * 1024:
+    sender_color = (126, 226, 255, 255)
+    receiver_color = (255, 166, 218, 255)
+
+    _draw_name_centered(
+        d,
+        (text_center_x, top_y + box_h * .68),
+        sender_name,
+        38,
+        sender_color,
+        text_max_w,
+    )
+    _draw_name_centered(
+        d,
+        (text_center_x, bottom_y + box_h * .68),
+        receiver_name,
+        38,
+        receiver_color,
+        text_max_w,
+    )
+
+    # A light unsharp mask improves the apparent clarity of the ORIGINAL
+    # 280x280 gift artwork after enlargement; it does not invent a new image.
+    try:
+        image = image.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
+    except Exception:
+        pass
+
+    out = BASE_DIR / "generated_gifts" / f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    rgb = image.convert("RGB")
+    # Keep the large 900px card and use high JPEG quality.  There is no
+    # artificial 95KB cap here because that cap was the reason the card was
+    # being compressed too aggressively and losing visible detail.
+    for quality in (94, 92, 90, 88, 86, 84, 82):
+        rgb.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        if out.stat().st_size <= 180 * 1024:
             break
-    if out.stat().st_size > 95 * 1024:
-        raise RuntimeError("تعذر ضغط بطاقة الهدية إلى أقل من 95 كيلوبايت")
+
     return out
 
 class _MediaHandler(SimpleHTTPRequestHandler):
