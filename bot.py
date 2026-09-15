@@ -16,6 +16,7 @@ import re
 import queue
 import mimetypes
 import unicodedata
+import html
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, unquote
@@ -1351,7 +1352,7 @@ def _looks_like_bot_command(text):
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "خروج",
         "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
-        "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
+        "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
     return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game") or low in {x.casefold() for x in GAME_COMMANDS}
@@ -2264,6 +2265,96 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
 
     return out
 
+
+# ============================================================
+# شبيه المستخدم: بحث تلقائي عن صورة من الويب وإرسالها للغرفة.
+# لا ننشئ صورة جديدة؛ نستخدم صورة حقيقية من نتائج البحث العامة.
+# ============================================================
+LOOKALIKE_DIR = BASE_DIR / "generated_lookalikes"
+LOOKALIKE_TIMEOUT = (5, 12)
+
+
+def _extract_image_urls_from_bing(html_text):
+    """Extract public image URLs from Bing Images HTML without extra packages."""
+    text = html.unescape(str(html_text or ""))
+    urls = []
+    # Bing commonly embeds image metadata as murl in JSON-like attributes.
+    patterns = (
+        r'"murl"\s*:\s*"(https?://[^"\\]+)',
+        r'&quot;murl&quot;\s*:\s*&quot;(https?://[^&]+)',
+        r'"mediaurl"\s*:\s*"(https?://[^"\\]+)',
+    )
+    for pattern in patterns:
+        for match in re.findall(pattern, text, flags=re.I):
+            try:
+                url = bytes(match, "utf-8").decode("unicode_escape")
+            except Exception:
+                url = match
+            url = url.replace('\\/', '/').strip()
+            if url.startswith("https://") or url.startswith("http://"):
+                if url not in urls:
+                    urls.append(url)
+    return urls
+
+
+def _search_lookalike_image(query):
+    """Search Bing Images and return the first downloadable image URL."""
+    q = str(query or "").strip()
+    if not q:
+        return None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 "
+                      "Chrome/120.0 Mobile Safari/537.36",
+        "Accept-Language": "ar,en;q=0.8",
+    }
+    try:
+        r = requests.get(
+            "https://www.bing.com/images/search",
+            params={"q": q, "form": "HDRSC2", "first": "1"},
+            headers=headers,
+            timeout=LOOKALIKE_TIMEOUT,
+        )
+        r.raise_for_status()
+        urls = _extract_image_urls_from_bing(r.text)
+        return urls[0] if urls else None
+    except Exception:
+        return None
+
+
+def _download_lookalike_image(image_url, target_name):
+    """Download, validate, and lightly optimize a found image."""
+    if not image_url:
+        return None
+    LOOKALIKE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        r = requests.get(
+            image_url,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"},
+            timeout=LOOKALIKE_TIMEOUT,
+            stream=True,
+        )
+        r.raise_for_status()
+        data = r.content
+        if len(data) > 8 * 1024 * 1024:
+            return None
+        if not PIL_AVAILABLE:
+            return None
+        from io import BytesIO
+        img = Image.open(BytesIO(data)).convert("RGB")
+        # Keep the found image recognizable; only normalize dimensions/file size.
+        max_side = 1100
+        if max(img.size) > max_side:
+            scale = max_side / float(max(img.size))
+            img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))), Image.LANCZOS)
+        out = LOOKALIKE_DIR / f"look_{uuid.uuid4().hex}.jpg"
+        for quality in (92, 88, 84, 80, 76, 72):
+            img.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+            if out.stat().st_size <= 220 * 1024:
+                break
+        return out if out.is_file() else None
+    except Exception:
+        return None
+
 class _MediaHandler(SimpleHTTPRequestHandler):
     def _resolve_target(self):
         path=unquote(urlparse(self.path).path)
@@ -2273,6 +2364,8 @@ class _MediaHandler(SimpleHTTPRequestHandler):
             rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
         elif path.startswith("/media/"):
             rel=path[len("/media/"):].lstrip("/"); root=(BASE_DIR/"generated_music").resolve(); target=(BASE_DIR/"generated_music"/rel).resolve()
+        elif path.startswith("/lookalikes/"):
+            rel=path[len("/lookalikes/"):].lstrip("/"); root=LOOKALIKE_DIR.resolve(); target=(LOOKALIKE_DIR/rel).resolve()
         else:
             return None
         if root not in target.parents or not target.is_file(): return None
@@ -2329,7 +2422,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
 def start_asset_server():
     if not ASSET_HTTP_ENABLED: return None
     try:
-        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True)
+        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
         print(f"[MEDIA] HTTP server listening on :{ASSET_HTTP_PORT}",flush=True)
@@ -4335,6 +4428,66 @@ class TalkinBot:
                     self.log("[GAME] investment result image failed:", repr(exc))
         return True
 
+    def _handle_lookalike_command(self, room, body, sender):
+        """Handle شبيه@username / شبيه username in a background worker."""
+        if not room:
+            return True
+        text = str(body or "").strip()
+        m = re.fullmatch(r"(?:شبيه|شبيهك)@(.+)", text, re.I)
+        if not m:
+            m = re.fullmatch(r"(?:شبيه|شبيهك)\s+(.+)", text, re.I)
+        if not m:
+            return False
+        target = m.group(1).strip().lstrip("@").strip()
+        if not target:
+            self.send_room_text(room, "❌ الصيغة: شبيه@اسم_المستخدم")
+            return True
+        # Avoid several expensive web searches by the same user at once.
+        busy = getattr(self, "_lookalike_busy", set())
+        key = (_norm_user(sender), str(room))
+        if key in busy:
+            self.send_room_text(room, f"⏳ @{sender} جاري البحث عن شبيه @{target}...")
+            return True
+        busy.add(key)
+        self._lookalike_busy = busy
+        self.send_room_text(room, f"🔎 جاري البحث عن شبيه @{target}...")
+
+        def worker():
+            try:
+                # Searching the username itself usually gives the most relevant
+                # public results; Arabic "شبيه" is added to broaden lookalike-style results.
+                query = f"{target} شبيه"
+                image_url = _search_lookalike_image(query)
+                if not image_url:
+                    self.send_room_text(room, f"❌ لم أجد صورة مناسبة لـ @{target}.")
+                    return
+                local = _download_lookalike_image(image_url, target)
+                if not local:
+                    self.send_room_text(room, f"❌ وجدت نتيجة لكن تعذر تحميل الصورة لـ @{target}.")
+                    return
+                base = _public_base_url()
+                if not base:
+                    self.send_room_text(room, "❌ رابط الصور العام غير مضبوط في إعدادات البوت.")
+                    return
+                public_url = f"{base}/lookalikes/{local.name}"
+                # The phrase is intentionally a playful result, not an identity claim.
+                self.send_room_text(room, f"👤 شبيهك هو @{target}")
+                self.send_room_media(room, public_url, "image")
+            except Exception as exc:
+                self.log("[LOOKALIKE] failed:", repr(exc))
+                try:
+                    self.send_room_text(room, "❌ تعذر البحث عن صورة الشبيه حالياً.")
+                except Exception:
+                    pass
+            finally:
+                try:
+                    busy.discard(key)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, name="lookalike-search", daemon=True).start()
+        return True
+
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
@@ -5149,6 +5302,10 @@ class TalkinBot:
                 self.log("[WORD-FILTER] native room ban", frm, "word=", hit, "room=", room)
             except Exception as exc:
                 self.log("[WORD-FILTER] failed:", repr(exc))
+            return
+
+        # شبيه: متاح كأمر غرفة مستقل ولا يحتاج توثيقاً.
+        if self._handle_lookalike_command(room, body, frm):
             return
 
         # Reactions/comments/reports: notify the original publisher privately.
