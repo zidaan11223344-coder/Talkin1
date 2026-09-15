@@ -151,14 +151,21 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
     "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
 ).split(",") if x.strip()]
-BOT_BASE_STATUS = os.getenv(
-    "BOT_BASE_STATUS",
-    '<B><H3><font color="#FFD700">بوت حمايه والعاب واغاني</font><br>'
-    '<font color="#00E5FF">لمعرفه الالعاب والاوامر ارسل مساعده</font><br>'
-    '<font color="#FF4FD8">لدخول الغرف ارسل دخول@اسم الغرفه</font><br>'
-    '<font color="#7CFF00">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫سـفـيــ۫ـۧـر𝁤𝆬𝃛</font>'
-    '</H3></B>',
+MASTER_DISPLAY_NAME = os.getenv(
+    "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
+DEFAULT_BOT_BASE_STATUS = (
+    '<h3><p style="background-color:#000000;padding:20px;text-align:center;">'
+    '<font color="#b73206" size="7">بوت حمايه والعاب واغاني</font></p>'
+    '<b><h2><p style="background-color:#0C090A;">'
+    '<font color="#FFE87C">لمعرفه الالعاب والاوامر ارسل مساعده</font></p></h2></b>'
+    '<br><br><span style="color:#af0365;font-size:60px;">'
+    'لدخول الغرف ارسل دخول اسم الغرفه</span><br>'
+    '<span style="color:#66D9FF;font-size:42px;">الماستر: '
+    f'{MASTER_DISPLAY_NAME}</span></h3>'
+)
+BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
+PROFILE_STATUS_MAX_CHARS = max(300, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "700")))
 GIFT_STATUS_SECONDS = 15 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
@@ -429,6 +436,9 @@ DEBUG = os.getenv("DEBUG", "1") == "1"
 RAW_DIAGNOSTIC = os.getenv("RAW_DIAGNOSTIC", "0") == "1"
 ACK_ROOM_EVENTS = os.getenv("ACK_ROOM_EVENTS", "1") == "1"
 AUTO_HELP = os.getenv("AUTO_HELP", "1") == "1"
+SAFE_TEXT_PACKET_LIMIT = max(120, int(os.getenv("SAFE_TEXT_PACKET_LIMIT", "260")))
+HELP_LINES_PER_MESSAGE = max(1, int(os.getenv("HELP_LINES_PER_MESSAGE", "10")))
+HELP_PACKET_MAX_CHARS = max(400, int(os.getenv("HELP_PACKET_MAX_CHARS", "900")))
 BANNED_WORDS = {w.strip().lower() for w in os.getenv("BANNED_WORDS", "").split(",") if w.strip()}
 AUTO_BAN_WORDS = os.getenv("AUTO_BAN_WORDS", "1") == "1"
 
@@ -1693,7 +1703,7 @@ def _command_menu_for(is_master=False, is_private=False):
         return (
             "📚 أوامر البوت\n"
             "━━━━━━━━━━━━\n"
-            "help1 — أوامر الإدارة\n"
+            "help1 — الإدارة\n"
             "help2 — الموسيقى والتفاعلات\n"
             "help3 — الألعاب\n"
             "help4 — الهدايا والنشر\n"
@@ -1730,7 +1740,7 @@ def _default_help_sections():
             '❤️ التفاعلات والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nشبيه@اسم — البحث عن الشبيه\nشبيهك@اسم — البحث عن شبيهك\n\n📌 التفاعل يكون على كود المنشور/المحتوى المرسل من البوت.',
         ],
         3: [
-            '🎮 الألعاب — 1: التحديات والنقاط\n━━━━━━━━━━━━\nالعاب / ألعاب / لعب / games / game — عرض قائمة الألعاب\nرهان@المبلغ — رهان لاعب ضد لاعب\nمراهنة@المبلغ — مراهنة لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nاستثمار — استثمار مجاني مع البوت\nحظ@المبلغ — حظ بمبلغ\nحظ — حظ عشوائي\nحجر / ورق / مقص — لعبة ضد البوت',
+            '🎮 الألعاب — 1: التحديات\n━━━━━━━━━━━━\nالعاب / ألعاب / لعب / games / game — عرض قائمة الألعاب\nرهان@المبلغ — رهان لاعب ضد لاعب\nمراهنة@المبلغ — مراهنة لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nاستثمار — استثمار مجاني مع البوت\nحظ@المبلغ — حظ بمبلغ\nحظ — حظ عشوائي\nحجر / ورق / مقص — لعبة ضد البوت',
             '🎮 الألعاب — 2: الألعاب الفردية\n━━━━━━━━━━━━\nمليون — لعبة المليون\nزرع@رمز_المحصول — زراعة محصول\nفيس@الرمز — مطابقة/تحدي الفيس\nاسرق — سرقة عشوائية من عضو\nاسرق@اسم — سرقة من عضو محدد\nاسرق اسم — سرقة من عضو محدد\n\n🌱 الزراعة: حتى 5 أنواع مختلفة في نفس الوقت.\n📌 كل لعبة لها نظام تبريد خاص بها عند تطبيقه.',
             '🎮 الألعاب — 3: الألعاب العالمية\n━━━━━━━━━━━━\nصيد — تحدي عالمي، الفائز +500\nسرعة — تحدي عالمي، الفائز +500\nكنز — تحدي عالمي، الفائز +500\nمصارعة — تحدي عالمي، الفائز +500\nبحث — تحدي عالمي، الفائز +500\n\n📌 أول لاعب يفتح الجولة، والثاني ينضم من أي غرفة موجود فيها البوت.\n📌 نتيجة الجولة والصورة تظهر للمشاركين فقط.',
         ],
@@ -1755,25 +1765,11 @@ def _default_help_pages():
 
 
 def _help_sections_from_messages():
-    defaults = _default_help_sections()
-    data = _load_local_json(MESSAGES_FILE, {})
-    raw = data.get("help_sections") if isinstance(data, dict) else None
-    if isinstance(raw, dict):
-        sections = {}
-        for key, value in raw.items():
-            try:
-                page = int(key)
-            except Exception:
-                continue
-            if isinstance(value, list):
-                cleaned = [str(v).replace("\\n", "\n") for v in value if isinstance(v, str) and v.strip()]
-                if cleaned:
-                    sections[page] = cleaned
-        if sections:
-            merged = {**defaults}
-            merged.update(sections)
-            return merged
-    return defaults
+    # The six help pages are a fixed public contract. Older deployments may
+    # still contain root/bot_data messages.json files with a mixed help_pages
+    # format; never let those legacy files merge categories together.
+    # The canonical categories are defined in _default_help_sections().
+    return _default_help_sections()
 
 def _help_pages_from_messages():
     defaults=_default_help_pages()
@@ -2949,16 +2945,16 @@ class TalkinBot:
         return [text] if text else [""]
 
     def _send_text_packets(self, packet_type: str, text: str, **kwargs):
-        # All normal results stay in ONE message: games, music, publishing,
-        # points, admin results, etc. Only command-menu pages are split.
+        # Normal replies remain one complete message. Only help menus use the
+        # explicit line-based batching in _send_help_chunks below.
         payload = dict(kwargs)
         payload["type_"] = "text"
         payload["body"] = str(text or "")
         self.send_query(encode_query(packet_type, **payload))
         return True
 
-    def _send_help_chunks(self, packet_type: str, text: str, limit: int = 300, **kwargs):
-        """Send a command list in ordered chunks, each <= 300 chars."""
+    def _send_help_chunks(self, packet_type: str, text: str, limit: int = HELP_PACKET_MAX_CHARS, **kwargs):
+        """Send help menus as ordered lists of at most ten lines."""
         text = str(text or "")
         if not text:
             return True
@@ -2966,17 +2962,11 @@ class TalkinBot:
         chunks=[]; current=""
         for line in lines:
             candidate = line if not current else current + "\n" + line
-            if len(candidate) <= limit:
+            if len(current.splitlines()) < HELP_LINES_PER_MESSAGE and len(candidate) <= limit:
                 current=candidate
             else:
                 if current:
                     chunks.append(current)
-                # A single command should normally fit; hard-split only if needed.
-                while len(line) > limit:
-                    cut=line.rfind(" ",0,limit+1)
-                    if cut < max(20,limit//2): cut=limit
-                    chunks.append(line[:cut].rstrip())
-                    line=line[cut:].lstrip()
                 current=line
         if current: chunks.append(current)
         for chunk in chunks:
@@ -3275,6 +3265,28 @@ class TalkinBot:
         # Do not repeat the menu for an unrecognized follow-up message.
         return True
 
+    def _relay_private_to_owner(self, sender: str, body: str, media_url: str = ""):
+        """Mirror master-account private traffic to the configured owner.
+
+        MASTER_SUPPORT_USERNAME is the single owner/support account used for
+        complaints, so it also receives private messages while the master
+        service is running. Exclude the owner and local bot accounts to avoid
+        forwarding loops and internal control chatter.
+        """
+        owner = str(MASTER_SUPPORT_USERNAME or "").strip()
+        sender = str(sender or "").strip()
+        if not owner or not sender:
+            return False
+        excluded = {_norm_user(owner), _norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID)}
+        if _norm_user(sender) in excluded:
+            return False
+        parts = [f"📨 رسالة خاصة من @{sender}:"]
+        if body:
+            parts.append(str(body))
+        if media_url:
+            parts.append(f"📎 وسائط: {media_url}")
+        return bool(self.send_private_text(owner, "\n".join(parts)))
+
     def _handle_master_account_service(self, sender: str, body: str):
         """Private auto-service handled by the master account itself.
 
@@ -3359,6 +3371,9 @@ class TalkinBot:
                     # Final notification is always sent by the master account
                     # directly to the verified user, not to a room.
                     self.send_private_text(requester, reply)
+                    owner = str(MASTER_SUPPORT_USERNAME or "").strip()
+                    if owner and _norm_user(owner) not in {_norm_user(requester), _norm_user(BOT_ID)}:
+                        self.send_private_text(owner, f"✅ تم توثيق @{target} بنجاح.\n📩 مقدم الطلب: @{requester}")
                 return True
             # Any private message from the primary bot is internal; never show
             # it to other users and never fall through to the service menu.
@@ -3772,7 +3787,7 @@ class TalkinBot:
                 if username and username.casefold() == BOT_ID.casefold() and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
-                        if self._profile_status_timer is None:
+                        if self._profile_status_timer is None and not BOT_BASE_STATUS:
                             self._profile_base_status = status
                 if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
@@ -3783,7 +3798,7 @@ class TalkinBot:
                 if username and username.casefold() == BOT_ID.casefold() and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
-                        if self._profile_status_timer is None:
+                        if self._profile_status_timer is None and not BOT_BASE_STATUS:
                             self._profile_base_status = status
                 if username and photo and photo.startswith(("http://", "https://")):
                     self.user_photos[username.casefold()] = photo
@@ -4188,6 +4203,18 @@ class TalkinBot:
         to select the matching profile-update action without changing code.
         """
         status = str(status or "").strip()
+        if len(status) > PROFILE_STATUS_MAX_CHARS:
+            # Keep the important formatted lines when a server has a short
+            # profile-status limit; never send a partial/unclosed HTML block.
+            compact_base = (
+                f'<b><font color="#b73206">بوت حمايه والعاب واغاني</font><br>'
+                f'<font color="#FFE87C">لمعرفه الالعاب والاوامر ارسل مساعده</font><br>'
+                f'<font color="#af0365">لدخول الغرف ارسل دخول اسم الغرفه</font><br>'
+                f'<font color="#66D9FF">الماستر: {MASTER_DISPLAY_NAME}</font></b>'
+            )
+            status = status.split("<br>", 3)[0] + "<br>" + compact_base
+            if len(status) > PROFILE_STATUS_MAX_CHARS:
+                status = re.sub(r"\s+", " ", status)[:PROFILE_STATUS_MAX_CHARS]
         try:
             sent = False
             for action in PROFILE_STATUS_ACTIONS:
@@ -4288,7 +4315,13 @@ class TalkinBot:
             self._verify_public_media_url(gift_url, "image")
             if not gift_path.is_file() or gift_path.stat().st_size < 64:
                 raise RuntimeError(f"ملف صورة الهدية غير صالح: {gift_path}")
-            # Gift sending must NEVER update the profile status. Some Talkin server builds close the WebSocket when a profile-status packet is sent during a gift.
+            # Put the gift notice above the configured base status in one
+            # bounded profile-status value, then restore the base status later.
+            self._set_temporary_gift_status(
+                sender_name,
+                target,
+                GIFT_CATALOG.get(str(gift_id), ("🎁", "هدية"))[1],
+            )
             if private_to:
                 self.send_private_media(private_to, gift_url, "image")
                 self.send_private_text(private_to, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
@@ -6225,6 +6258,8 @@ class TalkinBot:
                     ):
                         self.log("[DEDUP] ignored repeated private message")
                         return
+                    if MASTER_SERVICE_ENABLED:
+                        self._relay_private_to_owner(frm, body, media_url)
                     if _norm_user(frm) == _norm_user(BOT_MASTER):
                         self.master_online = True
                         self.master_last_seen = time.time()
@@ -6303,10 +6338,16 @@ class TalkinBot:
                         elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I):
                             target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
                             blocked_room = _norm_room(target_room)
+                            was_blocked = blocked_room in self.blocked_rooms
                             self.blocked_rooms.discard(blocked_room)
                             self._blocked_room_notices.discard(blocked_room)
-                            self.join_room(target_room, force=True)
-                            self.send_private_text(BOT_MASTER, f"✅ دخلت الغرفة: {target_room} | الغرف الحالية: {len(self.known_rooms)}")
+                            joined = self.join_room(target_room, force=True)
+                            if joined:
+                                self.send_private_text(BOT_MASTER, f"⏳ تم طلب دخول الغرفة: {target_room} | المتصلة فعلياً: {len(self.connected_rooms)}")
+                            elif was_blocked:
+                                self.send_private_text(BOT_MASTER, f"🚫 الغرفة {target_room} مسجلة كغرفة محظورة/غير متاحة. ارفع البوت إشرافاً أو أونر ثم أعد المحاولة.")
+                            else:
+                                self.send_private_text(BOT_MASTER, f"⚠️ تعذر طلب دخول الغرفة: {target_room}. تحقق من اسم الغرفة وصلاحية البوت.")
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
                                 ok = self.leave_room(arg)
@@ -6434,9 +6475,14 @@ class TalkinBot:
         # Keep every room selected by the master. A reconnect restores the
         # existing room set once; room-event handlers never leave/rejoin in a
         # loop, which avoids the visible leave/join cycle.
-        rooms_to_restore = set() if MASTER_SERVICE_ENABLED else {str(r).strip() for r in self.known_rooms if str(r).strip()}
+        blocked_norm = {_norm_room(r) for r in getattr(self, "blocked_rooms", set())}
+        rooms_to_restore = set() if MASTER_SERVICE_ENABLED else {
+            str(r).strip() for r in self.known_rooms
+            if str(r).strip() and _norm_room(r) not in blocked_norm
+        }
         if self.room and not MASTER_SERVICE_ENABLED:
-            rooms_to_restore.add(str(self.room).strip())
+            if _norm_room(self.room) not in blocked_norm:
+                rooms_to_restore.add(str(self.room).strip())
         for room in sorted(rooms_to_restore):
             self.join_room(room, force=True)
 
@@ -6497,7 +6543,7 @@ class TalkinBot:
                                 if reason:
                                     self.send_private_text(
                                         BOT_MASTER,
-                                        f"⚠️ انقطع الاتصال ثم عاد الاتصال بنجاح. السبب: {reason}",
+                                        "✅ عاد اتصال البوت بنجاح بعد انقطاع مؤقت. تم تقسيم الرسائل الكبيرة تلقائياً.",
                                     )
                                 elif not self._had_connection:
                                     self.send_private_text(BOT_MASTER, "✅ تم الدخول والاتصال بنجاح.")
