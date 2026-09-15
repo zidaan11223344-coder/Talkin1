@@ -2834,15 +2834,30 @@ class TalkinBot:
         self.log("[ROOM] marked blocked/inaccessible:", room, reason)
 
     def _room_failure_message(self, room: str, event_type: str):
+        event_type = str(event_type or "").replace("_rejoin", "").replace("room_full _rejoin", "room_full")
         labels = {
-            "room_unauthorized_rejoin": "🚫 البوت محظور من الغرفة",
-            "room_membership_required_rejoin": "🚫 الغرفة للأعضاء/تحتاج عضوية للبوت",
-            "room_full_rejoin": "⚠️ الغرفة ممتلئة ولا يمكن للبوت الدخول",
-            "room_wrong_password_rejoin": "🔐 الغرفة تحتاج كلمة مرور أو كلمة المرور غير صحيحة",
-            "room_needs_password_rejoin": "🔐 الغرفة تحتاج كلمة مرور",
-            "room_needs_captcha_rejoin": "🤖 الغرفة تطلب تحقق CAPTCHA ولا يمكن للبوت الدخول آلياً",
+            "room_unauthorized": "🚫 البوت محظور من الغرفة",
+            "room_membership_required": "🚫 الغرفة للأعضاء/تحتاج عضوية للبوت",
+            "room_full": "⚠️ الغرفة ممتلئة ولا يمكن للبوت الدخول",
+            "room_wrong_password": "🔐 الغرفة تحتاج كلمة مرور أو كلمة المرور غير صحيحة",
+            "room_needs_password": "🔐 الغرفة تحتاج كلمة مرور",
+            "room_needs_captcha": "🤖 الغرفة تطلب تحقق CAPTCHA ولا يمكن للبوت الدخول آلياً",
         }
         return labels.get(event_type, "❌ تعذر دخول البوت إلى الغرفة")
+
+    def _join_timeout(self, room_norm: str):
+        pending = self._pending_room_joins.pop(str(room_norm or ""), None)
+        if not pending:
+            return
+        room = str(pending.get("room") or room_norm).strip()
+        requester = str(pending.get("requested_by") or "").strip()
+        self.log("[ROOM] join confirmation timeout:", room)
+        if requester:
+            self.send_private_text(
+                requester,
+                f"⚠️ لم يؤكد الخادم دخول البوت إلى الغرفة: {room}. "
+                "قد تكون الغرفة محظورة أو للأعضاء فقط؛ تحقق من صلاحية البوت ثم أعد المحاولة.",
+            )
 
     def join_room(self, room: str, force: bool = False, requested_by: str = ""):
         """Join a room, allowing a previously-left room to be joined again.
@@ -2879,6 +2894,14 @@ class TalkinBot:
             "requested_by": str(requested_by or "").strip(),
         }
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
+        timer = threading.Timer(
+            max(10.0, float(os.getenv("JOIN_CONFIRM_TIMEOUT_SECONDS", "20"))),
+            self._join_timeout,
+            args=(_norm_room(room),),
+        )
+        timer.daemon = True
+        self._pending_room_joins[_norm_room(room)]["timer"] = timer
+        timer.start()
         self.known_rooms.add(room)
         _save_persistent_rooms(self.known_rooms)
         self.request_room_occupants(room)
@@ -6121,6 +6144,8 @@ class TalkinBot:
             self.last_joined_room = room
             rnorm = _norm_room(room)
             pending_join = self._pending_room_joins.pop(rnorm, None)
+            if pending_join and pending_join.get("timer"):
+                pending_join["timer"].cancel()
             self.blocked_rooms.discard(rnorm)
             self._blocked_room_reasons.pop(rnorm, None)
             self._blocked_room_notices.discard(rnorm)
@@ -6128,7 +6153,13 @@ class TalkinBot:
             requester = str((pending_join or {}).get("requested_by", "") or "").strip()
             if requester:
                 self.send_private_text(requester, f"✅ أكد الخادم دخول البوت إلى الغرفة: {room}")
-        elif event_type in ("room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin", "room_needs_captcha_rejoin", "room_needs_password_rejoin", "room_membership_required_rejoin"):
+        elif event_type in (
+            "room_full", "room_unauthorized", "room_wrong_password",
+            "room_needs_captcha", "room_needs_password", "room_membership_required",
+            "room_full_rejoin", "room_unauthorized_rejoin", "room_wrong_password_rejoin",
+            "room_needs_captcha_rejoin", "room_needs_password_rejoin",
+            "room_membership_required_rejoin",
+        ):
             # IMPORTANT: do not immediately send room_join here.  These events
             # can be emitted repeatedly by the server when a room rejects a
             # join.  The old code answered every event with another room_join,
@@ -6136,19 +6167,28 @@ class TalkinBot:
             # to run_once(), while a rejoin is attempted at most once after a
             # long cooldown and never recursively from this event handler.
             self.log("[ROOM] server requested rejoin; delayed reconnect")
-            failure_events = {"room_unauthorized_rejoin", "room_membership_required_rejoin", "room_full_rejoin", "room_wrong_password_rejoin", "room_needs_password_rejoin", "room_needs_captcha_rejoin"}
+            failure_events = {
+                "room_unauthorized", "room_membership_required", "room_full",
+                "room_wrong_password", "room_needs_password", "room_needs_captcha",
+                "room_unauthorized_rejoin", "room_membership_required_rejoin",
+                "room_full_rejoin", "room_wrong_password_rejoin",
+                "room_needs_password_rejoin", "room_needs_captcha_rejoin",
+            }
             if event_type in failure_events:
                 blocked_room = _norm_room(room)
                 reason_text = self._room_failure_message(room, event_type)
                 pending_join = self._pending_room_joins.pop(blocked_room, None)
+                if pending_join and pending_join.get("timer"):
+                    pending_join["timer"].cancel()
                 self._mark_room_blocked(room, reason_text)
-                if event_type == "room_unauthorized_rejoin":
+                normalized_event = event_type.replace("_rejoin", "")
+                if normalized_event == "room_unauthorized":
                     advice = "ارفع البوت إشرافاً أو أونر ثم أعد المحاولة."
-                elif event_type == "room_membership_required_rejoin":
+                elif normalized_event == "room_membership_required":
                     advice = "الغرفة للأعضاء فقط؛ أضف البوت للغرفة ثم أعد المحاولة."
-                elif event_type == "room_full_rejoin":
+                elif normalized_event == "room_full":
                     advice = "الغرفة ممتلئة؛ فرّغ مقعداً ثم أعد المحاولة."
-                elif event_type in ("room_wrong_password_rejoin", "room_needs_password_rejoin"):
+                elif normalized_event in ("room_wrong_password", "room_needs_password"):
                     advice = "تأكد من كلمة مرور الغرفة ثم أعد المحاولة."
                 else:
                     advice = "الغرفة تطلب تحققاً لا يستطيع البوت إكماله آلياً."
@@ -6348,6 +6388,27 @@ class TalkinBot:
                 return
             result = decode_result_message(message)
             self._cache_user_photos_from_result(result)
+            # Room join outcomes are emitted as top-level ResultMessage types
+            # by some TalkinChat builds, not as nested RoomEvent packets.
+            join_result_types = {
+                "success", "room_unauthorized", "room_membership_required",
+                "room_full", "room_wrong_password", "room_needs_password",
+                "room_needs_captcha", "room_unauthorized_rejoin",
+                "room_membership_required_rejoin", "room_full_rejoin",
+                "room_wrong_password_rejoin", "room_needs_password_rejoin",
+                "room_needs_captcha_rejoin",
+            }
+            result_type = str(result.get("type") or "").strip()
+            result_room = str(result.get("value") or "").strip()
+            if (
+                result_type in join_result_types
+                and result_room
+                and (result_type != "success" or _norm_room(result_room) in self._pending_room_joins)
+            ):
+                self.handle_room_event({
+                    "room_event": {1: "you_joined" if result_type == "success" else result_type, 13: result_room},
+                    "uid": result.get("uid", ""),
+                })
             if "room_event" in result:
                 self.handle_room_event(result)
             if result.get("rooms"):
