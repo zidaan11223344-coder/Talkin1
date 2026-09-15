@@ -132,7 +132,7 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # Talkin profile-status query can differ between server builds. Keep the
 # action configurable while defaulting to the native profile update name.
 PROFILE_STATUS_ACTIONS = [x.strip() for x in os.getenv(
-    "PROFILE_STATUS_ACTIONS", "update_profile,profile_update,user_update"
+    "PROFILE_STATUS_ACTIONS", "update_profile"
 ).split(",") if x.strip()]
 BOT_BASE_STATUS = os.getenv(
     "BOT_BASE_STATUS",
@@ -1347,7 +1347,7 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "sb@", "i@", "inv", "دعوات", "invite", "دخول ", "خروج", "join ",
-        "say ", "قل ", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
+        "say ", "قل ", "تحويل@vip@", "تحويل للكل@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "كنز", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf",
     )
@@ -2077,10 +2077,13 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     if not files:
         raise FileNotFoundError("صور الهدية غير موجودة داخل assets")
 
-    # Static clean gift card: use the gift artwork directly, without the old
-    # ornate/animated overlay. Keep a large canvas so the gift remains clear.
-    template=Image.new("RGBA",(1500,1650),(0,0,0,0))
+    # Revert to the earlier elegant gift template instead of the last ornate
+    # layout. The sender photo is placed on top of the gift artwork when a
+    # public Talkin profile photo is available.
+    template_path=BASE_DIR/"assets"/"gift_template_elegant.png"
+    template=Image.open(template_path).convert("RGBA") if template_path.is_file() else Image.new("RGBA",(1239,1270),(0,0,0,0))
     image=_fit_crop(Image.open(random.choice(files)),template.size).convert("RGBA")
+    image.alpha_composite(template)
     d=ImageDraw.Draw(image); w,h=template.size
     gold=(244,196,92,255); panel=(10,14,28,245)
 
@@ -2089,38 +2092,38 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     gift_name=GIFT_CATALOG.get(str(gift_id),("🎁","هدية"))[1]
     _draw_centered(d,((header[0]+header[2])/2,135),"هدية "+gift_name,42,(255,222,155,255),header[2]-header[0]-50)
 
-    # Keep each username in a clear rectangle. The profile photo is OUTSIDE
-    # the rectangle and sits beside it, so it never covers the username.
-    box_w=int(w*.70); box_h=int(h*.115); box_x=int(w*.22)
-    avatar_size=int(box_h*.78)
-    avatar_x=box_x+box_w+28
-    top_y=int(h*.700); bottom_y=int(h*.825)
+    # Keep each username in a clear rectangle and place that user's photo
+    # inside the rectangle at its end.
+    box_w=int(w*.66); box_h=int(h*.125); box_x=int(w*.27)
+    top_y=int(h*.675); bottom_y=int(h*.815)
     for y in (top_y,bottom_y):
         d.rounded_rectangle((box_x,y,box_x+box_w,y+box_h),radius=32,fill=panel,outline=gold,width=5)
     avatar_inputs = (sender_photo_url, receiver_photo_url)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        avatars = list(pool.map(lambda url: _load_sender_avatar(url, avatar_size), avatar_inputs))
+        avatars = list(pool.map(lambda url: _load_sender_avatar(url, 96), avatar_inputs))
     for (y, label, name, photo), avatar in zip((
         (top_y, "المرسل", sender_name, sender_photo_url),
         (bottom_y, "المستلم", receiver_name, receiver_photo_url),
     ), avatars):
         if avatar is not None:
-            image.alpha_composite(avatar, (avatar_x, y+(box_h-avatar_size)//2)); d=ImageDraw.Draw(image)
-        _draw_centered(d,(box_x+box_w/2,y+box_h*.34),label,28,(255,224,165,255),box_w-50)
+            image.alpha_composite(avatar, (box_x+box_w-108, y+(box_h-96)//2)); d=ImageDraw.Draw(image)
+        _draw_centered(d,(box_x+box_w*.43,y+34),label,25,(255,224,165,255),box_w-125)
 
     # Same visual text as the chat username: no @ removal, no transliteration.
     # Use distinct high-contrast colors so sender/receiver are immediately
     # recognizable while the dark stroke keeps decorated glyphs readable.
     sender_color=(126,226,255,255)     # turquoise-blue for the sender
     receiver_color=(255,166,218,255)   # pink-magenta for the receiver
-    _draw_name_centered(d,(box_x+box_w/2,top_y+box_h*.68),sender_name,46,sender_color,box_w-55)
-    _draw_name_centered(d,(box_x+box_w/2,bottom_y+box_h*.68),receiver_name,46,receiver_color,box_w-55)
+    panel_center_x = box_x + box_w / 2
+    _draw_name_centered(d,(box_x+box_w*.43,top_y+box_h*.68),sender_name,39,sender_color,box_w-135)
+    _draw_name_centered(d,(box_x+box_w*.43,bottom_y+box_h*.68),receiver_name,39,receiver_color,box_w-135)
 
     out=BASE_DIR/"generated_gifts"/f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True,exist_ok=True)
-    # Static PNG/JPEG output replaces animation. Render substantially larger
-    # in both directions, then compress only as much as needed for transport.
-    rgb=image.convert("RGB").resize((600,660),Image.LANCZOS)
+    # Static output replaces the old animated GIF because motion reduced
+    # clarity in Talkin previews.  The canvas is slightly larger, and the
+    # quality is reduced only as needed to stay below 100 KiB.
+    rgb=image.convert("RGB").resize((360,370),Image.LANCZOS)
     for quality in (88,82,76,70,64,58,52):
         rgb.save(out,"JPEG",quality=quality,optimize=True,progressive=True)
         if out.stat().st_size < 100 * 1024:
@@ -4459,6 +4462,29 @@ class TalkinBot:
                 lines = [f"🏠 الغرف المتصلة فعلياً ({len(live)}):"]
                 lines.extend(f"{i}. {room}" for i, room in enumerate(live, 1))
                 self.send_private_text(sender, "\n".join(lines))
+            return True
+
+        # Master-only: distribute points to every saved VIP account.
+        # Syntax: تحويل@vip@1000
+        m_vip_all = re.fullmatch(r"تحويل@vip@(\d+)", text, re.I)
+        if m_vip_all:
+            if not _is_master_name(sender):
+                self.send_private_text(sender, "🚫 أمر تحويل النقاط للماستر فقط.")
+                return True
+            amount = int(m_vip_all.group(1))
+            if amount <= 0:
+                self.send_private_text(sender, "❌ عدد النقاط يجب أن يكون أكبر من صفر.")
+                return True
+            vip_users = _vip_data()
+            count = 0
+            for key, info in vip_users.items():
+                username = str(info.get("username") or key).strip().lstrip("@") if isinstance(info, dict) else str(key).strip().lstrip("@")
+                if not username or _norm_user(username) == _norm_user(BOT_ID):
+                    continue
+                new_balance = _add_points(username, amount)
+                count += 1
+                self.send_private_text(username, f"💰 إشعار تحويل VIP: استلمت {_fmt_points(amount)} نقطة من الماستر @{sender}. رصيدك الحالي: {_fmt_points(new_balance)}")
+            self.send_private_text(sender, f"✅ تم تحويل {_fmt_points(amount)} نقطة إلى {count} حساب VIP.")
             return True
 
         m_all = re.fullmatch(r"تحويل للكل@(\d+)", text, re.I)
