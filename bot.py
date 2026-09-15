@@ -92,6 +92,14 @@ GAME_IMAGE_FILES = {
     "duel": "game_duel.jpg",
     "luck": "game_luck.jpg",
     "investment": "game_investment.jpg",
+    # New global fixed-prize games.
+    "صيد": "game_hunt_fishing.jpg",
+    "سرعة": "game_speed.jpg",
+    "كنز": "game_treasure.jpg",
+    "مصارعة": "game_battle.jpg",
+    "بحث": "game_search.jpg",
+    "اسرق_نجاح": "game_steal_success.jpg",
+    "اسرق_فشل": "game_steal_failure.jpg",
 }
 GAME_COMMANDS = {}
 # Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
@@ -1692,7 +1700,7 @@ def _default_help_pages():
     return {
         1: '📋 أوامر الإدارة\n━━━━━━━━━━━━\nk@اسم — طرد\nb@اسم — حظر\nub@اسم — فك الحظر\na@اسم — تعيين مشرف\no@اسم — تعيين مالك',
         2: '🎵 الموسيقى\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل',
-        3: '🎮 الألعاب\n━━━━━━━━━━━━\nرهان@المبلغ — رهان (للموثقين)\nمضاربة@المبلغ — مضاربة\nاستثمار@المبلغ — استثمار\nحظي@المبلغ — حظي ثنائي\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون',
+        3: '🎮 الألعاب\n━━━━━━━━━━━━\nرهان@المبلغ — رهان (للموثقين)\nمضاربة@المبلغ — مضاربة\nاستثمار@المبلغ — استثمار\nحظي@المبلغ — حظي ثنائي\nصيد — لعبة عالمية، جائزة 500\nسرعة — لعبة عالمية، جائزة 500\nكنز — لعبة عالمية، جائزة 500\nمصارعة — لعبة عالمية، جائزة 500\nبحث — لعبة عالمية، جائزة 500\nاسرق — سرقة 500 نقطة من عضو عشوائي\nحظ@المبلغ — حظ عشوائي مع البوت\nمليون — لعبة المليون',
         4: '🎁 الهدايا والنشر\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nانشر — نشر صورة\nانشر@وصف — نشر صورة بوصف\nsay نص — إرسال نص',
         5: '💰 النقاط\n━━━━━━━━━━━━\nنقاطي — الرصيد وتفاصيل الألعاب والمستوى\nتوب — المتصدرين العام\nتوب رهان | توب مضاربة | توب حظي | توب استثمار\nsb@اسم@عدد — تحويل للموثقين',
         6: '🚪 الغرف\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nخروج — خروج من الغرف\nخروج اسم_الغرفة — خروج من غرفة\ni@اسم — دعوة مستخدم واحد\ninv — دعوة المستخدمين\ninv اسم_الغرفة — دعوة من غرفة\ninvmsg نص — تغيير رسالة الدعوة\nsay نص — إرسال نص',
@@ -2549,6 +2557,8 @@ class TalkinBot:
         self.help_pages = {}
         # Global wager queues, crop timers, and fruit-match state.
         self.wager_waiting = {}
+        # Global fixed-prize PvP queues: one open challenge per game name.
+        self.fixed_game_waiting = {}
         raw_crops=_load_local_json(CROP_PLOTS_FILE,{})
         self.crop_plots = raw_crops if isinstance(raw_crops,dict) else {}
         self.fruit_games = {}
@@ -4193,6 +4203,8 @@ class TalkinBot:
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليون — فرصة عشوائية للفوز بمليون نقطة.\n"
             "🌱 زرع — كل محصول يمكن زراعته حتى 5 مرات معاً لكل مستخدم.\n"
+            "🆕 صيد | سرعة | كنز | مصارعة | بحث — ألعاب عالمية، الجائزة 500 نقطة.\n"
+            "🕵️ اسرق — اختر عضوًا عشوائيًا وحاول سرقة 500 نقطة منه.\n"
             "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار")
 
     def _game_balance_ok(self, username, amount):
@@ -4358,6 +4370,111 @@ class TalkinBot:
         # GLOBAL challenge announcement: every tracked bot room sees the same
         # open challenge, regardless of where the first player started it.
         self.broadcast_all_rooms(opening)
+        return True
+
+    def _fixed_game_result(self, first, second, game_name, prize=500):
+        """Resolve a global fixed-prize game. Winner +prize, loser -prize.
+        The challenge is global, while the final text/image is sent only to the
+        two rooms where the two players entered.
+        """
+        prize = int(prize)
+        winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
+
+        # Re-check balances at settlement so a player cannot join with 500,
+        # spend it elsewhere, and then fall below the fixed loss amount.
+        for player in (first, second):
+            username = player.get("user")
+            if not _is_primary_master(username) and _get_points(username) < prize:
+                rooms=[]
+                for target in (first.get("room"), second.get("room")):
+                    target=str(target or "").strip()
+                    if target and target.casefold() not in {r.casefold() for r in rooms}:
+                        rooms.append(target)
+                msg=f"⚠️ تم إلغاء جولة {game_name}. اللاعب @{username} لا يملك {prize} نقطة كافية للمخاطرة."
+                for r in rooms:
+                    self.send_room_text(r,msg)
+                return
+
+        if not _is_primary_master(loser.get("user")):
+            _add_points(loser.get("user"), -prize)
+        if not _is_primary_master(winner.get("user")):
+            _add_points(winner.get("user"), prize)
+
+        game_key=game_name
+        _record_game(loser.get("user"), game_key, -prize, prize)
+        _record_game(winner.get("user"), game_key, prize, prize)
+
+        text=(
+            f"🏆 انتهت لعبة {game_name}\n"
+            f"━━━━━━━━━━━━\n"
+            f"👤 اللاعب الأول: @{first['user']}\n"
+            f"👤 اللاعب الثاني: @{second['user']}\n\n"
+            f"👑 الفائز: @{winner['user']}\n"
+            f"🎁 المكافأة: +{_fmt_points(prize)} نقطة\n"
+            f"📉 الخاسر: @{loser['user']} (-{_fmt_points(prize)} نقطة)\n"
+            f"━━━━━━━━━━━━"
+        )
+
+        result_rooms=[]
+        seen=set()
+        for target in (first.get("room"), second.get("room")):
+            target=str(target or "").strip()
+            key=target.casefold()
+            if target and key not in seen:
+                seen.add(key); result_rooms.append(target)
+        for result_room in result_rooms:
+            self.send_room_text(result_room,text)
+
+        filename=GAME_IMAGE_FILES.get(game_name)
+        base=_public_base_url()
+        image=ASSETS_DIR / filename if filename else None
+        if base and image and image.is_file():
+            for result_room in result_rooms:
+                try:
+                    self.send_room_media(result_room,f"{base}/assets/{filename}","image")
+                except Exception as exc:
+                    self.log("[GAME] fixed result image failed:",result_room,repr(exc))
+
+    def _queue_fixed_game(self, room, sender, game_name, prize=500):
+        """Global two-player queue for the new fixed-prize games."""
+        prize=int(prize)
+        if not self._game_cooldown_notice(room,sender):
+            return True
+        if not _is_primary_master(sender) and _get_points(sender) < prize:
+            self.send_room_text(room,f"❌ تحتاج {prize} نقطة للمشاركة في {game_name}. رصيدك: {_fmt_points(_get_points(sender))}")
+            return True
+
+        with self.game_lock:
+            waiting=self.fixed_game_waiting.get(game_name)
+            if waiting and _norm_user(waiting.get("user")) == _norm_user(sender):
+                return True
+            if waiting:
+                self.fixed_game_waiting.pop(game_name,None)
+
+        if waiting:
+            second={"user":sender,"room":room}
+            self._fixed_game_result(waiting,second,game_name,prize)
+            with self.game_lock:
+                now=time.time()
+                self.game_cooldown[(str(waiting.get("room") or "").casefold(),_norm_user(waiting.get("user")))]=now
+                self.game_cooldown[(str(room or "").casefold(),_norm_user(sender))]=now
+            return True
+
+        challenge=(
+            f"🎮🔥 لعبة {game_name} جديدة!\n"
+            f"━━━━━━━━━━━━\n"
+            f"👤 اللاعب: @{sender}\n"
+            f"🎁 جائزة الجولة: {_fmt_points(prize)} نقطة\n"
+            f"🌍 الجولة عالمية بين جميع غرف البوت\n\n"
+            f"🤝 للمشاركة اكتب: {game_name}"
+        )
+        with self.game_lock:
+            # Re-check in case another event created the queue while we prepared.
+            if game_name not in self.fixed_game_waiting:
+                self.fixed_game_waiting[game_name]={"user":sender,"room":room,"created":time.time()}
+            else:
+                return True
+        self.broadcast_all_rooms(challenge)
         return True
 
     def _fruit_match(self, room, sender, emoji):
@@ -4624,6 +4741,93 @@ class TalkinBot:
         threading.Thread(target=worker, name="lookalike-search", daemon=True).start()
         return True
 
+    def _send_steal_image(self, room, game_key):
+        filename = GAME_IMAGE_FILES.get(game_key)
+        base = _public_base_url()
+        image = ASSETS_DIR / filename if filename else None
+        if base and image and image.is_file():
+            try:
+                self.send_room_media(room, f"{base}/assets/{filename}", "image")
+            except Exception as exc:
+                self.log("[GAME] steal result image failed:", repr(exc))
+
+    def _room_member_usernames_for_steal(self, room, exclude_username=""):
+        """Return a randomizable member list from the current room.
+        Prefer the live occupants cache, then the complete room_members DB list.
+        """
+        excluded = {_norm_user(exclude_username), _norm_user(BOT_ID)}
+        # Masters are protected from theft because their balance is unlimited.
+        protected_masters = set()
+        candidates = []
+        live = self.room_users.get(room, {}) if room else {}
+        for username in live.keys() if isinstance(live, dict) else []:
+            u = str(username or "").strip().lstrip("@")
+            if u and _norm_user(u) not in excluded and _norm_user(u) not in protected_masters and not _is_master_name(u) and _norm_user(u) not in {_norm_user(x) for x in candidates}:
+                candidates.append(u)
+        if not candidates and getattr(self, "db", None):
+            try:
+                for item in self.db.room_users(room) or []:
+                    u = str(item.get("username") or "").strip().lstrip("@")
+                    if u and _norm_user(u) not in excluded and _norm_user(u) not in protected_masters and not _is_master_name(u) and _norm_user(u) not in {_norm_user(x) for x in candidates}:
+                        candidates.append(u)
+            except Exception as exc:
+                self.log("[GAME] steal room member lookup failed:", repr(exc))
+        return candidates
+
+    def _steal_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender):
+            return True
+
+        members = self._room_member_usernames_for_steal(room, sender)
+        self.send_room_text(room, f"🕵️ @{sender} جاري البحث عن الضحية...\n🔎 يتم اختيار أحد أعضاء الغرفة عشوائياً.")
+        if not members:
+            self.send_room_text(room, "❌ فشلت السرقة: لا يوجد عضو آخر متاح للسرقة حالياً.")
+            self._send_steal_image(room, "اسرق_فشل")
+            return True
+
+        victim = secrets.choice(members)
+
+        # Sometimes the thief is caught before the attempt succeeds.
+        # This is only a playful in-game message; no real report is made.
+        if secrets.randbelow(5) == 0:
+            self.send_room_text(
+                room,
+                f"🚨 @{sender} حاول سرقة @{victim}...\n"
+                f"🚔 السرقة حرام، تم إبلاغ الشرطة! 😁\n"
+                f"❌ لم تتم السرقة."
+            )
+            self._send_steal_image(room, "اسرق_فشل")
+            _record_game(sender, "steal", 0, 500)
+            return True
+
+        victim_balance = _get_points(victim)
+        if victim_balance < 500:
+            self.send_room_text(
+                room,
+                f"🕵️ @{sender} حاول سرقة @{victim}...\n"
+                f"❌ فشلت السرقة، المسروق @{victim} مفلس.\n"
+                f"💰 رصيده: {_fmt_points(victim_balance)}"
+            )
+            self._send_steal_image(room, "اسرق_فشل")
+            _record_game(sender, "steal", 0, 500)
+            return True
+
+        _add_points(victim, -500)
+        thief_balance = _add_points(sender, 500)
+        self.send_room_text(
+            room,
+            f"🕵️💰 تمت السرقة بنجاح!\n"
+            f"👤 السارق: @{sender}\n"
+            f"🎯 الضحية: @{victim}\n"
+            f"💸 المسروق: 500 نقطة\n"
+            f"🎁 @{sender} حصل على +500 نقطة.\n"
+            f"💰 رصيد السارق: {_fmt_points(thief_balance)}"
+        )
+        self._send_steal_image(room, "اسرق_نجاح")
+        _record_game(sender, "steal", 500, 500)
+        _record_game(victim, "steal", -500, 500)
+        return True
+
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
@@ -4642,6 +4846,13 @@ class TalkinBot:
         if low.startswith("فيس"):
             m=re.fullmatch(r"فيس[@ ](.+)", raw, re.I)
             return self._fruit_match(room, sender_name, m.group(1).strip() if m else "")
+        # New fixed-prize global games. Each one has a single worldwide queue:
+        # first verified player opens it, the next verified player joins, then
+        # the winner receives +500 and the loser loses 500.
+        fixed_games=("صيد","سرعة","كنز","مصارعة","بحث")
+        if low in tuple(x.casefold() for x in fixed_games):
+            game_name=next(x for x in fixed_games if x.casefold()==low)
+            return self._queue_fixed_game(room,sender_name,game_name,500)
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.
         m=re.fullmatch(r"(مراهنة|رهان|مضاربة|مضاربه|حظي)@([0-9]+)", raw, re.I)
@@ -4689,14 +4900,18 @@ class TalkinBot:
             _record_game(sender_name,"rps",reward,0)
             self.send_room_text(room, f"✂️ @{sender_name}: {low} | 🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 {_fmt_points(balance)}")
             return True
-        if low in ("كنز","اسرق","سرقة","رشوة"):
+        if low == "اسرق":
+            return self._steal_game(room, sender_name)
+        if low in ("سرقة", "رشوة"):
             if not self._game_cooldown_notice(room, sender_name):
                 return True
-            labels={"كنز":"🗺️ كنز","اسرق":"🕵️ سرقة","سرقة":"🕵️ سرقة","رشوة":"💼 رشوة"}
-            won=secrets.randbelow(2)==0; reward=secrets.randbelow(31)+10 if won else 0
-            balance=self._game_award(sender_name,reward)
-            _record_game(sender_name,"misc",reward,0)
-            self.send_room_text(room, f"{labels[low]} @{sender_name}\n" + (f"🏆 نجحت وربحت {reward} نقطة." if won else "❌ لم تنجح هذه المرة.") + f"\n💰 {_fmt_points(balance)}"); return True
+            label = "🕵️ سرقة" if low == "سرقة" else "💼 رشوة"
+            won = secrets.randbelow(2) == 0
+            reward = secrets.randbelow(31) + 10 if won else 0
+            balance = self._game_award(sender_name, reward)
+            _record_game(sender_name, "misc", reward, 0)
+            self.send_room_text(room, f"{label} @{sender_name}\n" + (f"🏆 نجحت وربحت {reward} نقطة." if won else "❌ لم تنجح هذه المرة.") + f"\n💰 {_fmt_points(balance)}")
+            return True
         return False
 
     def _send_help(self, room=None, private_to=None, page=1):
