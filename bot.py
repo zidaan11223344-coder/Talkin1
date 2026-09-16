@@ -1558,7 +1558,7 @@ def _game_stats_data():
 
 def _record_game(username, game_key, points_delta=0, stake=0):
     key = _norm_user(username)
-    if not key or _is_primary_master(username):
+    if not key:
         return
     data = _game_stats_data()
     item = data.get(key, {"username": str(username).strip().lstrip("@"), "games": {}})
@@ -1663,12 +1663,19 @@ def _points_summary_text(username):
     # غير المحدودة تبقى مخفية وتُطبق فقط داخل منطق الألعاب/العمليات.
     pts = _get_points(username)
     plays, level = _game_level(username)
+    labels=[("رهان","bet"),("مضاربة","duel"),("مليار","billion"),("حظي","luck"),("استثمار","investment"),("حظ","luck_free"),("حجر/ورق/مقص","rps"),("زرع","farm"),("فيس","fruit"),("ألعاب أخرى","misc")]
+    details=[]
+    for label,key in labels:
+        g=_game_stats(username,key)
+        details.append(f"🎮 {label}: لعب {g['plays']} | نقاط {g['points']:+d} | رهان {g['staked']}")
     return (f"╭━━━〔 💎 نقاطي 〕━━━╮\n"
             f"┃ 👤 @{str(username).strip().lstrip('@')}\n"
             f"┃ 💰 الرصيد: {_fmt_points(pts)}\n"
             f"┃ ⭐ المستوى: {level}\n"
             f"┃ 🎮 مرات اللعب: {plays}\n"
-            f"╰━━━━━━━━━━━━━━╯")
+            f"╰━━━━━━━━━━━━━━╯\n"
+            + "🎮 الألعاب\n"
+            + "\n".join(details))
 
 def _ensure_replies_file():
     data = _load_local_json(REPLIES_FILE, {})
@@ -1819,18 +1826,32 @@ def _command_menu():
     return _command_menu_for(False)
 
 def _command_menu_for(is_master=False, is_private=False):
-    # a1 is for the master only and is intentionally hidden from the public menu.
+    # help1 contains management commands and is shown only to masters in private chat.
+    if is_master and is_private:
+        return (
+            "📚 أوامر البوت\n"
+            "━━━━━━━━━━━━\n"
+            "help1 — الإدارة\n"
+            "help2 — الموسيقى والتفاعلات\n"
+            "help3 — الألعاب\n"
+            "help4 — الهدايا والنشر\n"
+            "help5 — النقاط\n"
+            "help6 — الغرف\n"
+            "━━━━━━━━━━━━\n"
+            "اكتب help1 إلى help6 أو a1 إلى a6 لعرض الأوامر"
+        )
     return (
         "📚 أوامر البوت\n"
         "━━━━━━━━━━━━\n"
-        "a2 — الموسيقى والتفاعلات\n"
-        "a3 — الألعاب\n"
-        "a4 — الهدايا والنشر\n"
-        "a5 — النقاط\n"
-        "a6 — الغرف\n"
+        "help2 — الموسيقى والتفاعلات\n"
+        "help3 — الألعاب\n"
+        "help4 — الهدايا والنشر\n"
+        "help5 — النقاط\n"
+        "help6 — الغرف\n"
         "━━━━━━━━━━━━\n"
-        "اكتب a2 إلى a6 لعرض الأوامر"
+        "اكتب a1 إلى a6 أو help1 إلى help6 لعرض الأوامر"
     )
+
 
 def _default_help_sections():
     """Complete help catalog. Each help page may contain multiple sections.
@@ -5186,12 +5207,22 @@ class TalkinBot:
         if raw.casefold()=="زرع":
             self.send_room_text(
                 room,
-                "🌱 المحاصيل ومدة الانتظار:\n"
-                "🍎 5 دقيقة=100 | 🍐 10 دقيقة=200 | 🍊 15 دقيقة=300 | "
-                "🍋 20 دقيقة=400 | 🍇 25 دقيقة=500 | 🍉 30 دقيقة=600 | "
-                "🍓 35 دقيقة=700 | 🥕 40 دقيقة=800 | 🌽 45 دقيقة=900 | 🥭 50 دقيقة=1000\n"
-                "━━━━━━━━━━━━\nاستخدم: زرع@🍎\n"
-                "💡 بعد انتهاء الوقت تصلك النتيجة تلقائياً في الخاص."
+                "╔════════════════════╗\n"
+                "║      قائمة الزرع      ║\n"
+                "╠════════════════════╣\n"
+                "║ 🍎  5 دقائق  → 1k   ║\n"
+                "║ 🍐 10 دقائق  → 2k   ║\n"
+                "║ 🍊 15 دقيقة   → 3k   ║\n"
+                "║ 🍋 20 دقيقة   → 4k   ║\n"
+                "║ 🍇 25 دقيقة   → 5k   ║\n"
+                "║ 🍉 30 دقيقة   → 6k   ║\n"
+                "║ 🍓 35 دقيقة   → 7k   ║\n"
+                "║ 🥕 40 دقيقة   → 8k   ║\n"
+                "║ 🌽 45 دقيقة   → 9k   ║\n"
+                "║ 🥭 50 دقيقة  → 10k   ║\n"
+                "╚════════════════════╝\n"
+                "📌 للزراعة: زرع@🍎 أو زرع 🍎\n"
+                "💡 عند اكتمال الزراعة تصلك المكافأة تلقائياً في الخاص"
             )
             return True
         m=re.fullmatch(r"زرع[@ ](.+)", raw, re.I)
@@ -5813,12 +5844,9 @@ class TalkinBot:
             elif room:
                 self.send_room_text(room, menu)
             return True
-        _m_public_help = re.fullmatch(r"a([1-6])", _body_low)
+        _m_public_help = re.fullmatch(r"(?:help|a)([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
-            # A1 is reserved for the master account configured in the variables.
-            if _page == 1 and not _is_master_name(sender):
-                return True
             _key = (str(room), _norm_user(sender))
             self.help_pages[_key] = _page
             self.help_page_part[_key] = 1
