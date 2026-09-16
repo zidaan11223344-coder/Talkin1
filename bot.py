@@ -1518,7 +1518,7 @@ def _looks_like_bot_command(text):
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
@@ -1558,7 +1558,7 @@ def _game_stats_data():
 
 def _record_game(username, game_key, points_delta=0, stake=0):
     key = _norm_user(username)
-    if not key or _is_primary_master(username):
+    if not key:
         return
     data = _game_stats_data()
     item = data.get(key, {"username": str(username).strip().lstrip("@"), "games": {}})
@@ -1659,39 +1659,23 @@ DEFAULT_REPLY_MESSAGES = {
 
 
 def _points_summary_text(username):
-    # نقاطي تعرض الألعاب التشاركية فقط، ولا تعرض الألعاب التي يلعبها
-    # المستخدم منفرداً مع البوت.
+    # اعرض الرصيد المخزن للماستر مثل بقية المستخدمين. صلاحية النقاط
+    # غير المحدودة تبقى مخفية وتُطبق فقط داخل منطق الألعاب/العمليات.
     pts = _get_points(username)
-    labels = [
-        ("رهان", "bet"), ("مضاربة", "duel"), ("حظي", "luck"),
-        ("استثمار", "investment"), ("سنارة", "سنارة"), ("برق", "برق"),
-        ("ياقوت", "ياقوت"), ("صدام", "صدام"), ("كاشف", "كاشف"),
-        ("اسرق", "steal"),
-    ]
-    lines = []
-    total_plays = total_points = 0
-    for label, key in labels:
-        g = _game_stats(username, key)
-        if not g['plays'] and not g['points'] and not g['staked']:
-            continue
-        total_plays += int(g['plays'] or 0)
-        total_points += int(g['points'] or 0)
-        sign = "+" if g['points'] >= 0 else ""
-        lines.append(f"┃ 🎮 {label}: لعب {g['plays']} | نقاط {sign}{_fmt_points(g['points'])}")
-    if not lines:
-        lines.append("┃ 🎮 لا توجد مشاركات مسجلة حتى الآن")
-    sign = "+" if total_points >= 0 else ""
-    return (
-        f"╭━━━━━━〔 💎 نقاطي 〕━━━━━━╮\n"
-        f"┃ 👤 @{str(username).strip().lstrip('@')}\n"
-        f"┃ 💰 الرصيد: {_fmt_points(pts)}\n"
-        f"┃ 🏆 إجمالي المشاركات: {total_plays}\n"
-        f"┃ 📈 صافي نقاط الألعاب: {sign}{_fmt_points(total_points)}\n"
-        f"╰━━━━━━━━━━━━━━━━━━━━╯\n"
-        f"╭━━━━〔 🎮 الألعاب التشاركية 〕━━━━╮\n"
-        + "\n".join(lines) + "\n"
-        f"╰━━━━━━━━━━━━━━━━━━━━━━━━╯"
-    )
+    plays, level = _game_level(username)
+    labels=[("رهان","bet"),("مضاربة","duel"),("مليار","billion"),("حظي","luck"),("استثمار","investment"),("حظ","luck_free"),("حجر/ورق/مقص","rps"),("زرع","farm"),("فيس","fruit"),("ألعاب أخرى","misc")]
+    details=[]
+    for label,key in labels:
+        g=_game_stats(username,key)
+        details.append(f"🎮 {label}: لعب {g['plays']} | نقاط {g['points']:+d} | رهان {g['staked']}")
+    return (f"╭━━━〔 💎 نقاطي 〕━━━╮\n"
+            f"┃ 👤 @{str(username).strip().lstrip('@')}\n"
+            f"┃ 💰 الرصيد: {_fmt_points(pts)}\n"
+            f"┃ ⭐ المستوى: {level}\n"
+            f"┃ 🎮 مرات اللعب: {plays}\n"
+            f"╰━━━━━━━━━━━━━━╯\n"
+            + "🎮 الألعاب\n"
+            + "\n".join(details))
 
 def _ensure_replies_file():
     data = _load_local_json(REPLIES_FILE, {})
@@ -1842,30 +1826,30 @@ def _command_menu():
     return _command_menu_for(False)
 
 def _command_menu_for(is_master=False, is_private=False):
-    # a1 contains management commands and is shown only to masters in private chat.
+    # help1 contains management commands and is shown only to masters in private chat.
     if is_master and is_private:
         return (
             "📚 أوامر البوت\n"
             "━━━━━━━━━━━━\n"
-            "a1 — الإدارة\n"
-            "a2 — الموسيقى والتفاعلات\n"
-            "a3 — الألعاب\n"
-            "a4 — الهدايا والنشر\n"
-            "a5 — النقاط\n"
-            "a6 — الغرف\n"
+            "help1 — الإدارة\n"
+            "help2 — الموسيقى والتفاعلات\n"
+            "help3 — الألعاب\n"
+            "help4 — الهدايا والنشر\n"
+            "help5 — النقاط\n"
+            "help6 — الغرف\n"
             "━━━━━━━━━━━━\n"
-            "اكتب a1 إلى a6 لعرض الأوامر"
+            "اكتب help1 إلى help6 أو a1 إلى a6 لعرض الأوامر"
         )
     return (
         "📚 أوامر البوت\n"
         "━━━━━━━━━━━━\n"
-        "a2 — الموسيقى والتفاعلات\n"
-        "a3 — الألعاب\n"
-        "a4 — الهدايا والنشر\n"
-        "a5 — النقاط\n"
-        "a6 — الغرف\n"
+        "help2 — الموسيقى والتفاعلات\n"
+        "help3 — الألعاب\n"
+        "help4 — الهدايا والنشر\n"
+        "help5 — النقاط\n"
+        "help6 — الغرف\n"
         "━━━━━━━━━━━━\n"
-        "اكتب a2 إلى a6 لعرض الأوامر"
+        "اكتب a1 إلى a6 أو help1 إلى help6 لعرض الأوامر"
     )
 
 
@@ -2971,8 +2955,6 @@ class TalkinBot:
         self.wager_waiting = {}
         # Global fixed-prize PvP queues: one open challenge per game name.
         self.fixed_game_waiting = {}
-        # Temporary one-minute anti-steal protection granted by the حصانه command.
-        self.steal_protection = {}
         raw_crops=_load_local_json(CROP_PLOTS_FILE,{})
         self.crop_plots = raw_crops if isinstance(raw_crops,dict) else {}
         self.fruit_games = {}
@@ -4848,26 +4830,32 @@ class TalkinBot:
         return ok
 
     def _send_game_result(self, room, text, game_key):
-        """Send game results as text only; games never send result images."""
+        """Send a solo-game result only to the room where that game was played."""
         self.send_room_text(room, text)
+        filename = GAME_IMAGE_FILES.get(game_key)
+        base = _public_base_url()
+        image = ASSETS_DIR / filename if filename else None
+        if base and image and image.is_file():
+            try:
+                self.send_room_media(room, f"{base}/assets/{filename}", "image")
+            except Exception as exc:
+                self.log("[GAME] result image failed:", repr(exc))
 
     def game_help(self, room):
         self.send_room_text(room, "🎮✨ ألعاب البوت\n━━━━━━━━━━━━\n"
-            "🎲 رهان@المبلغ أو رهان المبلغ — تحدي لاعب ضد لاعب، والفائز عشوائي.\n"
-            "⚔️ مضاربة@المبلغ أو مضاربة المبلغ — مواجهة عشوائية عادلة.\n"
+            "🎲 رهان@المبلغ — تحدي لاعب ضد لاعب، والفائز عشوائي.\n"
+            "⚔️ مضاربة@المبلغ — مواجهة عشوائية عادلة، لا أفضلية للأول أو الثاني.\n"
             "🍀 حظ — لعبة عشوائية مع البوت.\n"
             "🎯 حظ@المبلغ — حظ عشوائي بمبلغ ضد البوت.\n"
-            "🎯 حظي@المبلغ أو حظي المبلغ — تحدي حظ لاعب ضد لاعب.\n"
-            "📊 استثمار@المبلغ أو استثمار المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
+            "🎯 حظي@المبلغ — تحدي حظ لاعب ضد لاعب.\n"
+            "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليار — فرصة عشوائية للفوز بمليار نقطة.\n"
             "🏦 بنك مليون — فرصة عشوائية للفوز بمليون نقطة بنفس النظام.\n"
             "🌱 زرع — حتى 5 محاصيل نشطة لكل مستخدم، وكل نوع مرة واحدة فقط.\n"
             "🆕 سنارة | برق | ياقوت | صدام | كاشف — ألعاب عالمية، الجائزة 500 نقطة.\n"
-            "🐎 حصانه — يحصّن المستخدم من السرقة لمدة دقيقة.\n"
-            "🕵️ اسرق — اختر عضوًا عشوائيًا من الموجودين حالياً في نفس الغرفة وحاول سرقة 500 نقطة منه.\n"
-            "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار\n"
-            "📝 جميع نتائج الألعاب نصية بدون إرسال صور الألعاب.")
+            "🕵️ اسرق — اختر عضوًا عشوائيًا وحاول سرقة 500 نقطة منه.\n"
+            "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار")
 
     def _game_balance_ok(self, username, amount):
         return _is_primary_master(username) or _get_points(username) >= int(amount)
@@ -4938,7 +4926,7 @@ class TalkinBot:
         for result_room in result_rooms:
             self.send_room_text(result_room, text)
 
-        base = ""  # Game results are text-only; do not send game images.
+        base = _public_base_url()
         if base:
             try:
                 winner_name = str(winner.get("user") or "")
@@ -4949,7 +4937,7 @@ class TalkinBot:
                 url = f"{base}/games/{card.name}"
                 self._verify_public_media_url(url, "image")
                 for result_room in result_rooms:
-                    self.log("[GAME] game result image disabled")
+                    self.send_room_media(result_room, url, "image")
             except Exception as exc:
                 self.log("[GAME] wager winner card failed:", game_key, repr(exc))
 
@@ -5111,7 +5099,7 @@ class TalkinBot:
                 url = f"{base}/games/{card.name}"
                 self._verify_public_media_url(url, "image")
                 for result_room in result_rooms:
-                    self.log("[GAME] game result image disabled")
+                    self.send_room_media(result_room, url, "image")
             except Exception as exc:
                 self.log("[GAME] fixed winner card failed:", game_name, repr(exc))
 
@@ -5212,29 +5200,29 @@ class TalkinBot:
 
     def _crop_command(self, room, sender, raw):
         crops={
-            "🍎":(5,1000), "🍐":(10,2000), "🍊":(15,3000), "🍋":(20,4000),
-            "🍇":(25,5000), "🍉":(30,6000), "🍓":(35,7000), "🥕":(40,8000),
-            "🌽":(45,9000), "🥭":(50,10000)
+            "🍎":(5,100), "🍐":(10,200), "🍊":(15,300), "🍋":(20,400),
+            "🍇":(25,500), "🍉":(30,600), "🍓":(35,700), "🥕":(40,800),
+            "🌽":(45,900), "🥭":(50,1000)
         }
         if raw.casefold()=="زرع":
             self.send_room_text(
                 room,
-                "🌱╔════════════════════╗\n"
-                "🌱║      قائمة الزرع      ║\n"
-                "🌱╠════════════════════╣\n"
-                "🌱║ 🍎  5 دقائق  → 1,000  ║\n"
-                "🌱║ 🍐 10 دقائق  → 2,000  ║\n"
-                "🌱║ 🍊 15 دقيقة   → 3,000  ║\n"
-                "🌱║ 🍋 20 دقيقة   → 4,000  ║\n"
-                "🌱║ 🍇 25 دقيقة   → 5,000  ║\n"
-                "🌱║ 🍉 30 دقيقة   → 6,000  ║\n"
-                "🌱║ 🍓 35 دقيقة   → 7,000  ║\n"
-                "🌱║ 🥕 40 دقيقة   → 8,000  ║\n"
-                "🌱║ 🌽 45 دقيقة   → 9,000  ║\n"
-                "🌱║ 🥭 50 دقيقة  → 10,000  ║\n"
-                "🌱╚════════════════════╝\n"
+                "╔════════════════════╗\n"
+                "║      قائمة الزرع      ║\n"
+                "╠════════════════════╣\n"
+                "║ 🍎  5 دقائق  → 1k   ║\n"
+                "║ 🍐 10 دقائق  → 2k   ║\n"
+                "║ 🍊 15 دقيقة   → 3k   ║\n"
+                "║ 🍋 20 دقيقة   → 4k   ║\n"
+                "║ 🍇 25 دقيقة   → 5k   ║\n"
+                "║ 🍉 30 دقيقة   → 6k   ║\n"
+                "║ 🍓 35 دقيقة   → 7k   ║\n"
+                "║ 🥕 40 دقيقة   → 8k   ║\n"
+                "║ 🌽 45 دقيقة   → 9k   ║\n"
+                "║ 🥭 50 دقيقة  → 10k   ║\n"
+                "╚════════════════════╝\n"
                 "📌 للزراعة: زرع@🍎 أو زرع 🍎\n"
-                "💡 عند اكتمال الزراعة تصلك المكافأة تلقائياً في الخاص."
+                "💡 عند اكتمال الزراعة تصلك المكافأة تلقائياً في الخاص"
             )
             return True
         m=re.fullmatch(r"زرع[@ ](.+)", raw, re.I)
@@ -5354,8 +5342,7 @@ class TalkinBot:
             balance=_fmt_points(balance)
         )
         self.send_room_text(room, text)
-        # حظ بالمبلغ يرسل صورة النتيجة؛ حظ بدون مبلغ يبقى نصياً فقط.
-        if amount > 0:
+        if reward > 0:
             filename = GAME_IMAGE_FILES.get("luck")
             base = _public_base_url()
             image = ASSETS_DIR / filename if filename else None
@@ -5397,7 +5384,7 @@ class TalkinBot:
             image = ASSETS_DIR / filename if filename else None
             if base and image and image.is_file():
                 try:
-                    self.log("[GAME] game result image disabled")
+                    self.send_room_media(room, f"{base}/assets/{filename}", "image")
                 except Exception as exc:
                     self.log("[GAME] investment result image failed:", repr(exc))
         return True
@@ -5482,62 +5469,53 @@ class TalkinBot:
         return True
 
     def _send_steal_image(self, room, game_key):
-        """Send the steal result image in the room (steal is a participatory game)."""
         filename = GAME_IMAGE_FILES.get(game_key)
         base = _public_base_url()
         image = ASSETS_DIR / filename if filename else None
         if base and image and image.is_file():
             try:
-                url = f"{base}/assets/{filename}"
-                self._verify_public_media_url(url, "image")
-                self.send_room_media(room, url, "image")
+                self.send_room_media(room, f"{base}/assets/{filename}", "image")
             except Exception as exc:
                 self.log("[GAME] steal result image failed:", repr(exc))
 
     def _room_member_usernames_for_steal(self, room, exclude_username=""):
-        """Return only users currently present in the same live room."""
+        """Return a complete/randomizable member list from the current room."""
         excluded = {_norm_user(exclude_username), _norm_user(BOT_ID)}
         candidates = []
         seen = set()
-        live = self.room_users.get(room, {}) if room else {}
-        if not isinstance(live, dict):
-            return candidates
-        for username in live.keys():
-            u = str(username or "").strip().lstrip("@").strip()
+
+        def add_user(value):
+            u = str(value or "").strip().lstrip("@").strip()
             key = _norm_user(u)
-            if not u or not key or key in excluded or key in seen:
-                continue
-            # Do not allow stealing from the configured master.
-            if _is_master_name(u):
-                continue
+            if not u or not key or key in excluded or key in seen or _is_master_name(u):
+                return
             seen.add(key)
             candidates.append(u)
+
+        # Live cache first.
+        live = self.room_users.get(room, {}) if room else {}
+        if isinstance(live, dict):
+            for username in live.keys():
+                add_user(username)
+
+        # Complete persistent roster next, including members who are offline.
+        try:
+            for username in _persistent_roster_users(room):
+                add_user(username)
+        except Exception as exc:
+            self.log("[GAME] persistent steal roster lookup failed:", repr(exc))
+
+        # Native DB roster as an additional fallback/source.
+        if getattr(self, "db", None):
+            try:
+                for item in self.db.room_users(room) or []:
+                    if isinstance(item, dict):
+                        add_user(item.get("username"))
+                    else:
+                        add_user(item)
+            except Exception as exc:
+                self.log("[GAME] steal room member lookup failed:", repr(exc))
         return candidates
-
-    def _steal_protected(self, username):
-        key = _norm_user(username)
-        if not key:
-            return False
-        expires = float(self.steal_protection.get(key, 0) or 0)
-        if expires <= time.time():
-            self.steal_protection.pop(key, None)
-            return False
-        return True
-
-    def _horse_game(self, room, sender):
-        """Protect the player from the steal game for one minute."""
-        now = time.time()
-        key = _norm_user(sender)
-        self.steal_protection[key] = now + 60.0
-        self.send_room_text(
-            room,
-            f"🐎🛡️ @{sender} حصل على حصانة!\n"
-            f"━━━━━━━━━━━━\n"
-            f"⏱️ الحماية من السرقة: دقيقة واحدة\n"
-            f"🔓 تنتهي بعد 60 ثانية.\n"
-            f"━━━━━━━━━━━━"
-        )
-        return True
 
     def _steal_game(self, room, sender, requested_victim=""):
         if not self._game_cooldown_notice(room, sender, 30.0, "اسرق"):
@@ -5547,6 +5525,7 @@ class TalkinBot:
         self.send_room_text(room, f"🕵️ @{sender} جاري البحث عن الضحية...")
         if not members:
             self.send_room_text(room, "❌ فشلت السرقة: لا يوجد عضو آخر متاح للسرقة حالياً.")
+            self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
             return True
 
@@ -5565,14 +5544,6 @@ class TalkinBot:
             victim = secrets.choice(members)
 
         victim_balance = _get_points(victim)
-        if self._steal_protected(victim):
-            self.send_room_text(
-                room,
-                f"🐎🛡️ @{victim} محصّن حالياً.\n"
-                f"❌ فشلت السرقة، الحصانة تحميه من السرقة لمدة دقيقة."
-            )
-            _record_game(sender, "steal", 0, 500)
-            return True
         if victim_balance < 500:
             self.send_room_text(
                 room,
@@ -5580,6 +5551,7 @@ class TalkinBot:
                 f"❌ فشلت السرقة، المسروق @{victim} مفلس.\n"
                 f"💰 رصيده: {_fmt_points(victim_balance)}"
             )
+            self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
             return True
 
@@ -5591,8 +5563,8 @@ class TalkinBot:
                 f"🚔 السرقة حرام، تم إبلاغ الشرطة! 😁\n"
                 f"❌ لم تتم السرقة."
             )
-            _record_game(sender, "steal", 0, 500)
             self._send_steal_image(room, "اسرق_فشل")
+            _record_game(sender, "steal", 0, 500)
             return True
 
         _add_points(victim, -500)
@@ -5606,9 +5578,9 @@ class TalkinBot:
             f"🎁 @{sender} حصل على +500 نقطة.\n"
             f"💰 رصيد السارق: {_fmt_points(thief_balance)}"
         )
+        self._send_steal_image(room, "اسرق_نجاح")
         _record_game(sender, "steal", 500, 500)
         _record_game(victim, "steal", -500, 500)
-        self._send_steal_image(room, "اسرق_نجاح")
         return True
 
     def _million_bank_game(self, room, sender_name):
@@ -5630,17 +5602,12 @@ class TalkinBot:
             self.send_room_text(target_room, winner_text)
         try:
             base = _public_base_url()
-            card = render_game_winner_card("million", sender_name, winner_photo)
+            card = render_game_winner_card("بنك مليون", sender_name, winner_photo)
             if base and card.is_file():
                 url = f"{base}/games/{card.name}"
                 self._verify_public_media_url(url, "image")
                 for target_room in target_rooms:
-                    try:
-                        self.send_room_media(target_room, url, "image")
-                    except Exception as exc:
-                        self.log("[GAME] million image publish failed:", target_room, repr(exc))
-            else:
-                self.log("[GAME] million card public URL unavailable")
+                    self.send_room_media(target_room, url, "image")
         except Exception as exc:
             self.log("[GAME] million bank winner card failed:", repr(exc))
         return True
@@ -5704,8 +5671,6 @@ class TalkinBot:
         if not _games_enabled_for_room(room):
             self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
             return True
-        if low in ("حصانه", "حصانة", "حصانه!", "حصانة!"):
-            return self._horse_game(room, sender_name)
         if low.startswith("زرع"):
             return self._crop_command(room, sender_name, raw)
         if low.startswith("فيس"):
@@ -5720,17 +5685,17 @@ class TalkinBot:
             return self._queue_fixed_game(room,sender_name,game_name,500)
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.
-        m=re.fullmatch(r"(مراهنة|مراهنه|رهان|مضاربة|مضاربه|حظي)[@\s]+([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"(مراهنة|مراهنه|رهان|مضاربة|مضاربه|حظي)@([0-9]+)", raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, m.group(1), int(m.group(2)))
         # Investment with a stake is PvP, exactly like the wager games.
-        m=re.fullmatch(r"استثمار[@\s]+([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"استثمار@([0-9]+)", raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, "استثمار", int(m.group(1)))
         # Plain "استثمار" is a free game against the bot, text only.
         if low == "استثمار":
             return self._investment_bot_game(room, sender_name)
-        m=re.fullmatch(r"حظ[@\s]+([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"حظ@([0-9]+)", raw, re.I)
         if m:
             return self._lottery_game(room, sender_name, int(m.group(1)))
         if low == "بنك مليون":
@@ -5779,12 +5744,19 @@ class TalkinBot:
                     if base and card.is_file():
                         url = f"{base}/billion/{card.name}"
                         self._verify_public_media_url(url, "image")
+                        self.send_room_media(room, url, "image")
                         # Publish the same generated winner card to every room.
                         for target_room in self._active_rooms():
+                            if str(target_room).casefold() == str(room).casefold():
+                                continue
                             try:
+                                self.send_room_text(
+                                    target_room,
+                                    f"🏆✨ تم الحصول على المليار!\n👑 الفائز: @{sender_name}\n💰 1,000,000,000\n{zeros}"
+                                )
                                 self.send_room_media(target_room, url, "image")
                             except Exception as exc:
-                                self.log("[GAME] billion image publish failed:", target_room, repr(exc))
+                                self.log("[GAME] billion publish failed:", target_room, repr(exc))
                     else:
                         self.log("[GAME] billion card public URL unavailable")
                 except Exception as exc:
@@ -5866,17 +5838,15 @@ class TalkinBot:
         _body_text = str(body or "").strip()
         _body_low = _body_text.casefold()
         if _body_low in ("اوامر", "الاوامر", "help", "مساعدة"):
-            menu = _command_menu_for(_is_primary_master(sender), is_private=is_private)
+            menu = _command_menu_for(_is_master_name(sender), is_private=is_private)
             if is_private:
                 self.send_private_text(sender, menu)
             elif room:
                 self.send_room_text(room, menu)
             return True
-        _m_public_help = re.fullmatch(r"a([1-6])", _body_low)
+        _m_public_help = re.fullmatch(r"(?:help|a)([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
-            if _page == 1 and not (_is_primary_master(sender) and is_private):
-                return True
             _key = (str(room), _norm_user(sender))
             self.help_pages[_key] = _page
             self.help_page_part[_key] = 1
@@ -6059,7 +6029,7 @@ class TalkinBot:
             return True
         # `اوامر` shows the organized menu only.
         if low in ("اوامر الماستر", "اوامر_الماستر"):
-            if not _is_primary_master(sender):
+            if not _is_master_name(sender):
                 return False
             target = sender if is_private else None
             menu = _command_menu_for(True, is_private=is_private)
@@ -6070,16 +6040,16 @@ class TalkinBot:
             return True
         if low in ("اوامر","الاوامر","help","مساعدة"):
             target = sender if is_private else None
-            menu = _command_menu_for(_is_primary_master(sender), is_private=is_private)
+            menu = _command_menu_for(_is_master_name(sender), is_private=is_private)
             if target:
                 self.send_private_text(target, menu)
             else:
                 self.send_room_text(room, menu)
             return True
-        m_help = re.fullmatch(r"a([1-6])", low)
+        m_help = re.fullmatch(r"help([1-6])", low)
         if m_help:
             page=int(m_help.group(1))
-            if page == 1 and (not _is_primary_master(sender) or not is_private):
+            if page == 1 and (not _is_master_name(sender) or not is_private):
                 return True
             key=(str(room), _norm_user(sender))
             self.help_pages[key]=page
