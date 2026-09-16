@@ -89,9 +89,16 @@ GIFT_IMAGE_FILES = {
 GAME_IMAGE_FILES = {
     "bet": "game_bet.jpg",
     "billion": "game_billion.jpg",
+    "million": "game_million.jpg",
+    "بنك مليون": "game_million_bank.jpg",
     "duel": "game_duel.jpg",
     "luck": "game_luck.jpg",
     "investment": "game_investment.jpg",
+    "battle": "game_battle.jpg",
+    "hunt_fishing": "game_hunt_fishing.jpg",
+    "search": "game_search.jpg",
+    "speed": "game_speed.jpg",
+    "treasure": "game_treasure.jpg",
     # New global fixed-prize games.
     "سنارة": "game_sannara.jpg",
     "برق": "game_baraq.jpg",
@@ -165,9 +172,9 @@ MASTER_DISPLAY_NAME = os.getenv(
 DEFAULT_BOT_BASE_STATUS = (
     '<B><H4><div style="background-color:#000000;padding:10px;text-align:center;">'
     '<font color="#5DE2E7">بوت حماية وألعاب وأغاني</font><br>'
-    '<font color="#B388FF">لمعرفة الألعاب والأوامر أرسل: s1 s2 s3 s4 s5 s6</font><br>'
+    '<font size="2" color="#B388FF">لمعرفة الألعاب والأوامر أرسل: a1 a2 a3 a4 a5 a6</font><br>'
     '<font color="#FF6EC7">لدخول الغرف أرسل: دخول@اسم الغرفة</font><br>'
-    '<font color="#FF3B30">الماستر: ' f'{MASTER_DISPLAY_NAME}</font></div></H4></B>'
+    '<font size="2" color="#FF3B30">الماستر: ' f'{MASTER_DISPLAY_NAME}</font></div></H4></B>'
 )
 
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
@@ -1511,8 +1518,8 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "مليون", "بنك مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
@@ -1662,8 +1669,12 @@ def _points_summary_text(username):
     for label,key in labels:
         g=_game_stats(username,key)
         details.append(f"🎮 {label}: لعب {g['plays']} | نقاط {g['points']:+d} | رهان {g['staked']}")
-    return (f"💰 نقاطي\n━━━━━━━━━━━━\n👤 @{str(username).strip().lstrip('@')}\n"
-            f"💰 الرصيد: {_fmt_points(pts)}\n⭐ المستوى: {level}\n🎮 إجمالي مرات اللعب: {plays}\n"
+    return (f"╭━━━〔 💎 نقاطي 〕━━━╮\n"
+            f"┃ 👤 @{str(username).strip().lstrip('@')}\n"
+            f"┃ 💰 الرصيد: {_fmt_points(pts)}\n"
+            f"┃ ⭐ المستوى: {level}\n"
+            f"┃ 🎮 مرات اللعب: {plays}\n"
+            f"╰━━━━━━━━━━━━━━╯\n"
             + "\n".join(details))
 
 def _ensure_replies_file():
@@ -1827,7 +1838,7 @@ def _command_menu_for(is_master=False, is_private=False):
             "help5 — النقاط\n"
             "help6 — الغرف\n"
             "━━━━━━━━━━━━\n"
-            "اكتب\nhelp1 إلى help6 لعرض الأوامر"
+            "اكتب help1 إلى help6 أو a1 إلى a6 لعرض الأوامر"
         )
     return (
         "📚 أوامر البوت\n"
@@ -1838,7 +1849,7 @@ def _command_menu_for(is_master=False, is_private=False):
         "help5 — النقاط\n"
         "help6 — الغرف\n"
         "━━━━━━━━━━━━\n"
-        "اكتب help2 إلى help6 لعرض الأوامر"
+        "اكتب a1 إلى a6 أو help1 إلى help6 لعرض الأوامر"
     )
 
 
@@ -1858,7 +1869,7 @@ def _default_help_sections():
         ],
         3: [
             '🎮 الألعاب — 1: التحديات\n━━━━━━━━━━━━\nالعاب / ألعاب / لعب / games / game — عرض قائمة الألعاب\nرهان@المبلغ — رهان لاعب ضد لاعب\nمراهنة@المبلغ — مراهنة لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nاستثمار — استثمار مجاني مع البوت\nحظ@المبلغ — حظ بمبلغ\nحظ — حظ عشوائي\nحجر / ورق / مقص — لعبة ضد البوت',
-            '🎮 الألعاب — 2: الألعاب الفردية\n━━━━━━━━━━━━\nمليار — لعبة المليار\nزرع@رمز_المحصول — زراعة محصول\nفيس@الرمز — مطابقة/تحدي الفيس\nاسرق — سرقة عشوائية من عضو\nاسرق@اسم — سرقة من عضو محدد\nاسرق اسم — سرقة من عضو محدد\n\n🌱 الزراعة: حتى 5 أنواع مختلفة في نفس الوقت.\n📌 كل لعبة لها نظام تبريد خاص بها عند تطبيقه.',
+            '🎮 الألعاب — 2: الألعاب الفردية\n━━━━━━━━━━━━\nمليار — لعبة المليار\nمليون / بنك مليون — جائزة مليون بنفس نظام المليار\nزرع@رمز_المحصول — زراعة محصول\nفيس@الرمز — مطابقة/تحدي الفيس\nاسرق — سرقة عشوائية من عضو\nاسرق@اسم — سرقة من عضو محدد\nاسرق اسم — سرقة من عضو محدد\n\n🌱 الزراعة: حتى 5 أنواع مختلفة في نفس الوقت.\n📌 كل لعبة لها نظام تبريد خاص بها عند تطبيقه.',
             '🎮 الألعاب — 3: الألعاب العالمية\n━━━━━━━━━━━━\nسنارة — تحدي عالمي، الفائز +500\nبرق — تحدي عالمي، الفائز +500\nياقوت — تحدي عالمي، الفائز +500\nصدام — تحدي عالمي، الفائز +500\nكاشف — تحدي عالمي، الفائز +500\n\n📌 أول لاعب يفتح الجولة، والثاني ينضم من أي غرفة موجود فيها البوت.\n📌 نتيجة الجولة والصورة تظهر للمشاركين فقط.',
         ],
         4: [
@@ -1870,7 +1881,7 @@ def _default_help_sections():
             '💸 النقاط — 2: التحويل\n━━━━━━━━━━━━\nsb@اسم@عدد — تحويل نقاط لمستخدم\n\nمثال:\nsb@ahmd555@1000\n\n📌 التحويل متاح للمستخدم الموثق، ويُخصم من رصيد المرسل ويُضاف للمستلم.\n\nللاطلاع على الرصيد استخدم: نقاطي',
         ],
         6: [
-            '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nمثال: دخول@مشاعر\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد\n\n📌 inv يعمل داخل الغرفة المطلوبة، ويتطلب رفع البوت أونر عند الحاجة.',
+            '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nمثال: دخول@مشاعر\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد\n\n📌 الدعوات تقرأ قائمة إعدادات الغرفة كاملة: الأونرات، المشرفين، والأعضاء، ولا تخلط أعضاء الغرف الأخرى.\n📌 inv يعمل داخل الغرفة المطلوبة، ويتطلب رفع البوت أونر عند الحاجة.',
             '🏠 الغرف والترحيب — 2\n━━━━━━━━━━━━\nsay نص — إرسال نص داخل الغرفة\nقل نص — إرسال نص داخل الغرفة\n\n+sr@اسم_المستخدم@النص — إضافة رد/ترحيب مخصص (ماستر)\nsr@on — تشغيل الردود المخصصة\nsr@off — إيقاف الردود المخصصة\nswc+@اسم_الحساب@النص — إضافة ترحيب مخصص (ماستر)\nswc@on — تشغيل الترحيبات\nswc@off — إيقاف الترحيبات\n\n🛡️ حماية وتكرار الغرفة تُدار من صلاحيات الإدارة.',
         ],
     }
@@ -2539,6 +2550,52 @@ def render_billion_card(winner_name, winner_photo_url=""):
     return out
 
 
+def render_game_winner_card(game_key, winner_name, winner_photo_url=""):
+    """Keep the original game artwork and add a compact winner panel below it."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+    source_name = GAME_IMAGE_FILES.get(game_key) or GAME_IMAGE_FILES.get("billion")
+    source = ASSETS_DIR / source_name
+    if not source.is_file():
+        raise FileNotFoundError(f"صورة اللعبة غير موجودة: {source}")
+    image = Image.open(source).convert("RGBA")
+    w, h = image.size
+    panel_h = max(120, int(h * 0.22))
+    panel_y = max(0, h - panel_h - max(8, int(h * 0.025)))
+    margin = max(12, int(w * 0.035))
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    panel = (margin, panel_y, w - margin, h - max(8, int(h * 0.025)))
+    draw.rounded_rectangle(panel, radius=max(12, int(w * 0.02)), fill=(8, 12, 24, 232),
+                           outline=(244, 196, 92, 255), width=max(2, int(w * 0.004)))
+    avatar = _load_sender_avatar(winner_photo_url, max(70, int(h * 0.12)))
+    left = panel[0] + max(12, int(w * 0.025))
+    if avatar is not None:
+        ay = panel_y + (panel_h - avatar.height) // 2
+        overlay.alpha_composite(avatar, (left, ay))
+        left += avatar.width + max(12, int(w * 0.02))
+    right = panel[2] - max(12, int(w * 0.025))
+    center = (left + right) / 2
+    _draw_centered(draw, (center, panel_y + panel_h * 0.32), "🏆 الفائز",
+                   max(18, int(h * 0.045)), (255, 224, 145, 255), max(80, right - left))
+    _draw_name_centered(draw, (center, panel_y + panel_h * 0.70), "@" + str(winner_name or ""),
+                        max(20, int(h * 0.055)), (255, 255, 255, 255), max(80, right - left))
+    image = Image.alpha_composite(image, overlay).convert("RGB")
+    out_dir = BASE_DIR / "generated_games"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        old = sorted((x for x in out_dir.iterdir() if x.is_file()), key=lambda x: x.stat().st_mtime, reverse=True)
+        for fp in old[29:]:
+            fp.unlink(missing_ok=True)
+    except Exception:
+        pass
+    out = out_dir / f"winner_{uuid.uuid4().hex}.jpg"
+    for quality in (92, 88, 84, 80, 76):
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        if out.stat().st_size <= 300 * 1024:
+            break
+    return out
+
 def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
     """Create a fresh publish card from the submitted image, like the billion card.
 
@@ -2709,6 +2766,8 @@ class _MediaHandler(SimpleHTTPRequestHandler):
             rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
         elif path.startswith("/billion/"):
             rel=path[len("/billion/"):].lstrip("/"); root=(BASE_DIR/"generated_billion").resolve(); target=(BASE_DIR/"generated_billion"/rel).resolve()
+        elif path.startswith("/games/"):
+            rel=path[len("/games/"):].lstrip("/"); root=(BASE_DIR/"generated_games").resolve(); target=(BASE_DIR/"generated_games"/rel).resolve()
         elif path.startswith("/publish/"):
             rel=path[len("/publish/"):].lstrip("/"); root=(BASE_DIR/"generated_publish").resolve(); target=(BASE_DIR/"generated_publish"/rel).resolve()
         elif path.startswith("/media/"):
@@ -4447,7 +4506,7 @@ class TalkinBot:
                 code=uuid.uuid4().hex[:4]
                 caption=_message_template(
                     "music", "broadcast",
-                    "🎵 {title}\n🎤 {requester_name}\n🎶 {title}\n📡 المصدر: {source_label}\n🏠 الغرفة الأصلية: {room}\n━━━━━━━━━━━━━\n👍 lk@{code}\n❤️ lv@{code}\n👎 dl@{code}\n💬 cm@{code} msg\n🚨 report@{code} msg",
+                    "🎶✨ تم تشغيل الأغنية بنجاح ✨🎶\n━━━━━━━━━━━━\n🎵 العنوان: {title}\n🎤 الطلب: @{requester_name}\n📡 المصدر: {source_label}\n🏠 الغرفة: {room}\n━━━━━━━━━━━━\n👍 lk@{code}   ❤️ lv@{code}\n💬 cm@{code} msg   🚨 report@{code} msg",
                     requester_name=requester, title=title, artist=artist,
                     source_label=artist or "Music", room=room, code=code,
                     url=url, duration=duration
@@ -4776,6 +4835,7 @@ class TalkinBot:
             "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليار — فرصة عشوائية للفوز بمليار نقطة.\n"
+            "🏦 بنك مليون — فرصة عشوائية للفوز بمليون نقطة بنفس النظام.\n"
             "🌱 زرع — حتى 5 محاصيل نشطة لكل مستخدم، وكل نوع مرة واحدة فقط.\n"
             "🆕 سنارة | برق | ياقوت | صدام | كاشف — ألعاب عالمية، الجائزة 500 نقطة.\n"
             "🕵️ اسرق — اختر عضوًا عشوائيًا وحاول سرقة 500 نقطة منه.\n"
@@ -5006,15 +5066,20 @@ class TalkinBot:
         for result_room in result_rooms:
             self.send_room_text(result_room,text)
 
-        filename=GAME_IMAGE_FILES.get(game_name)
         base=_public_base_url()
-        image=ASSETS_DIR / filename if filename else None
-        if base and image and image.is_file():
-            for result_room in result_rooms:
-                try:
-                    self.send_room_media(result_room,f"{base}/assets/{filename}","image")
-                except Exception as exc:
-                    self.log("[GAME] fixed result image failed:",result_room,repr(exc))
+        if base:
+            try:
+                winner_name = str(winner.get("user") or "")
+                winner_photo = self.user_photos.get(_norm_user(winner_name), "")
+                if not winner_photo:
+                    winner_photo = self._lookup_profile_photo(winner_name)
+                card = render_game_winner_card(game_key, winner_name, winner_photo)
+                url = f"{base}/games/{card.name}"
+                self._verify_public_media_url(url, "image")
+                for result_room in result_rooms:
+                    self.send_room_media(result_room, url, "image")
+            except Exception as exc:
+                self.log("[GAME] fixed winner card failed:", game_name, repr(exc))
 
     def _queue_fixed_game(self, room, sender, game_name, prize=500):
         """Global two-player queue; both players may enter from the same room or different rooms."""
@@ -5486,6 +5551,31 @@ class TalkinBot:
         _record_game(victim, "steal", -500, 500)
         return True
 
+    def _million_bank_game(self, room, sender_name):
+        if not self._game_cooldown_notice(room, sender_name, 30.0, "بنك مليون"):
+            return True
+        self.send_room_text(room, f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n✅ @{sender_name}\n🔎 جاري البحث عن الجائزة...\n━━━━━━━━━━━━━━")
+        time.sleep(1.0)
+        won = secrets.randbelow(100) == 0
+        reward = 1_000_000 if won else 0
+        _record_game(sender_name, "million", reward, 0)
+        if not won:
+            self.send_room_text(room, "🏦 بنك مليون\n❌ لم يحالفك الحظ هذه المرة. حاول لاحقاً.")
+            return True
+        self._game_award(sender_name, reward)
+        winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
+        self.send_room_text(room, f"🏆✨ مبروك! فزت في بنك مليون ✨🏆\n━━━━━━━━━━━━━━━━\n👑 الفائز: @{sender_name}\n💰 الجائزة: {_fmt_points(reward)} نقطة\n━━━━━━━━━━━━━━━━")
+        try:
+            base = _public_base_url()
+            card = render_game_winner_card("بنك مليون", sender_name, winner_photo)
+            if base and card.is_file():
+                url = f"{base}/games/{card.name}"
+                self._verify_public_media_url(url, "image")
+                self.send_room_media(room, url, "image")
+        except Exception as exc:
+            self.log("[GAME] million bank winner card failed:", repr(exc))
+        return True
+
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
@@ -5572,6 +5662,8 @@ class TalkinBot:
         m=re.fullmatch(r"حظ@([0-9]+)", raw, re.I)
         if m:
             return self._lottery_game(room, sender_name, int(m.group(1)))
+        if low in ("مليون", "بنك مليون", "million", "million bank"):
+            return self._million_bank_game(room, sender_name)
         if low in ("مليار","billion"):
             if not self._game_cooldown_notice(room, sender_name, 30.0, "مليار"):
                 return True
@@ -5716,11 +5808,9 @@ class TalkinBot:
             elif room:
                 self.send_room_text(room, menu)
             return True
-        _m_public_help = re.fullmatch(r"help([1-6])", _body_low)
+        _m_public_help = re.fullmatch(r"(?:help|a)([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
-            if _page == 1 and (not _is_master_name(sender) or not is_private):
-                return False
             self._send_help(room=room, private_to=sender if is_private else None, page=_page)
             return True
 
