@@ -1517,7 +1517,7 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
@@ -5766,7 +5766,7 @@ class TalkinBot:
             idx = max(1, min(int(part), len(page_sections))) - 1
             text = page_sections[idx]
             if idx < len(page_sections) - 1:
-                text += "\n\n📌 للقائمة التالية اكتب Ns"
+                text += "\n\n📌 للقائمة التالية اكتب ns"
             else:
                 text += "\n\n✅ انتهت أقسام هذه القائمة."
         if private_to:
@@ -5801,7 +5801,23 @@ class TalkinBot:
         _m_public_help = re.fullmatch(r"(?:help|a)([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
+            _key = (str(room), _norm_user(sender))
+            self.help_pages[_key] = _page
+            self.help_page_part[_key] = 1
+            self.help_game_part[_key] = 1
             self._send_help(room=room, private_to=sender if is_private else None, page=_page)
+            return True
+        if _body_low in ("ns", "n", "التالي", "القائمة التالية", "next"):
+            key = (str(room), _norm_user(sender))
+            current_page = int(self.help_pages.get(key, 1) or 1)
+            sections = _help_sections_from_messages().get(current_page, [])
+            total = max(1, len(sections))
+            part = int(self.help_page_part.get(key, 1) or 1)
+            part = (part % total) + 1
+            self.help_page_part[key] = part
+            self.help_game_part[key] = part
+            self._send_help(room=room, private_to=sender if is_private else None,
+                            page=current_page, game_part=part)
             return True
 
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
