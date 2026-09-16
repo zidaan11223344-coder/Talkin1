@@ -3908,10 +3908,35 @@ class TalkinBot:
         except Exception as e:
             self.log("[INV] progress message failed:", repr(e))
 
-        # IMPORTANT: inv must read the CURRENT room settings/roster from Talkin itself.
-        # Do not use Supabase, persistent roster, or an old cached member list here.
-        # The room's occupants_list response contains the UserItem entries from
-        # the room settings (owner/admin/member categories).
+        # Prefer the complete room_members roster from the room settings DB.
+        # It contains owners, moderators and ordinary members even when they
+        # are offline.  The live occupants response is only a fallback for
+        # deployments where the DB connector is unavailable.
+        try:
+            configured_users = self.db.room_users(command_room) if getattr(self, "db", None) else []
+        except Exception as exc:
+            configured_users = []
+            self.log("[INV] settings roster lookup failed:", repr(exc))
+        configured_names = []
+        configured_seen = set()
+        for item in configured_users or []:
+            username = str(item.get("username") if isinstance(item, dict) else item or "").strip().lstrip("@")
+            key = _norm_user(username)
+            if username and key and key != _norm_user(BOT_ID) and key not in configured_seen:
+                configured_seen.add(key)
+                configured_names.append(username)
+        if configured_names:
+            self.log("[INV] using room settings roster:", command_room, len(configured_names))
+            threading.Thread(
+                target=self._finish_invites,
+                args=(command_room, configured_names),
+                name="talkin-settings-invites",
+                daemon=True,
+            ).start()
+            return
+
+        # Fallback: ask Talkin for the room settings roster when the database
+        # connector is absent or returned no profiles.
         self._inv_expected_rooms = set(active_rooms)
         self._inv_live_users = []
         self._inv_live_seen = set()
