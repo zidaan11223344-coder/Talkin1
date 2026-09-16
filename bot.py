@@ -1518,7 +1518,7 @@ def _looks_like_bot_command(text):
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
@@ -4900,15 +4900,20 @@ class TalkinBot:
         for result_room in result_rooms:
             self.send_room_text(result_room, text)
 
-        filename = GAME_IMAGE_FILES.get(game_key)
         base = _public_base_url()
-        image = ASSETS_DIR / filename if filename else None
-        if filename and base and image and image.is_file():
-            for result_room in result_rooms:
-                try:
-                    self.send_room_media(result_room, f"{base}/assets/{filename}", "image")
-                except Exception as exc:
-                    self.log("[GAME] wager result image failed:", result_room, repr(exc))
+        if base:
+            try:
+                winner_name = str(winner.get("user") or "")
+                winner_photo = getattr(self, "user_photos", {}).get(_norm_user(winner_name), "")
+                if not winner_photo:
+                    winner_photo = self._lookup_profile_photo(winner_name)
+                card = render_game_winner_card(game_key, winner_name, winner_photo)
+                url = f"{base}/games/{card.name}"
+                self._verify_public_media_url(url, "image")
+                for result_room in result_rooms:
+                    self.send_room_media(result_room, url, "image")
+            except Exception as exc:
+                self.log("[GAME] wager winner card failed:", game_key, repr(exc))
 
     def _queue_wager(self, room, sender, game_name, amount):
         try:
@@ -4984,6 +4989,7 @@ class TalkinBot:
         game_labels = {
             "رهان": ("رهان", "راهن", "رهان"),
             "مراهنة": ("رهان", "راهن", "رهان"),
+            "مراهنه": ("رهان", "راهن", "رهان"),
             "مضاربة": ("مضاربة", "ضارب", "مضاربة"),
             "مضاربه": ("مضاربة", "ضارب", "مضاربة"),
             "استثمار": ("استثمار", "استثمر", "استثمار"),
@@ -5554,14 +5560,18 @@ class TalkinBot:
             return True
         self._game_award(sender_name, reward)
         winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
-        self.send_room_text(room, f"🏆✨ مبروك! فزت في بنك مليون ✨🏆\n━━━━━━━━━━━━━━━━\n👑 الفائز: @{sender_name}\n💰 الجائزة: {_fmt_points(reward)} نقطة\n━━━━━━━━━━━━━━━━")
+        winner_text = f"🏆✨ مبروك! فاز بنك مليون ✨🏆\n━━━━━━━━━━━━━━━━\n👑 الفائز: @{sender_name}\n💰 الجائزة: {_fmt_points(reward)} نقطة\n━━━━━━━━━━━━━━━━"
+        target_rooms = self._active_rooms() or [room]
+        for target_room in target_rooms:
+            self.send_room_text(target_room, winner_text)
         try:
             base = _public_base_url()
             card = render_game_winner_card("بنك مليون", sender_name, winner_photo)
             if base and card.is_file():
                 url = f"{base}/games/{card.name}"
                 self._verify_public_media_url(url, "image")
-                self.send_room_media(room, url, "image")
+                for target_room in target_rooms:
+                    self.send_room_media(target_room, url, "image")
         except Exception as exc:
             self.log("[GAME] million bank winner card failed:", repr(exc))
         return True
@@ -5639,7 +5649,7 @@ class TalkinBot:
             return self._queue_fixed_game(room,sender_name,game_name,500)
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.
-        m=re.fullmatch(r"(مراهنة|رهان|مضاربة|مضاربه|حظي)@([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"(مراهنة|مراهنه|رهان|مضاربة|مضاربه|حظي)@([0-9]+)", raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, m.group(1), int(m.group(2)))
         # Investment with a stake is PvP, exactly like the wager games.
@@ -5655,7 +5665,7 @@ class TalkinBot:
         if low == "بنك مليون":
             return self._million_bank_game(room, sender_name)
         if low in ("مليار","billion"):
-            if not self._game_cooldown_notice(room, sender_name, 30.0, "مليار"):
+            if not self._game_cooldown_notice(room, sender_name, 420.0, "مليار"):
                 return True
 
             self.send_room_text(
