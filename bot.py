@@ -169,11 +169,7 @@ MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
 DEFAULT_BOT_BASE_STATUS = (
-    '<B><H4><div style="background-color:#000000;padding:10px;text-align:center;">'
-    '<font color="#5DE2E7">بوت حماية وألعاب وأغاني</font><br>'
-    '<font size="2" color="#B388FF">لمعرفة الألعاب والأوامر أرسل: a1 a2 a3 a4 a5 a6</font><br>'
-    '<font color="#FF6EC7">لدخول الغرف أرسل: دخول@اسم الغرفة</font><br>'
-    '<font size="2" color="#FF3B30">الماستر: ' f'{MASTER_DISPLAY_NAME}</font></div></H4></B>'
+    '<font size="1" color="#5DE2E7">حماية وألعاب | a1-a6 | دخول@الغرفة</font>'
 )
 
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
@@ -181,7 +177,7 @@ BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
 # By default it is the normal bot profile status; deployments may provide a
 # short custom value without changing the source code.
 BOT_FIRST_CONNECTION_STATUS = os.getenv("BOT_FIRST_CONNECTION_STATUS", BOT_BASE_STATUS).strip()
-PROFILE_STATUS_MAX_CHARS = max(300, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "700")))
+PROFILE_STATUS_MAX_CHARS = max(120, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "140")))
 GIFT_STATUS_SECONDS = 2 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
@@ -4579,18 +4575,9 @@ class TalkinBot:
         status = str(status or "").strip()
         self._profile_status_pending = status
         if len(status) > PROFILE_STATUS_MAX_CHARS:
-            # Keep the important formatted lines when a server has a short
-            # profile-status limit; never send a partial/unclosed HTML block.
-            compact_base = (
-                f'<b><font color="#b73206">بوت حمايه والعاب واغاني</font><br>'
-                f'<font color="#FFE87C">لمعرفه الالعاب والاوامر ارسل مساعده</font><br>'
-                f'<font color="#af0365">لدخول الغرف ارسل دخول@اسم الغرفه</font><br>'
-                f'<font color="#FFD166">مثال: دخول@مشاعر</font><br>'
-                f'<font color="#66D9FF">الماستر: {MASTER_DISPLAY_NAME}</font></b>'
-            )
-            status = status.split("<br>", 3)[0] + "<br>" + compact_base
-            if len(status) > PROFILE_STATUS_MAX_CHARS:
-                status = re.sub(r"\s+", " ", status)[:PROFILE_STATUS_MAX_CHARS]
+            # Never send a partial HTML block: a long profile update can make
+            # Talkin close the socket and trigger the bot's leave/rejoin loop.
+            status = '<b><font size="1" color="#5DE2E7">حماية وألعاب | a1-a6 | دخول@الغرفة</font></b>'
         try:
             sent = False
             # Send exactly one packet.  Some Talkin server builds close the
