@@ -165,11 +165,11 @@ MASTER_DISPLAY_NAME = os.getenv(
 DEFAULT_BOT_BASE_STATUS = (
     '<B><H4><div style="background-color:#000000;padding:10px;text-align:center;">'
     '<font color="#5DE2E7">بوت حماية وألعاب وأغاني</font><br>'
-    '<font color="#B388FF">لمعرفة الألعاب والأوامر أرسل: مساعدة</font><br>'
-    '<font color="#FF6EC7">لدخول الغرف أرسل: دخول@اسم الغرفة</font><br>\n    <font color="#FFD166">مثال: دخول@مشاعر</font><br>'
-    '<font color="#FF3B30">الماستر: '
-    f'{MASTER_DISPLAY_NAME}</font></div></H4></B>'
+    '<font color="#B388FF">لمعرفة الألعاب والأوامر أرسل: s1 s2 s3 s4 s5 s6</font><br>'
+    '<font color="#FF6EC7">لدخول الغرف أرسل: دخول@اسم الغرفة</font><br>'
+    '<font color="#FF3B30">الماستر: ' f'{MASTER_DISPLAY_NAME}</font></div></H4></B>'
 )
+
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
 # Status sent once after the first successful WebSocket/bootstrap connection.
 # By default it is the normal bot profile status; deployments may provide a
