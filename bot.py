@@ -169,7 +169,11 @@ MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
 DEFAULT_BOT_BASE_STATUS = (
-    '<font size="1" color="#5DE2E7">حماية وألعاب | a1-a6 | دخول@الغرفة</font>'
+    '<B><H4><div style="background-color:#000000;padding:10px;text-align:center;">'
+    '<font color="#5DE2E7">بوت حماية وألعاب وأغاني</font><br>'
+    '<font color="#B388FF">لمعرفة الألعاب والأوامر أرسل: a1 a2 a3 a4 a5 a6</font><br>'
+    '<font color="#FF6EC7">لدخول الغرف أرسل: دخول@اسم الغرفة</font><br>'
+    '<font color="#FF3B30">الماستر: ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛</font></div></H4></B>'
 )
 
 BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
@@ -177,7 +181,7 @@ BOT_BASE_STATUS = os.getenv("BOT_BASE_STATUS", DEFAULT_BOT_BASE_STATUS).strip()
 # By default it is the normal bot profile status; deployments may provide a
 # short custom value without changing the source code.
 BOT_FIRST_CONNECTION_STATUS = os.getenv("BOT_FIRST_CONNECTION_STATUS", BOT_BASE_STATUS).strip()
-PROFILE_STATUS_MAX_CHARS = max(120, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "140")))
+PROFILE_STATUS_MAX_CHARS = max(500, int(os.getenv("PROFILE_STATUS_MAX_CHARS", "700")))
 GIFT_STATUS_SECONDS = 2 * 60
 
 # Master account process control. The primary bot can start/stop master_bot.py
