@@ -1825,30 +1825,30 @@ def _command_menu():
     return _command_menu_for(False)
 
 def _command_menu_for(is_master=False, is_private=False):
-    # help1 contains management commands and is shown only to masters in private chat.
+    # a1 contains management commands and is shown only to masters in private chat.
     if is_master and is_private:
         return (
             "📚 أوامر البوت\n"
             "━━━━━━━━━━━━\n"
-            "help1 — الإدارة\n"
-            "help2 — الموسيقى والتفاعلات\n"
-            "help3 — الألعاب\n"
-            "help4 — الهدايا والنشر\n"
-            "help5 — النقاط\n"
-            "help6 — الغرف\n"
+            "a1 — الإدارة\n"
+            "a2 — الموسيقى والتفاعلات\n"
+            "a3 — الألعاب\n"
+            "a4 — الهدايا والنشر\n"
+            "a5 — النقاط\n"
+            "a6 — الغرف\n"
             "━━━━━━━━━━━━\n"
-            "اكتب help1 إلى help6 أو a1 إلى a6 لعرض الأوامر"
+            "اكتب a1 إلى a6 لعرض الأوامر"
         )
     return (
         "📚 أوامر البوت\n"
         "━━━━━━━━━━━━\n"
-        "help2 — الموسيقى والتفاعلات\n"
-        "help3 — الألعاب\n"
-        "help4 — الهدايا والنشر\n"
-        "help5 — النقاط\n"
-        "help6 — الغرف\n"
+        "a2 — الموسيقى والتفاعلات\n"
+        "a3 — الألعاب\n"
+        "a4 — الهدايا والنشر\n"
+        "a5 — النقاط\n"
+        "a6 — الغرف\n"
         "━━━━━━━━━━━━\n"
-        "اكتب a1 إلى a6 أو help1 إلى help6 لعرض الأوامر"
+        "اكتب a1 إلى a6 لعرض الأوامر"
     )
 
 
@@ -5833,7 +5833,7 @@ class TalkinBot:
             elif room:
                 self.send_room_text(room, menu)
             return True
-        _m_public_help = re.fullmatch(r"(?:help|a)([1-6])", _body_low)
+        _m_public_help = re.fullmatch(r"a([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
             _key = (str(room), _norm_user(sender))
@@ -6035,7 +6035,7 @@ class TalkinBot:
             else:
                 self.send_room_text(room, menu)
             return True
-        m_help = re.fullmatch(r"help([1-6])", low)
+        m_help = re.fullmatch(r"a([1-6])", low)
         if m_help:
             page=int(m_help.group(1))
             if page == 1 and (not _is_master_name(sender) or not is_private):
