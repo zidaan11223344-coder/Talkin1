@@ -1081,7 +1081,9 @@ def _save_local_json(path, data):
 # Never hard-code the token in bot.py. For public repositories, remember that
 # committed member/verification/points data becomes publicly readable.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = os.getenv("GITHUB_REPO", "zidaan11223344-coder/Talkin4").strip()
+# State backups are intentionally restricted to Talkin4. Do not allow a
+# deployment variable to redirect the bot into the main Talkin1 source repo.
+GITHUB_REPO = "zidaan11223344-coder/Talkin4"
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
 GITHUB_DATA_DIR = os.getenv("GITHUB_DATA_DIR", "bot_data").strip().strip("/")
 GITHUB_SYNC_ENABLED = bool(GITHUB_TOKEN and GITHUB_REPO and os.getenv("GITHUB_SYNC", "1").strip().lower() not in {"0", "false", "no", "off"})
@@ -1314,7 +1316,7 @@ def _github_sync_worker():
         for bot, sender in requests_to_notify:
             try:
                 notice = (
-                    "✅ تم النسخ الاحتياطي بنجاح إلى GitHub (Talkin1)."
+                    "✅ تم النسخ الاحتياطي بنجاح إلى GitHub (Talkin4)."
                     if backup_ok else
                     "❌ اكتمل النسخ الاحتياطي جزئياً؛ تعذر رفع ملف أو أكثر. راجع سجل Railway."
                 )
