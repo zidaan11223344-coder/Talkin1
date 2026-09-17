@@ -2716,15 +2716,12 @@ def _search_lookalike_image(query, exclude_urls=None):
     try:
         r = requests.get(
             "https://www.bing.com/images/search",
-            params={"q": q, "form": "HDRSC2", "first": "1", "safeSearch": "Strict"},
+            params={"q": q, "form": "HDRSC2", "first": "1"},
             headers=headers,
             timeout=LOOKALIKE_TIMEOUT,
         )
         r.raise_for_status()
         urls = _extract_image_urls_from_bing(r.text)
-        # Secondary conservative URL filter in addition to Bing SafeSearch=Strict.
-        blocked = ("porn", "xxx", "nsfw", "nude", "naked", "sex", "hentai", "18+", "adult")
-        urls = [u for u in urls if not any(x in str(u).casefold() for x in blocked)]
         excluded = {str(x).strip() for x in (exclude_urls or []) if str(x).strip()}
         fresh = [u for u in urls if u not in excluded]
         if not fresh:
@@ -4871,51 +4868,31 @@ class TalkinBot:
             return _get_points(username)
         return _add_points(username, int(amount))
 
-    def _game_ready(self, username, room, cooldown=30.0, game_name=""):
-        # فاصل 40 ثانية لكل لعبة على حدة لكل مستخدم.
-        # مثال: صندوق ثم صندوق = ينتظر 40 ثانية، لكن صندوق ثم عملة
-        # لا يحسب فاصلًا واحدًا على اللعبة الأخرى. الفاصل موحّد عبر الغرف
-        # لنفس اللعبة، وليس موحّدًا بين جميع الألعاب.
-        bot_games = {
-            "عملة", "عجلة", "صندوق", "كوب", "كأس", "وحش",
-            "بركان", "طائر", "نجم", "طاولة", "اونو", "نرد", "كنز",
-            "حجر/ورق/مقص", "استثمار", "حظ"
-        }
-        normalized_game = _norm_user(str(game_name).replace("ة", "ه"))
-        normalized_bot_games = {_norm_user(str(x).replace("ة", "ه")) for x in bot_games}
-        if normalized_game in normalized_bot_games:
-            game_key = normalized_game
-            cooldown = 40.0
-        else:
-            game_key = normalized_game or "general"
-        key=(game_key, _norm_user(username))
-        now=time.time()
+    def _game_ready(self, username, room, cooldown=40.0, game_name=""):
+        # 40 ثانية لنفس اللعبة فقط ولكل مستخدم.
+        # مثال: حظ ثم حظ = ينتظر 40 ثانية، بينما حظ ثم استثمار
+        # أو حظ ثم صندوق = مسموح فوراً. الفاصل مستقل عن الغرفة.
+        # كل الألعاب تستخدم نفس مدة الفاصل، لكن لكل لعبة مفتاح مستقل.
+        game_key = _norm_user(str(game_name or "general").replace("ة", "ه")) or "general"
+        cooldown = 40.0
+        key = (game_key, _norm_user(username))
+        now = time.time()
         with self.game_lock:
-            last=self.game_cooldown.get(key,0.0)
-            if now-last < cooldown:
-                return False, int(cooldown-(now-last))+1
-            self.game_cooldown[key]=now
-        return True,0
+            last = self.game_cooldown.get(key, 0.0)
+            if now - last < cooldown:
+                return False, int(cooldown - (now - last)) + 1
+            self.game_cooldown[key] = now
+        return True, 0
 
-    def _game_cooldown_notice(self, room, username, cooldown=30.0, game_name=""):
-        ok, left = self._game_ready(username, room, cooldown, game_name)
+    def _game_cooldown_notice(self, room, username, cooldown=40.0, game_name=""):
+        ok, left = self._game_ready(username, room, 40.0, game_name)
         if not ok:
-            normalized_game = _norm_user(str(game_name).replace("ة", "ه"))
-            bot_games = {
-                _norm_user(str(x).replace("ة", "ه")) for x in (
-                    "عملة", "عجلة", "صندوق", "كوب", "كأس", "وحش",
-                    "بركان", "طائر", "نجم", "طاولة", "اونو", "نرد", "كنز",
-                    "حجر/ورق/مقص", "استثمار", "حظ"
-                )
-            }
-            if normalized_game in bot_games:
-                self.send_room_text(
-                    room,
-                    f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.\n"
-                    f"🎮 الفاصل بين ألعاب البوت: 40 ثانية."
-                )
-            else:
-                self.send_room_text(room, f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.")
+            label = str(game_name or "اللعبة").strip() or "اللعبة"
+            self.send_room_text(
+                room,
+                f"⏳ @{username} انتظر {left} ثانية قبل إعادة لعبة {label}.\n"
+                f"🎮 الفاصل 40 ثانية لنفس اللعبة فقط، ويمكنك لعب لعبة أخرى الآن."
+            )
         return ok
 
     def _send_game_result(self, room, text, game_key, winner_name="", target_rooms=None):
@@ -5056,7 +5033,7 @@ class TalkinBot:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
         # The 30-second interval belongs to this game only; another game can be played immediately.
-        if not self._game_cooldown_notice(room, sender, 30.0, game_name):
+        if not self._game_cooldown_notice(room, sender, 40.0, game_name):
             return True
 
         self._cleanup_expired_wagers()
@@ -5199,7 +5176,7 @@ class TalkinBot:
     def _queue_fixed_game(self, room, sender, game_name, prize=500):
         """Global two-player queue; both players may enter from the same room or different rooms."""
         prize=int(prize)
-        if not self._game_cooldown_notice(room,sender,30.0,game_name):
+        if not self._game_cooldown_notice(room, sender, 40.0,game_name):
             return True
         if not _is_primary_master(sender) and _get_points(sender) < prize:
             self.send_room_text(room,f"❌ تحتاج {prize} نقطة للمشاركة في {game_name}. رصيدك: {_fmt_points(_get_points(sender))}")
@@ -5237,7 +5214,7 @@ class TalkinBot:
         return True
 
     def _fruit_match(self, room, sender, emoji):
-        if not self._game_cooldown_notice(room, sender, 30.0, "فيس"):
+        if not self._game_cooldown_notice(room, sender, 40.0, "فيس"):
             return True
         fruits=("🍓","🍇","🍉","🍌","🍋","🍊","🍐","🍎","🍏","🥑","🥦","🍑","🥭","🍍","🥥","🥝","🍅","🍆","🧄","🥕","🌽","🌶️")
         if emoji not in fruits:
@@ -5349,7 +5326,7 @@ class TalkinBot:
                 self.send_room_text(room, "⏳ لديك 5 محاصيل قيد الزراعة حالياً. احصد أحدها أولاً ثم ازرع محصولاً جديداً.")
                 return True
 
-        if not self._game_cooldown_notice(room, sender, 30.0, "زرع"):
+        if not self._game_cooldown_notice(room, sender, 40.0, "زرع"):
             return True
 
         with self.game_lock:
@@ -5392,7 +5369,7 @@ class TalkinBot:
         return True
 
     def _lottery_game(self, room, sender, amount=0):
-        if not self._game_cooldown_notice(room, sender, 30.0, game_name):
+        if not self._game_cooldown_notice(room, sender, 40.0, "حظ"):
             return True
         amount = int(amount or 0)
         if amount < 0:
@@ -5440,7 +5417,7 @@ class TalkinBot:
         return True
 
     def _investment_bot_game(self, room, sender):
-        if not self._game_cooldown_notice(room, sender, 30.0, "استثمار"):
+        if not self._game_cooldown_notice(room, sender, 40.0, "استثمار"):
             return True
         """Free investment game against the bot. No @amount and no image."""
         # Free investment against the bot: a reward is granted only when the
@@ -5516,21 +5493,13 @@ class TalkinBot:
         return "unknown"
 
     def _picture_search_queries_for_name(self, name):
-        """استعلامات صور مرحة ومحتشمة؛ 80% قرود و20% أشخاص عاديون."""
+        """اختيار عشوائي متنوع: 40% شباب، 40% بنات، و20% قرود."""
         roll = secrets.randbelow(100)
+        if roll < 40:
+            return ("شباب حلوين", "شباب عرب", "شباب وسيمين")
         if roll < 80:
-            return ("قرود", "قرد مضحك", "قرود مضحكة", "funny monkey")
-
-        gender = self._classify_picture_name(name)
-        safe_suffix = " محترم محتشم ملابس عادية"
-        if gender == "male":
-            return ("شباب عاديين" + safe_suffix, "شباب عرب" + safe_suffix,
-                    "رجال عاديين" + safe_suffix, "men casual portrait")
-        if gender == "female":
-            return ("بنات عاديين" + safe_suffix, "بنات عرب" + safe_suffix,
-                    "نساء عاديين" + safe_suffix, "women casual portrait modest")
-        return ("شخص عادي محترم محتشم", "شخص عربي بملابس عادية",
-                "شخص casual portrait modest", "family friendly portrait")
+            return ("بنات حلوات", "بنات عرب", "بنات جميلات")
+        return ("قرود", "قرد مضحك", "قرود مضحكة", "funny monkey")
 
     def _handle_random_picture_command(self, room, body, sender):
         """Handle صورتي/صورتك and .صوره username with name-aware playful searches."""
@@ -5609,13 +5578,7 @@ class TalkinBot:
             try:
                 recent = getattr(self, "_random_picture_recent", {}); room_key = str(room)
                 excluded = set(recent.get(room_key, []))
-                gender = self._classify_picture_name(sender)
-                if gender == "male":
-                    variants = ("شباب عاديين محترمين محتشمين", "شباب عرب بملابس عادية", "men casual portrait")
-                elif gender == "female":
-                    variants = ("بنات عاديات محترمات محتشمات", "بنات عرب بملابس عادية", "women casual portrait modest")
-                else:
-                    variants = ("شخص عادي محترم محتشم", "شخص عربي بملابس عادية", "family friendly portrait")
+                variants = ("شباب حلوين", "بنات حلوات", "قرود")
                 query = secrets.choice(variants)
                 image_url = _search_lookalike_image(query, exclude_urls=excluded)
                 if image_url and image_url in excluded:
@@ -5787,7 +5750,7 @@ class TalkinBot:
         return True
 
     def _steal_game(self, room, sender, requested_victim=""):
-        if not self._game_cooldown_notice(room, sender, 30.0, "اسرق"):
+        if not self._game_cooldown_notice(room, sender, 40.0, "اسرق"):
             return True
 
         members = self._room_member_usernames_for_steal(room, sender)
@@ -6039,7 +6002,7 @@ class TalkinBot:
         return True
 
     def _million_bank_game(self, room, sender_name):
-        if not self._game_cooldown_notice(room, sender_name, 30.0, "بنك مليون"):
+        if not self._game_cooldown_notice(room, sender, 40.0, "بنك مليون"):
             return True
         self.send_room_text(room, f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n✅ @{sender_name}\n🔎 جاري البحث عن الجائزة...\n━━━━━━━━━━━━━━")
         time.sleep(1.0)
@@ -6258,7 +6221,7 @@ class TalkinBot:
         if game_low in ("بنك مليون", "بنك"):
             return self._million_bank_game(room, sender_name)
         if low in ("مليار","billion"):
-            if not self._game_cooldown_notice(room, sender_name, 420.0, "مليار"):
+            if not self._game_cooldown_notice(room, sender_name, 40.0, "مليار"):
                 return True
 
             self.send_room_text(
@@ -6321,7 +6284,7 @@ class TalkinBot:
         if game_low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
         if low in ("حجر","ورق","مقص"):
-            if not self._game_cooldown_notice(room, sender_name, 30.0, "حجر_ورق_مقص"):
+            if not self._game_cooldown_notice(room, sender, 40.0, "حجر_ورق_مقص"):
                 return True
             bot_choice=secrets.choice(("حجر","ورق","مقص"))
             win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
@@ -6339,7 +6302,7 @@ class TalkinBot:
         if low == "اسرق":
             return self._steal_game(room, sender_name)
         if game_low in ("سرقه"):
-            if not self._game_cooldown_notice(room, sender_name, 30.0, "سرقة" if low == "سرقة" else "رشوة"):
+            if not self._game_cooldown_notice(room, sender, 40.0, "سرقة" if low == "سرقة" else "رشوة"):
                 return True
             label = "🕵️ سرقة" if low == "سرقة" else "💼 رشوة"
             won = secrets.randbelow(2) == 0
