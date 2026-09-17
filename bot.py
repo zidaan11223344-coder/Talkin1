@@ -1242,16 +1242,11 @@ _github_restore_or_seed_state()
 def _github_sync_after_local_save(path, data):
     if not GITHUB_SYNC_ENABLED or _GITHUB_RESTORING:
         return
-    # Never block the WebSocket/event handler on a GitHub HTTP request. Keep
-    # only the latest value for each file and let one worker serialize commits.
-    # This is especially important for tracked_rooms/room_users, which may be
-    # saved several times while a room is joining.
-    try:
-        snapshot = json.loads(json.dumps(data, ensure_ascii=False))
-    except Exception:
-        snapshot = data
+    # Never serialize/copy a potentially large roster or points dictionary in
+    # the WebSocket/event handler. The local atomic save already completed;
+    # the worker reads the newest file from disk when it uploads it.
     with _GITHUB_PENDING_CONDITION:
-        _GITHUB_PENDING[str(path)] = snapshot
+        _GITHUB_PENDING[str(path)] = None
         _GITHUB_PENDING_CONDITION.notify()
 
 
@@ -1277,7 +1272,7 @@ def _queue_github_full_backup():
                 "bytes": len(raw),
             }
     manifest_path = DATA_DIR / "backup_manifest.json"
-    _github_sync_after_local_save(manifest_path, manifest)
+    _save_local_json(manifest_path, manifest)
     queued += 1
     return queued
 
@@ -1302,8 +1297,11 @@ def _github_sync_worker():
             pending = dict(_GITHUB_PENDING)
             _GITHUB_PENDING.clear()
         backup_ok = True
-        for path, data in pending.items():
+        for path in pending:
             try:
+                data = _load_local_json(path, None)
+                if data is None:
+                    continue
                 with _GITHUB_SYNC_LOCK:
                     if not _github_put_file(path, data):
                         backup_ok = False
