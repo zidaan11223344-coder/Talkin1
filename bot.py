@@ -1942,7 +1942,7 @@ def _room_moderation_config(room):
         cfg = {}
     return {
         "enabled": bool(cfg.get("enabled", False)),
-        "repeat_limit": max(2, int(cfg.get("repeat_limit", 3) or 3)),
+        "repeat_limit": max(2, int(cfg.get("repeat_limit", 11) or 11)),
         "words": [str(w).strip() for w in cfg.get("words", []) if str(w).strip()],
     }
 
