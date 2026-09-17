@@ -1577,6 +1577,73 @@ def _game_stats_data():
     return data if isinstance(data, dict) else {}
 
 
+# العتبات السابقة محفوظة حتى لا تتغير مستويات اللاعبين الحاليين.
+GAME_LEVELS = (
+    (0, "مبتدئ"),
+    (10, "لاعب نشيط"),
+    (50, "لاعب محترف"),
+    (150, "أسطورة الألعاب"),
+    (500, "ملك الألعاب"),
+    (1000, "سيد الألعاب"),
+    (2000, "إمبراطور الألعاب"),
+)
+
+
+def _game_level_info(username):
+    """Return (level number, label, total plays) from all game statistics."""
+    item = _game_stats_data().get(_norm_user(username), {})
+    games = item.get("games", {}) if isinstance(item, dict) else {}
+    plays = sum(int((value or {}).get("plays", 0) or 0)
+                for value in games.values()) if isinstance(games, dict) else 0
+    level_number, label = 1, GAME_LEVELS[0][1]
+    for number, (threshold, current_label) in enumerate(GAME_LEVELS, 1):
+        if plays >= threshold:
+            level_number, label = number, current_label
+    return level_number, label, plays
+
+
+def _game_star_rank(username):
+    """Top-seven rank: first place has seven stars, seventh has one."""
+    rows = []
+    for key, item in _game_stats_data().items():
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("username") or key).strip().lstrip("@")
+        level, _label, plays = _game_level_info(name)
+        if plays:
+            rows.append((level, plays, _norm_user(name), name))
+    rows.sort(key=lambda row: (-row[0], -row[1], row[2]))
+    for rank, row in enumerate(rows[:7], 1):
+        if row[2] == _norm_user(username):
+            return rank
+    return None
+
+
+def _game_top10():
+    """Return the ten strongest players ordered by level, then play count."""
+    rows = []
+    for key, item in _game_stats_data().items():
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("username") or key).strip().lstrip("@")
+        level, label, plays = _game_level_info(name)
+        if plays:
+            rows.append((level, label, plays, name))
+    rows.sort(key=lambda row: (-row[0], -row[2], _norm_user(row[3])))
+    return rows[:10]
+
+
+def _game_welcome(username, room):
+    """Build the level-aware welcome shown whenever a player enters a room."""
+    level, label, plays = _game_level_info(username)
+    rank = _game_star_rank(username)
+    star_line = f"\n⭐ ترتيب النجوم: {'★' * (8 - rank)}" if rank else ""
+    return (f"🎮 أهلاً بك يا @{username}\n"
+            f"🏠 الغرفة: {room}\n"
+            f"🏅 مستوى الألعاب: {level} — {label}\n"
+            f"🎯 جولاتك: {plays}{star_line}")
+
+
 def _record_game(username, game_key, points_delta=0, stake=0):
     key = _norm_user(username)
     if not key or _is_primary_master(username):
@@ -1603,15 +1670,8 @@ def _game_stats(username, game_key):
 
 
 def _game_level(username):
-    item = _game_stats_data().get(_norm_user(username), {})
-    games = item.get("games", {}) if isinstance(item, dict) else {}
-    plays = sum(int((v or {}).get("plays", 0) or 0) for v in games.values()) if isinstance(games, dict) else 0
-    levels = ((0, "مبتدئ"), (10, "لاعب نشيط"), (50, "لاعب محترف"), (150, "أسطورة الألعاب"), (500, "ملك الألعاب"), (1000, "سيد الألعاب"))
-    level = levels[0][1]
-    for threshold, label in levels:
-        if plays >= threshold:
-            level = label
-    return plays, level
+    _level, label, plays = _game_level_info(username)
+    return plays, label
 
 
 def _game_top(game_key, limit=10):
@@ -6862,6 +6922,22 @@ class TalkinBot:
         if low in ("نقاطي","points"):
             self.send_private_text(sender, _points_summary_text(sender))
             return True
+        if low in ("توب الألعاب", "توب الالعاب", "top games", "games top"):
+            rows = _game_top10()
+            if rows:
+                lines = []
+                for position, (_level, label, plays, username) in enumerate(rows, 1):
+                    medal = "🥇" if position == 1 else f"{position}."
+                    prefix = "👑 ذهبي" if position == 1 else f"مستوى {_level}"
+                    lines.append(f"{medal} @{username} — {prefix} ({label}) | {plays} جولة")
+                message = "🏆 توب الألعاب — أفضل 10\n━━━━━━━━━━━━\n" + "\n".join(lines)
+            else:
+                message = "🏆 توب الألعاب\n━━━━━━━━━━━━\nلا توجد نتائج بعد."
+            if is_private:
+                self.send_private_text(sender, message)
+            else:
+                self.send_room_text(room, message)
+            return True
         mtop=re.fullmatch(r"توب\s*(رهان|مضاربة|حظي|حظ|استثمار|حظ يا نصيب|بورصة|بورصه)?", low)
         if low in ("توب","top") or mtop:
             game_label=mtop.group(1) if mtop else None
@@ -7604,12 +7680,26 @@ class TalkinBot:
             # Welcome the master using the exact configured BOT_MASTER account.
             if _norm_user(username) == _norm_user(BOT_MASTER):
                 self.send_room_text(room, f"👑 لقد أتاكم الزعيم\n👤 {username}\n🏠 الغرفة: {room}")
-            elif self.custom_welcome_enabled:
-                cw = self.custom_welcomes.get(_norm_user(username))
+            elif username and _norm_user(username) != _norm_user(BOT_ID):
+                level, _label, _plays = _game_level_info(username)
+                welcomes_enabled = bool(getattr(self, "custom_welcome_enabled", True))
+                cw = self.custom_welcomes.get(_norm_user(username)) if welcomes_enabled else None
                 if _is_vip_user(username):
                     cw = {"message": "👑 عضو Vip\n👤 {username}\n🏠 الغرفة: {room}"}
-                if isinstance(cw, dict) and cw.get("message"):
-                    self.send_room_text(room, str(cw["message"]).replace("{username}", username).replace("{room}", room))
+                # VIP keeps the original welcome at level 1. Once the player
+                # earns a higher game level, the level welcome replaces VIP.
+                if _is_vip_user(username) and level == 1 and isinstance(cw, dict) and cw.get("message"):
+                    self.send_room_text(
+                        room,
+                        str(cw["message"]).replace("{username}", username).replace("{room}", room),
+                    )
+                else:
+                    level_welcome = _game_welcome(username, room)
+                    if isinstance(cw, dict) and cw.get("message") and not _is_vip_user(username):
+                        level_welcome = (str(cw["message"])
+                                         .replace("{username}", username)
+                                         .replace("{room}", room) + "\n\n" + level_welcome)
+                    self.send_room_text(room, level_welcome)
         elif event_type == "user_left" and username:
             self.room_users[room].pop(username, None)
             if _norm_user(username) == _norm_user(BOT_MASTER):
