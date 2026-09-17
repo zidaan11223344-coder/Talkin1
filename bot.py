@@ -1593,9 +1593,23 @@ GAME_LEVELS = (
 )
 
 
+def _game_name_key(name):
+    """Compare decorated usernames without changing their displayed form."""
+    raw = unicodedata.normalize("NFKC", str(name or "")).strip().lstrip("@")
+    compact = "".join(char for char in raw
+                       if not unicodedata.category(char).startswith(("M", "P", "S", "C", "Z")))
+    return (compact or raw).casefold()
+
+
 def _game_level_info(username):
     """Return (level number, label, total plays) from all game statistics."""
-    item = _game_stats_data().get(_norm_user(username), {})
+    data = _game_stats_data()
+    item = data.get(_norm_user(username), {})
+    if not isinstance(item, dict):
+        wanted = _game_name_key(username)
+        item = next((candidate for key, candidate in data.items()
+                     if isinstance(candidate, dict)
+                     and _game_name_key(candidate.get("username") or key) == wanted), {})
     games = item.get("games", {}) if isinstance(item, dict) else {}
     plays = sum(int((value or {}).get("plays", 0) or 0)
                 for value in games.values()) if isinstance(games, dict) else 0
@@ -1615,10 +1629,10 @@ def _game_star_rank(username):
         name = str(item.get("username") or key).strip().lstrip("@")
         level, _label, plays = _game_level_info(name)
         if plays:
-            rows.append((level, plays, _norm_user(name), name))
+            rows.append((level, plays, _game_name_key(name), name))
     rows.sort(key=lambda row: (-row[0], -row[1], row[2]))
     for rank, row in enumerate(rows[:10], 1):
-        if row[2] == _norm_user(username):
+        if row[2] == _game_name_key(username):
             return rank
     return None
 

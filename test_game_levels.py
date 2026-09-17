@@ -60,4 +60,19 @@ def test_zero_rounds_have_no_room_welcome_and_twenty_are_new(tmp_path, monkeypat
     assert bot._game_level_info("twenty")[0] == 1
     assert bot._game_level_info("zero")[2] == 0
 
+
+def test_decorated_top_name_matches_room_username(tmp_path, monkeypatch):
+    stats_file = tmp_path / "game_stats.json"
+    monkeypatch.setattr(bot, "GAME_STATS_FILE", stats_file)
+    decorated = "✥سًــــيّدُهےـالــحًࢪفُـے✥"
+    stats_file.write_text(json.dumps({
+        "stored-key": {
+            "username": decorated,
+            "games": {"test": {"plays": 104}},
+        }
+    }), encoding="utf-8")
+    room_form = "✥ســــيّدُهےـالــحࢪفُـے✥"
+    assert bot._game_star_rank(room_form) == 1
+    assert decorated in bot._game_top10_message()
+
 print("game levels: PASS")
