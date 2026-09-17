@@ -6605,6 +6605,42 @@ class TalkinBot:
             self.send_private_text(sender, f"📣 تم إرسال الرسالة إلى {count} غرفة.")
             return True
 
+        # Ordinary-user private message: رساله@اسم_المستخدم نص الرسالة
+        # or: رساله اسم_المستخدم نص الرسالة
+        # The message itself is NEVER echoed to the room. The recipient gets
+        # a private notification containing the sender, room and message,
+        # while the requester gets a private success/failure result.
+        m_user_private = re.fullmatch(r"(?:رساله|رسالة)(?:@|\s+)@?([^\s@]+)\s+(.+)", text, re.I | re.S)
+        if m_user_private:
+            target = m_user_private.group(1).strip().lstrip("@")
+            message_text = m_user_private.group(2).strip()
+            if not target or not message_text:
+                return True
+
+            private_payload = (
+                f"📩 لديك رسالة خاصة من @{sender}\n"
+                f"🏠 الغرفة: {str(room or 'غير محددة').strip()}\n"
+                f"📝 نص الرسالة: {message_text}"
+            )
+            try:
+                sent = bool(self.send_private_text(target, private_payload))
+            except Exception as exc:
+                sent = False
+                self.log("[PRIVATE-MSG] failed", repr(exc))
+
+            # Do not let the normal command-response router publish this
+            # confirmation in the room. It must reach the requester privately.
+            old_rerouting = getattr(self._master_reply_local, "rerouting", False)
+            try:
+                self._master_reply_local.rerouting = True
+                if sent:
+                    self.send_private_text(sender, f"✅ تم إرسال الرسالة إلى @{target} بنجاح.")
+                else:
+                    self.send_private_text(sender, f"❌ فشل إرسال الرسالة إلى @{target}.")
+            finally:
+                self._master_reply_local.rerouting = old_rerouting
+            return True
+
         # Master-only private broadcast: خاص@النص / رسالة@النص / broadcast@النص.
         # Also accept: رساله خاص@النص / رسالة خاص@النص.
         m_broadcast = re.fullmatch(r"(?:خاص|رسالة|رساله|broadcast)@(.+)", text, re.I | re.S)
