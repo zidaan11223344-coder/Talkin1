@@ -1292,6 +1292,17 @@ if GITHUB_SYNC_ENABLED and not _GITHUB_WORKER_STARTED:
     _GITHUB_WORKER_STARTED = True
 
 
+def _is_ns_command(text):
+    """Fast-path for Next/NS navigation commands.
+
+    NS is navigation, not game logic. It must never be delayed by transport
+    de-duplication or by a game handler that is sleeping in another command.
+    """
+    return str(text or "").strip().casefold() in {
+        "ns", "n", "التالي", "القائمة التالية", "next"
+    }
+
+
 def _norm_user(name):
     return str(name or "").strip().lstrip("@").casefold()
 
@@ -1518,11 +1529,21 @@ def _looks_like_bot_command(text):
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "نرد", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "فيس", "سنارة", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "رشوة", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "العاب", "ألعاب", "حظ", "نرد", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
-    return low.startswith(prefixes) or low in ("help", "مساعدة", "games", "game") or low in {x.casefold() for x in GAME_COMMANDS}
+    normalized_low = low.replace("ة", "ه")
+    normalized_prefixes = tuple(str(x).casefold().replace("ة", "ه") for x in prefixes)
+    normalized_games = {str(x).casefold().replace("ة", "ه") for x in GAME_COMMANDS}
+    return (
+        low.startswith(prefixes)
+        or normalized_low.startswith(normalized_prefixes)
+        or low in ("help", "مساعدة", "games", "game")
+        or normalized_low in ("مساعده", "games", "game")
+        or low in {x.casefold() for x in GAME_COMMANDS}
+        or normalized_low in normalized_games
+    )
 
 def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
@@ -1558,7 +1579,7 @@ def _game_stats_data():
 
 def _record_game(username, game_key, points_delta=0, stake=0):
     key = _norm_user(username)
-    if not key:
+    if not key or _is_primary_master(username):
         return
     data = _game_stats_data()
     item = data.get(key, {"username": str(username).strip().lstrip("@"), "games": {}})
@@ -1628,7 +1649,7 @@ def _get_points(username):
     return int(item.get("points",0) or 0)
 
 def _fmt_points(value):
-    """Compact point balances for chat: 1,000 -> 1k and 1,000,000,000 -> 1m."""
+    """Compact point balances for chat: 1k -> 1k and 1k,000,000 -> 1m."""
     if value is None:
         return "♾️"
     try:
@@ -1663,19 +1684,12 @@ def _points_summary_text(username):
     # غير المحدودة تبقى مخفية وتُطبق فقط داخل منطق الألعاب/العمليات.
     pts = _get_points(username)
     plays, level = _game_level(username)
-    labels=[("رهان","bet"),("مضاربة","duel"),("مليار","billion"),("حظي","luck"),("استثمار","investment"),("حظ","luck_free"),("حجر/ورق/مقص","rps"),("زرع","farm"),("فيس","fruit"),("ألعاب أخرى","misc")]
-    details=[]
-    for label,key in labels:
-        g=_game_stats(username,key)
-        details.append(f"🎮 {label}: لعب {g['plays']} | نقاط {g['points']:+d} | رهان {g['staked']}")
     return (f"╭━━━〔 💎 نقاطي 〕━━━╮\n"
             f"┃ 👤 @{str(username).strip().lstrip('@')}\n"
             f"┃ 💰 الرصيد: {_fmt_points(pts)}\n"
             f"┃ ⭐ المستوى: {level}\n"
             f"┃ 🎮 مرات اللعب: {plays}\n"
-            f"╰━━━━━━━━━━━━━━╯\n"
-            + "🎮 الألعاب\n"
-            + "\n".join(details))
+            f"╰━━━━━━━━━━━━━━╯")
 
 def _ensure_replies_file():
     data = _load_local_json(REPLIES_FILE, {})
@@ -1826,51 +1840,50 @@ def _command_menu():
     return _command_menu_for(False)
 
 def _command_menu_for(is_master=False, is_private=False):
-    # help1 contains management commands and is shown only to masters in private chat.
+    # a1 contains management commands and is shown only to masters in private chat.
     if is_master and is_private:
         return (
             "📚 أوامر البوت\n"
             "━━━━━━━━━━━━\n"
-            "help1 — الإدارة\n"
-            "help2 — الموسيقى والتفاعلات\n"
-            "help3 — الألعاب\n"
-            "help4 — الهدايا والنشر\n"
-            "help5 — النقاط\n"
-            "help6 — الغرف\n"
+            "a1 — الإدارة\n"
+            "a2 — الموسيقى والتفاعلات\n"
+            "A3 — الألعاب\n"
+            "a4 — الهدايا والنشر\n"
+            "a5 — النقاط\n"
+            "a6 — الغرف\n"
             "━━━━━━━━━━━━\n"
-            "اكتب help1 إلى help6 أو a1 إلى a6 لعرض الأوامر"
+            "اكتب a1 إلى a6 لعرض الأوامر"
         )
     return (
         "📚 أوامر البوت\n"
         "━━━━━━━━━━━━\n"
-        "help2 — الموسيقى والتفاعلات\n"
-        "help3 — الألعاب\n"
-        "help4 — الهدايا والنشر\n"
-        "help5 — النقاط\n"
-        "help6 — الغرف\n"
+        "a2 — الموسيقى والتفاعلات\n"
+        "A3 — الألعاب\n"
+        "a4 — الهدايا والنشر\n"
+        "a5 — النقاط\n"
+        "a6 — الغرف\n"
         "━━━━━━━━━━━━\n"
-        "اكتب a1 إلى a6 أو help1 إلى help6 لعرض الأوامر"
+        "اكتب a2 إلى a6 لعرض الأوامر"
     )
 
 
 def _default_help_sections():
-    """Complete help catalog. Each help page may contain multiple sections.
-
-    ``Ns`` advances to the next section within the same help page.
-    """
+    """Complete help catalog. ``ns`` advances only inside the opened category."""
     return {
         1: [
             '📋 أوامر الإدارة — 1\n━━━━━━━━━━━━\nk@اسم — طرد عضو\nkick اسم — طرد عضو\nb@اسم — حظر عضو\nban اسم — حظر عضو\nbl@اسم — حظر عضو بالقائمة\nub@اسم — فك الحظر\nu@اسم — فك الحظر\nunban اسم — فك الحظر\na@اسم — تعيين إداري\nadmin اسم — تعيين إداري\no@اسم — تعيين أونر/مالك\nowner اسم — تعيين أونر/مالك',
             '📋 أوامر الإدارة — 2\n━━━━━━━━━━━━\nتشغيل الحماية — تشغيل حماية الغرفة\nإيقاف الحماية — إيقاف حماية الغرفة\nmr@عدد — تحديد حد التكرار\nخاص@النص — إرسال رسالة خاصة لجميع المستخدمين\nرسالة@النص — نفس الأمر\nbroadcast@النص — نفس الأمر\nنسخ احتياطي — إنشاء نسخة احتياطية\nإعادة تشغيل البوت — إعادة تشغيل البوت\nتشغيل الماستر — تشغيل حساب الماستر\nإيقاف الماستر — إيقاف حساب الماستر\nحالة الماستر — حالة حساب الماستر\n\n📌 هذه الأوامر مخصصة للماستر/الإدارة حسب صلاحية الأمر.',
         ],
         2: [
-            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال:\n.sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
-            '❤️ التفاعلات والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nشبيه@اسم — البحث عن الشبيه\nشبيهك@اسم — البحث عن شبيهك\n\n📌 التفاعل يكون على كود المنشور/المحتوى المرسل من البوت.',
+            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال:\.sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
+            '❤️ التفاعلات والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — يقول جاري البحث عن صورتك يا @اسم ثم يبحث عن صورة ويرسلها في الروم\nشبيه@اسم — البحث عن الشبيه\nشبيهك@اسم — البحث عن شبيهك\n\n📌 التفاعل يكون على كود المنشور/المحتوى المرسل من البوت.',
         ],
         3: [
-            '🎮 الألعاب — 1: التحديات\n━━━━━━━━━━━━\nالعاب / ألعاب / لعب / games / game — عرض قائمة الألعاب\nرهان@المبلغ — رهان لاعب ضد لاعب\nمراهنة@المبلغ — مراهنة لاعب ضد لاعب\nمضاربة@المبلغ — مضاربة لاعب ضد لاعب\nاستثمار@المبلغ — استثمار لاعب ضد لاعب\nحظي@المبلغ — تحدي حظ لاعب ضد لاعب\nاستثمار — استثمار مجاني مع البوت\nحظ@المبلغ — حظ بمبلغ\nحظ — حظ عشوائي\nحجر / ورق / مقص — لعبة ضد البوت',
-            '🎮 الألعاب — 2: الألعاب الفردية\n━━━━━━━━━━━━\nمليار — لعبة المليار\nبنك مليون — جائزة مليون بنفس نظام المليار\nزرع@رمز_المحصول — زراعة محصول\nفيس@الرمز — مطابقة/تحدي الفيس\nاسرق — سرقة عشوائية من عضو\nاسرق@اسم — سرقة من عضو محدد\nاسرق اسم — سرقة من عضو محدد\n\n🌱 الزراعة: حتى 5 أنواع مختلفة في نفس الوقت.\n📌 كل لعبة لها نظام تبريد خاص بها عند تطبيقه.',
-            '🎮 الألعاب — 3: الألعاب العالمية\n━━━━━━━━━━━━\nسنارة — تحدي عالمي، الفائز +500\nبرق — تحدي عالمي، الفائز +500\nياقوت — تحدي عالمي، الفائز +500\nصدام — تحدي عالمي، الفائز +500\nكاشف — تحدي عالمي، الفائز +500\n\n📌 أول لاعب يفتح الجولة، والثاني ينضم من أي غرفة موجود فيها البوت.\n📌 نتيجة الجولة والصورة تظهر للمشاركين فقط.',
+            '🎮 A3 — الألعاب — 1: ضد البوت (نصية)\n━━━━━━━━━━━━\n\u20661.\u2069 حجر / ورق / مقص\n\u20662.\u2069 استثمار\n\u20663.\u2069 حظ\n\u20664.\u2069 عملة أو عمله@وجه/كتابة\n\u20665.\u2069 عجلة\n\u20666.\u2069 صندوق أو صندوق@1..3\n\u20667.\u2069 كوب أو كأس@1..3\n\u20668.\u2069 وحش\n\u20669.\u2069 بركان\n🔟 طائر\n\u206611.\u2069 نجم\n\u206612.\u2069 طاولة\n\u206613.\u2069 اونو\n\n📌 هذه الألعاب ضد البوت\n📌 نتائجها نصية فقط بدون صور',
+            '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n\u206614.\u2069 رهان@المبلغ\n\u206615.\u2069 مضاربة@المبلغ\n\u206616.\u2069 حظي@المبلغ\n\u206617.\u2069 استثمار@المبلغ\n\u206618.\u2069 حظ@المبلغ\n\n📌 ألعاب الرهان تعتمد على المبلغ الذي تحدده.',
+            '🎮 A3 — الألعاب — 3: البنك والجوائز\n━━━━━━━━━━━━\n\u206619.\u2069 بنك أو بنك مليون\n\u206620.\u2069 مليار\n\u206621.\u2069 زرع@رمز\n\u206622.\u2069 فيس@اسم\n\n📌 هذه الألعاب تستخدم أنظمتها الخاصة للجوائز والصور عند الحاجة.',
+            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n\u206623.\u2069 سنارة أو سناره\n\u206624.\u2069 برق\n\u206625.\u2069 ياقوت\n\u206626.\u2069 صدام\n\u206627.\u2069 كاشف\n\n📌 هذه الألعاب تعتمد على مشاركة لاعبين من الغرف.',
+            '🎮 A3 — الألعاب — 5: التفاعل\n━━━━━━━━━━━━\n\u206628.\u2069 اسرق أو اسرق@اسم\n\u206629.\u2069 شبيه@اسم\n\n📌 شبيه يبحث عن صورة مناسبة ويرسلها في الروم.\n📌 هذه آخر قائمة في A3.\n📌 اكتب Ns للقائمة التالية.',
         ],
         4: [
             '🎁 الهدايا — 1\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nهدايا — عرض/فتح نظام الهدايا\ngifts — الهدايا\ngv — الهدايا\n\n🔒 المرسل والمستلم يجب أن يكونا موثقين/مسموحاً لهما بالنظام.\n💰 يتم خصم قيمة الهدية من رصيد النقاط.',
@@ -1881,11 +1894,10 @@ def _default_help_sections():
             '💸 النقاط — 2: التحويل\n━━━━━━━━━━━━\nsb@اسم@عدد — تحويل نقاط لمستخدم\n\nمثال:\nsb@ahmd555@1000\n\n📌 التحويل متاح للمستخدم الموثق، ويُخصم من رصيد المرسل ويُضاف للمستلم.\n\nللاطلاع على الرصيد استخدم: نقاطي',
         ],
         6: [
-            '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nمثال: دخول@مشاعر\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد\n\n📌 الدعوات تقرأ قائمة إعدادات الغرفة كاملة: الأونرات، المشرفين، والأعضاء، ولا تخلط أعضاء الغرف الأخرى.\n📌 inv يعمل داخل الغرفة المطلوبة، ويتطلب رفع البوت أونر عند الحاجة.',
+            '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nمثال: دخول@مشاعر\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد',
             '🏠 الغرف والترحيب — 2\n━━━━━━━━━━━━\nsay نص — إرسال نص داخل الغرفة\nقل نص — إرسال نص داخل الغرفة\n\n+sr@اسم_المستخدم@النص — إضافة رد/ترحيب مخصص (ماستر)\nsr@on — تشغيل الردود المخصصة\nsr@off — إيقاف الردود المخصصة\nswc+@اسم_الحساب@النص — إضافة ترحيب مخصص (ماستر)\nswc@on — تشغيل الترحيبات\nswc@off — إيقاف الترحيبات\n\n🛡️ حماية وتكرار الغرفة تُدار من صلاحيات الإدارة.',
         ],
     }
-
 
 def _default_help_pages():
     """First section of each help page, kept for backward compatibility."""
@@ -2704,12 +2716,15 @@ def _search_lookalike_image(query, exclude_urls=None):
     try:
         r = requests.get(
             "https://www.bing.com/images/search",
-            params={"q": q, "form": "HDRSC2", "first": "1"},
+            params={"q": q, "form": "HDRSC2", "first": "1", "safeSearch": "Strict"},
             headers=headers,
             timeout=LOOKALIKE_TIMEOUT,
         )
         r.raise_for_status()
         urls = _extract_image_urls_from_bing(r.text)
+        # Secondary conservative URL filter in addition to Bing SafeSearch=Strict.
+        blocked = ("porn", "xxx", "nsfw", "nude", "naked", "sex", "hentai", "18+", "adult")
+        urls = [u for u in urls if not any(x in str(u).casefold() for x in blocked)]
         excluded = {str(x).strip() for x in (exclude_urls or []) if str(x).strip()}
         fresh = [u for u in urls if u not in excluded]
         if not fresh:
@@ -2719,6 +2734,49 @@ def _search_lookalike_image(query, exclude_urls=None):
         # Randomize the result so repeated commands do not keep returning the
         # first Bing image for the same username.
         return secrets.choice(fresh[:12])
+    except Exception:
+        return None
+
+
+def _search_monkey_image(exclude_urls=None):
+    """Search Wikimedia Commons for a real monkey image and return a direct image URL."""
+    excluded = {str(x).strip() for x in (exclude_urls or []) if str(x).strip()}
+    headers = {
+        "User-Agent": "TalkinBot/1.0 (image search; contact bot administrator)",
+        "Accept": "application/json",
+    }
+    try:
+        r = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": "monkey",
+                "gsrnamespace": 6,
+                "gsrlimit": 20,
+                "prop": "imageinfo",
+                "iiprop": "url|mime",
+                "iiurlwidth": 1200,
+                "format": "json",
+                "formatversion": 2,
+            },
+            headers=headers,
+            timeout=LOOKALIKE_TIMEOUT,
+        )
+        r.raise_for_status()
+        pages = r.json().get("query", {}).get("pages", [])
+        urls = []
+        for page in pages:
+            info = (page.get("imageinfo") or [{}])[0]
+            url = info.get("thumburl") or info.get("url")
+            mime = str(info.get("mime") or "").lower()
+            if not url or mime not in {"image/jpeg", "image/png", "image/webp"}:
+                continue
+            if url not in excluded and url not in urls:
+                urls.append(url)
+        if not urls:
+            return None
+        return secrets.choice(urls)
     except Exception:
         return None
 
@@ -2951,10 +3009,13 @@ class TalkinBot:
         self.help_pages = {}
         self.help_game_part = {}  # legacy alias used by older code
         self.help_page_part = {}
+        self.pending_bot_choices = {}
         # Global wager queues, crop timers, and fruit-match state.
         self.wager_waiting = {}
         # Global fixed-prize PvP queues: one open challenge per game name.
         self.fixed_game_waiting = {}
+        # Temporary one-minute anti-steal protection granted by the حصانه command.
+        self.steal_protection = {}
         raw_crops=_load_local_json(CROP_PLOTS_FILE,{})
         self.crop_plots = raw_crops if isinstance(raw_crops,dict) else {}
         self.fruit_games = {}
@@ -3527,9 +3588,9 @@ class TalkinBot:
             f"مرحبا عزيزي @{username}\n"
             "الماستر نائم الآن\n"
             "كيف يمكنني خدمتك؟\n"
-            "1️⃣ توثيق\n"
-            "2️⃣ شكاوي أو مقترحات\n"
-            "3️⃣ توثيق لحساب اخر\n"
+            "\u20661.\u2069 توثيق\n"
+            "\u20662.\u2069 شكاوي أو مقترحات\n"
+            "\u20663.\u2069 توثيق لحساب اخر\n"
             "ارسل رقم 1 او 2 او 3"
         )
 
@@ -3598,12 +3659,12 @@ class TalkinBot:
             sessions.pop(key, None)
             return True
 
-        if low in ("2", "🟦2", "🟦2️⃣", "2️⃣", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
+        if low in ("2", "🟦2", "🟦\u20662.\u2069", "\u20662.\u2069", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
             sessions[key] = "complaint"
             self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
             return True
 
-        if low in ("1", "🟦1", "🟦1️⃣", "1️⃣", "توثيق", "وثق", "التوثيق"):
+        if low in ("1", "🟦1", "🟦\u20661.\u2069", "\u20661.\u2069", "توثيق", "وثق", "التوثيق"):
             # The primary bot NEVER grants verification while the master is
             # away. Verification is an action performed by the master account.
             # Forward the request to the master/support account and leave the
@@ -3739,7 +3800,7 @@ class TalkinBot:
             return False
 
         # Option 1: verify the sender's own account.
-        if low in ("1", "🟦1", "🟦1️⃣", "1️⃣", "توثيق", "وثق", "التوثيق"):
+        if low in ("1", "🟦1", "🟦\u20661.\u2069", "\u20661.\u2069", "توثيق", "وثق", "التوثيق"):
             target_bot = PRIMARY_BOT_ID.strip()
             if not target_bot:
                 self.send_private_text(sender, "❌ لم يتم ضبط PRIMARY_BOT_ID للبوت الأساسي.")
@@ -3758,7 +3819,7 @@ class TalkinBot:
         # Option 2: complaint/suggestion. One prompt only; the actual complaint
         # is sent privately to MASTER_SUPPORT_USERNAME and not to the master
         # account unless that username is explicitly the same account.
-        if low in ("2", "🟦2", "🟦2️⃣", "2️⃣", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
+        if low in ("2", "🟦2", "🟦\u20662.\u2069", "\u20662.\u2069", "شكوى", "شكاوي", "شكاوى", "مقترحات", "اقتراح"):
             sessions[key] = "complaint"
             self.send_private_text(sender, "✍️ تفضل أرسل الشكوى أو المقترح الآن.")
             return True
@@ -3782,7 +3843,7 @@ class TalkinBot:
             return True
 
         # Option 3: verify another account on behalf of the requester.
-        if low in ("3", "🟦3", "🟦3️⃣", "3️⃣", "توثيق لحساب اخر", "توثيق لحساب آخر", "وثق حساب اخر", "وثق حساب آخر"):
+        if low in ("3", "🟦3", "🟦\u20663.\u2069", "\u20663.\u2069", "توثيق لحساب اخر", "توثيق لحساب آخر", "وثق حساب اخر", "وثق حساب آخر"):
             sessions[key] = "verify_other"
             self.send_private_text(sender, "👤 أرسل اسم المستخدم الذي تريد توثيقه الآن.")
             return True
@@ -4811,9 +4872,22 @@ class TalkinBot:
         return _add_points(username, int(amount))
 
     def _game_ready(self, username, room, cooldown=30.0, game_name=""):
-        # فاصل 30 ثانية لكل لعبة على حدة لكل لاعب.
-        # لعب لعبة أخرى لا يفعّل فاصل هذه اللعبة، والفاصل موحّد عبر الغرف.
-        game_key=_norm_user(game_name) or "general"
+        # فاصل 40 ثانية لكل لعبة على حدة لكل مستخدم.
+        # مثال: صندوق ثم صندوق = ينتظر 40 ثانية، لكن صندوق ثم عملة
+        # لا يحسب فاصلًا واحدًا على اللعبة الأخرى. الفاصل موحّد عبر الغرف
+        # لنفس اللعبة، وليس موحّدًا بين جميع الألعاب.
+        bot_games = {
+            "عملة", "عجلة", "صندوق", "كوب", "كأس", "وحش",
+            "بركان", "طائر", "نجم", "طاولة", "اونو", "نرد", "كنز",
+            "حجر/ورق/مقص", "استثمار", "حظ"
+        }
+        normalized_game = _norm_user(str(game_name).replace("ة", "ه"))
+        normalized_bot_games = {_norm_user(str(x).replace("ة", "ه")) for x in bot_games}
+        if normalized_game in normalized_bot_games:
+            game_key = normalized_game
+            cooldown = 40.0
+        else:
+            game_key = normalized_game or "general"
         key=(game_key, _norm_user(username))
         now=time.time()
         with self.game_lock:
@@ -4826,36 +4900,81 @@ class TalkinBot:
     def _game_cooldown_notice(self, room, username, cooldown=30.0, game_name=""):
         ok, left = self._game_ready(username, room, cooldown, game_name)
         if not ok:
-            self.send_room_text(room, f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.")
+            normalized_game = _norm_user(str(game_name).replace("ة", "ه"))
+            bot_games = {
+                _norm_user(str(x).replace("ة", "ه")) for x in (
+                    "عملة", "عجلة", "صندوق", "كوب", "كأس", "وحش",
+                    "بركان", "طائر", "نجم", "طاولة", "اونو", "نرد", "كنز",
+                    "حجر/ورق/مقص", "استثمار", "حظ"
+                )
+            }
+            if normalized_game in bot_games:
+                self.send_room_text(
+                    room,
+                    f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.\n"
+                    f"🎮 الفاصل بين ألعاب البوت: 40 ثانية."
+                )
+            else:
+                self.send_room_text(room, f"⏳ @{username} انتظر {left} ثانية قبل لعب لعبة أخرى.")
         return ok
 
-    def _send_game_result(self, room, text, game_key):
-        """Send a solo-game result only to the room where that game was played."""
+    def _send_game_result(self, room, text, game_key, winner_name="", target_rooms=None):
+        """Send the text result and, when the game has artwork, its winner card."""
         self.send_room_text(room, text)
-        filename = GAME_IMAGE_FILES.get(game_key)
+        if winner_name and game_key:
+            self._send_game_winner_card(game_key, winner_name, target_rooms or [room])
+
+    def _send_game_winner_card(self, game_key, winner_name, target_rooms):
+        """Render the existing game artwork with winner name/avatar and send it."""
         base = _public_base_url()
+        if not base:
+            self.log("[GAME] winner card skipped: public media URL is not configured")
+            return False
+        filename = GAME_IMAGE_FILES.get(game_key)
         image = ASSETS_DIR / filename if filename else None
-        if base and image and image.is_file():
-            try:
-                self.send_room_media(room, f"{base}/assets/{filename}", "image")
-            except Exception as exc:
-                self.log("[GAME] result image failed:", repr(exc))
+        if not image or not image.is_file():
+            self.log("[GAME] winner card skipped: no artwork", game_key)
+            return False
+        try:
+            winner_key = _norm_user(winner_name)
+            winner_photo = getattr(self, "user_photos", {}).get(winner_key, "")
+            if not winner_photo:
+                winner_photo = self._lookup_profile_photo(winner_name)
+            card = render_game_winner_card(game_key, winner_name, winner_photo)
+            url = f"{base}/games/{card.name}"
+            self._verify_public_media_url(url, "image")
+            rooms = []
+            seen = set()
+            for r in (target_rooms or []):
+                r = str(r or "").strip()
+                k = r.casefold()
+                if r and k not in seen:
+                    seen.add(k); rooms.append(r)
+            for r in rooms:
+                self.send_room_media(r, url, "image")
+            self.log("[GAME] winner card sent", game_key, winner_name, len(rooms))
+            return bool(rooms)
+        except Exception as exc:
+            self.log("[GAME] winner card send failed:", game_key, repr(exc))
+            return False
 
     def game_help(self, room):
         self.send_room_text(room, "🎮✨ ألعاب البوت\n━━━━━━━━━━━━\n"
-            "🎲 رهان@المبلغ — تحدي لاعب ضد لاعب، والفائز عشوائي.\n"
-            "⚔️ مضاربة@المبلغ — مواجهة عشوائية عادلة، لا أفضلية للأول أو الثاني.\n"
+            "🎲 رهان@المبلغ أو رهان المبلغ — تحدي لاعب ضد لاعب، والفائز عشوائي.\n"
+            "⚔️ مضاربة@المبلغ أو مضاربة المبلغ — مواجهة عشوائية عادلة.\n"
             "🍀 حظ — لعبة عشوائية مع البوت.\n"
             "🎯 حظ@المبلغ — حظ عشوائي بمبلغ ضد البوت.\n"
-            "🎯 حظي@المبلغ — تحدي حظ لاعب ضد لاعب.\n"
-            "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
+            "🎯 حظي@المبلغ أو حظي المبلغ — تحدي حظ لاعب ضد لاعب.\n"
+            "📊 استثمار@المبلغ أو استثمار المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
             "🎰 مليار — فرصة عشوائية للفوز بمليار نقطة.\n"
             "🏦 بنك مليون — فرصة عشوائية للفوز بمليون نقطة بنفس النظام.\n"
             "🌱 زرع — حتى 5 محاصيل نشطة لكل مستخدم، وكل نوع مرة واحدة فقط.\n"
             "🆕 سنارة | برق | ياقوت | صدام | كاشف — ألعاب عالمية، الجائزة 500 نقطة.\n"
-            "🕵️ اسرق — اختر عضوًا عشوائيًا وحاول سرقة 500 نقطة منه.\n"
-            "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار")
+            "🐎 حصانه — يحصّن المستخدم من السرقة لمدة دقيقة.\n"
+            "🕵️ اسرق — اختر عضوًا عشوائيًا من الموجودين حالياً في نفس الغرفة وحاول سرقة 500 نقطة منه.\n"
+            "🏆 توب رهان | توب مضاربة | توب حظي | توب استثمار\n"
+            "🤖 ألعاب جديدة مع البوت — عملة | عجلة | صندوق@1..3 | كوب@1..3 | وحش | بركان | طائر | نجم.\n"            "📝 ألعاب البوت الجديدة نصية فقط وبدون أي صور.")
 
     def _game_balance_ok(self, username, amount):
         return _is_primary_master(username) or _get_points(username) >= int(amount)
@@ -4926,20 +5045,7 @@ class TalkinBot:
         for result_room in result_rooms:
             self.send_room_text(result_room, text)
 
-        base = _public_base_url()
-        if base:
-            try:
-                winner_name = str(winner.get("user") or "")
-                winner_photo = getattr(self, "user_photos", {}).get(_norm_user(winner_name), "")
-                if not winner_photo:
-                    winner_photo = self._lookup_profile_photo(winner_name)
-                card = render_game_winner_card(game_key, winner_name, winner_photo)
-                url = f"{base}/games/{card.name}"
-                self._verify_public_media_url(url, "image")
-                for result_room in result_rooms:
-                    self.send_room_media(result_room, url, "image")
-            except Exception as exc:
-                self.log("[GAME] wager winner card failed:", game_key, repr(exc))
+        self._send_game_winner_card(game_key, str(winner.get("user") or ""), result_rooms)
 
     def _queue_wager(self, room, sender, game_name, amount):
         try:
@@ -5088,20 +5194,7 @@ class TalkinBot:
         for result_room in result_rooms:
             self.send_room_text(result_room,text)
 
-        base=_public_base_url()
-        if base:
-            try:
-                winner_name = str(winner.get("user") or "")
-                winner_photo = self.user_photos.get(_norm_user(winner_name), "")
-                if not winner_photo:
-                    winner_photo = self._lookup_profile_photo(winner_name)
-                card = render_game_winner_card(game_key, winner_name, winner_photo)
-                url = f"{base}/games/{card.name}"
-                self._verify_public_media_url(url, "image")
-                for result_room in result_rooms:
-                    self.send_room_media(result_room, url, "image")
-            except Exception as exc:
-                self.log("[GAME] fixed winner card failed:", game_name, repr(exc))
+        self._send_game_winner_card(game_key, str(winner.get("user") or ""), result_rooms)
 
     def _queue_fixed_game(self, room, sender, game_name, prize=500):
         """Global two-player queue; both players may enter from the same room or different rooms."""
@@ -5200,9 +5293,9 @@ class TalkinBot:
 
     def _crop_command(self, room, sender, raw):
         crops={
-            "🍎":(5,100), "🍐":(10,200), "🍊":(15,300), "🍋":(20,400),
-            "🍇":(25,500), "🍉":(30,600), "🍓":(35,700), "🥕":(40,800),
-            "🌽":(45,900), "🥭":(50,1000)
+            "🍎":(5,1000), "🍐":(10,2000), "🍊":(15,3000), "🍋":(20,4000),
+            "🍇":(25,5000), "🍉":(30,6000), "🍓":(35,7000), "🥕":(40,8000),
+            "🌽":(45,9000), "🥭":(50,10000)
         }
         if raw.casefold()=="زرع":
             self.send_room_text(
@@ -5210,19 +5303,19 @@ class TalkinBot:
                 "╔════════════════════╗\n"
                 "║      قائمة الزرع      ║\n"
                 "╠════════════════════╣\n"
-                "║ 🍎  5 دقائق  → 1k   ║\n"
-                "║ 🍐 10 دقائق  → 2k   ║\n"
-                "║ 🍊 15 دقيقة   → 3k   ║\n"
-                "║ 🍋 20 دقيقة   → 4k   ║\n"
-                "║ 🍇 25 دقيقة   → 5k   ║\n"
-                "║ 🍉 30 دقيقة   → 6k   ║\n"
-                "║ 🍓 35 دقيقة   → 7k   ║\n"
-                "║ 🥕 40 دقيقة   → 8k   ║\n"
-                "║ 🌽 45 دقيقة   → 9k   ║\n"
-                "║ 🥭 50 دقيقة  → 10k   ║\n"
+                "║ 🍎  5 دقائق  → 1k  ║\n"
+                "║ 🍐 10 دقائق  → 2k  ║\n"
+                "║ 🍊 15 دقيقة   → 3k  ║\n"
+                "║ 🍋 20 دقيقة   → 4k  ║\n"
+                "║ 🍇 25 دقيقة   → 5k  ║\n"
+                "║ 🍉 30 دقيقة   → 6k  ║\n"
+                "║ 🍓 35 دقيقة   → 7k  ║\n"
+                "║ 🥕 40 دقيقة   → 8k  ║\n"
+                "║ 🌽 45 دقيقة   → 9k  ║\n"
+                "║ 🥭 50 دقيقة  → 10k  ║\n"
                 "╚════════════════════╝\n"
                 "📌 للزراعة: زرع@🍎 أو زرع 🍎\n"
-                "💡 عند اكتمال الزراعة تصلك المكافأة تلقائياً في الخاص"
+                "💡 عند اكتمال الزراعة تصلك المكافأة تلقائياً في الخاص."
             )
             return True
         m=re.fullmatch(r"زرع[@ ](.+)", raw, re.I)
@@ -5343,50 +5436,211 @@ class TalkinBot:
         )
         self.send_room_text(room, text)
         if reward > 0:
-            filename = GAME_IMAGE_FILES.get("luck")
-            base = _public_base_url()
-            image = ASSETS_DIR / filename if filename else None
-            if base and image and image.is_file():
-                try:
-                    self.send_room_media(room, f"{base}/assets/{filename}", "image")
-                except Exception as exc:
-                    self.log("[GAME] luck result image failed:", repr(exc))
+            self._send_game_winner_card("luck", sender, [room])
         return True
 
     def _investment_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 30.0, "استثمار"):
             return True
         """Free investment game against the bot. No @amount and no image."""
-        # Pure random outcome; no stake and no dependency on command order.
-        roll=secrets.randbelow(1000)+1
-        if roll <= 120:
+        # Free investment against the bot: a reward is granted only when the
+        # player gets a winning outcome; losses and draws receive no points.
+        roll=secrets.randbelow(100) + 1
+        if roll <= 20:
             reward=100
-        elif roll <= 320:
+            result="🏆 فوز كبير!"
+        elif roll <= 40:
             reward=50
-        elif roll <= 600:
+            result="🏆 فزت!"
+        elif roll <= 55:
             reward=30
-        elif roll <= 850:
+            result="🏆 فزت!"
+        elif roll <= 70:
             reward=20
+            result="🏆 فزت!"
         else:
-            reward=10
+            reward=0
+            result="❌ لم تفز هذه المرة."
         balance=self._game_award(sender, reward)
         _record_game(sender, "investment", reward, 0)
         self.send_room_text(
             room,
             f"📊✨ استثمار مع البوت\n━━━━━━━━━━━━\n"
             f"👤 اللاعب: @{sender}\n"
-            f"🎁 النتيجة: +{_fmt_points(reward)} نقطة\n"
+            f"{result}\n"
+            f"🎁 المكافأة: +{_fmt_points(reward)} نقطة\n"
             f"💰 الرصيد: {_fmt_points(balance)}"
         )
         if reward > 0:
-            filename = GAME_IMAGE_FILES.get("investment")
-            base = _public_base_url()
-            image = ASSETS_DIR / filename if filename else None
-            if base and image and image.is_file():
+            self._send_game_winner_card("investment", sender, [room])
+        return True
+
+    def _classify_picture_name(self, name):
+        """Guess whether a display/user name is commonly masculine or feminine.
+        This is only a playful name-based guess; it does not identify the real
+        person's gender. Unknown names fall back to a mixed search.
+        """
+        raw = str(name or "").strip().lstrip("@").strip()
+        compact = re.sub(r"[\s_.-]+", "", raw.casefold())
+        male = {
+            "احمد", "محمد", "محمود", "علي", "عمر", "عثمان", "خالد", "وليد",
+            "مازن", "ياسر", "يحيى", "عبدالله", "عبد الله", "عبدالرحمن", "عبد الرحمن",
+            "ابراهيم", "إبراهيم", "اسماعيل", "إسماعيل", "سعيد", "سالم", "حسن", "حسين",
+            "حامد", "رامي", "سامر", "سامي", "طارق", "فهد", "فيصل", "بدر", "بشار",
+            "زياد", "زكريا", "أنس", "انس", "معاذ", "مصعب", "هيثم", "كريم", "نبيل",
+            "ahmed", "mohammed", "mohamed", "mohamad", "ali", "omar", "khaled",
+            "waleed", "walid", "mazen", "yasser", "yaser", "yahia", "abdullah",
+            "ibrahim", "ismail", "said", "salem", "hassan", "hussein", "rami",
+            "samer", "sami", "tariq", "fahad", "faisal", "badr", "ziad", "anas",
+            "muaz", "moath", "musab", "karim", "nabil"
+        }
+        female = {
+            "اميرة", "أميرة", "اميره", "أميره", "سارة", "ساره", "نور", "ريم", "رنا",
+            "رؤى", "روى", "ليان", "ليلى", "ليلا", "مريم", "مها", "منى", "منال",
+            "هدى", "هبة", "هبه", "دعاء", "دينا", "رانيا", "رغد", "شهد", "شيماء",
+            "سلمى", "سما", "سمر", "حنان", "وفاء", "إيمان", "ايمان", "أروى", "اروى",
+            "جنى", "جنان", "تالا", "لارا", "لينا", "ياسمين", "اسيل", "أسيل",
+            "amerah", "amira", "sarah", "sara", "noor", "reem", "rana", "roya",
+            "layan", "layla", "leila", "maryam", "mariam", "maha", "mona", "manal",
+            "huda", "heba", "hiba", "doaa", "dina", "rania", "raghad", "shahd",
+            "shimaa", "salma", "sama", "samar", "hanan", "wafa", "eman", "arwa",
+            "jana", "janna", "tala", "lara", "lina", "yasmin", "yasmine", "aseel"
+        }
+        if compact in {re.sub(r"[\s_.-]+", "", x.casefold()) for x in male}:
+            return "male"
+        if compact in {re.sub(r"[\s_.-]+", "", x.casefold()) for x in female}:
+            return "female"
+        # Common Arabic feminine endings; useful for names not in the lists.
+        if raw.endswith(("ة", "ه", "ى")) and len(raw) >= 3:
+            return "female"
+        return "unknown"
+
+    def _picture_search_queries_for_name(self, name):
+        """استعلامات صور مرحة ومحتشمة؛ 80% قرود و20% أشخاص عاديون."""
+        roll = secrets.randbelow(100)
+        if roll < 80:
+            return ("قرود", "قرد مضحك", "قرود مضحكة", "funny monkey")
+
+        gender = self._classify_picture_name(name)
+        safe_suffix = " محترم محتشم ملابس عادية"
+        if gender == "male":
+            return ("شباب عاديين" + safe_suffix, "شباب عرب" + safe_suffix,
+                    "رجال عاديين" + safe_suffix, "men casual portrait")
+        if gender == "female":
+            return ("بنات عاديين" + safe_suffix, "بنات عرب" + safe_suffix,
+                    "نساء عاديين" + safe_suffix, "women casual portrait modest")
+        return ("شخص عادي محترم محتشم", "شخص عربي بملابس عادية",
+                "شخص casual portrait modest", "family friendly portrait")
+
+    def _handle_random_picture_command(self, room, body, sender):
+        """Handle صورتي/صورتك and .صوره username with name-aware playful searches."""
+        if not room:
+            return True
+        text = str(body or "").strip()
+        low = text.casefold()
+        m = re.fullmatch(r"\.صوره(?:@|\s+)(.+)", text, re.I)
+        if m:
+            target = m.group(1).strip().lstrip("@").strip()
+            if not target:
+                self.send_room_text(room, "❌ الصيغة: .صوره اسم_المستخدم")
+                return True
+            busy = getattr(self, "_user_picture_busy", set())
+            key = (_norm_user(sender), str(room), _norm_user(target))
+            if key in busy:
+                self.send_room_text(room, f"⏳ جاري البحث عن صوره {target}...")
+                return True
+            busy.add(key); self._user_picture_busy = busy
+            self.send_room_text(room, f"🔎 جاري البحث عن صوره {target}...")
+            def worker():
                 try:
-                    self.send_room_media(room, f"{base}/assets/{filename}", "image")
+                    recent = getattr(self, "_user_picture_recent", {})
+                    room_key = str(room); excluded = set(recent.get(room_key, []))
+                    variants = self._picture_search_queries_for_name(target)
+                    query = secrets.choice(variants)
+                    image_url = None
+                    # For monkey results, use Wikimedia Commons first, then Bing as a fallback.
+                    if query in {"قرود", "قرد مضحك", "قرود مضحكة", "funny monkey"}:
+                        image_url = _search_monkey_image(exclude_urls=excluded)
+                    if not image_url:
+                        image_url = _search_lookalike_image(query, exclude_urls=excluded)
+                    if image_url and image_url in excluded:
+                        excluded.clear()
+                        if query in {"قرود", "قرد مضحك", "قرود مضحكة", "funny monkey"}:
+                            image_url = _search_monkey_image()
+                        if not image_url:
+                            image_url = _search_lookalike_image(query)
+                    if not image_url:
+                        self.send_room_text(room, "❌ لم أجد صورة مناسبة حالياً."); return
+                    local = _download_lookalike_image(image_url, target)
+                    # If the first source refuses the download, immediately try the other source.
+                    if not local:
+                        fallback = _search_lookalike_image(query, exclude_urls=excluded | {image_url})
+                        if fallback:
+                            local = _download_lookalike_image(fallback, target)
+                            if local:
+                                image_url = fallback
+                    if not local:
+                        self.send_room_text(room, "❌ تعذر تحميل الصورة من المصادر المتاحة حالياً."); return
+                    history = list(recent.get(room_key, [])); history.append(image_url)
+                    recent[room_key] = history[-10:]; self._user_picture_recent = recent
+                    base = _public_base_url()
+                    if not base:
+                        self.send_room_text(room, "❌ رابط الصور العام غير مضبوط في إعدادات البوت."); return
+                    public_url = f"{base}/lookalikes/{local.name}"
+                    self.send_room_text(room, f"🖼️ صورتك يا {target} هي")
+                    self.send_room_media(room, public_url, "image")
                 except Exception as exc:
-                    self.log("[GAME] investment result image failed:", repr(exc))
+                    self.log("[USER-PICTURE] failed:", repr(exc))
+                    try: self.send_room_text(room, "❌ تعذر البحث عن الصورة حالياً.")
+                    except Exception: pass
+                finally:
+                    try: busy.discard(key)
+                    except Exception: pass
+            threading.Thread(target=worker, name="user-picture-search", daemon=True).start()
+            return True
+        if low not in {"صورتي", "صورتك"}:
+            return False
+        busy = getattr(self, "_random_picture_busy", set()); key = (_norm_user(sender), str(room))
+        if key in busy:
+            self.send_room_text(room, f"⏳ @{sender} جاري البحث عن صورتك..."); return True
+        busy.add(key); self._random_picture_busy = busy
+        self.send_room_text(room, f"🔎 جاري البحث عن صورتك يا @{sender}...")
+        def worker():
+            try:
+                recent = getattr(self, "_random_picture_recent", {}); room_key = str(room)
+                excluded = set(recent.get(room_key, []))
+                gender = self._classify_picture_name(sender)
+                if gender == "male":
+                    variants = ("شباب عاديين محترمين محتشمين", "شباب عرب بملابس عادية", "men casual portrait")
+                elif gender == "female":
+                    variants = ("بنات عاديات محترمات محتشمات", "بنات عرب بملابس عادية", "women casual portrait modest")
+                else:
+                    variants = ("شخص عادي محترم محتشم", "شخص عربي بملابس عادية", "family friendly portrait")
+                query = secrets.choice(variants)
+                image_url = _search_lookalike_image(query, exclude_urls=excluded)
+                if image_url and image_url in excluded:
+                    excluded.clear(); image_url = _search_lookalike_image(query)
+                if not image_url:
+                    self.send_room_text(room, "❌ لم أجد صورة مناسبة حالياً."); return
+                local = _download_lookalike_image(image_url, sender)
+                if not local:
+                    self.send_room_text(room, "❌ وجدت صورة لكن تعذر تحميلها حالياً."); return
+                history = list(recent.get(room_key, [])); history.append(image_url)
+                recent[room_key] = history[-10:]; self._random_picture_recent = recent
+                base = _public_base_url()
+                if not base:
+                    self.send_room_text(room, "❌ رابط الصور العام غير مضبوط في إعدادات البوت."); return
+                public_url = f"{base}/lookalikes/{local.name}"
+                self.send_room_text(room, f"🖼️ صورتك يا @{sender} هي")
+                self.send_room_media(room, public_url, "image")
+            except Exception as exc:
+                self.log("[RANDOM-PICTURE] failed:", repr(exc))
+                try: self.send_room_text(room, "❌ تعذر البحث عن الصورة حالياً.")
+                except Exception: pass
+            finally:
+                try: busy.discard(key)
+                except Exception: pass
+        threading.Thread(target=worker, name="random-picture-search", daemon=True).start()
         return True
 
     def _handle_lookalike_command(self, room, body, sender):
@@ -5417,15 +5671,24 @@ class TalkinBot:
 
         def worker():
             try:
-                # Searching the username itself usually gives the most relevant
-                # public results; Arabic "شبيه" is added to broaden lookalike-style results.
+                # This command is intentionally a playful random-image game.
+                # Do not try to infer the person's real appearance or identity.
+                # Instead, search public images using lighthearted animal/funny
+                # themes, then send one result to the room.
                 recent = getattr(self, "_lookalike_recent", {})
                 target_key = _norm_user(target)
                 excluded = set(recent.get(target_key, []))
-                # Vary the search slightly on every request as an extra guard
-                # against a search engine returning the same first result.
-                variants = ("شبيه", "lookalike", "similar", "شبيه شخص")
-                query = f"{target} {secrets.choice(variants)}"
+                # Randomize the theme so repeated commands can return different
+                # images. Keep the queries non-explicit and suitable for chat.
+                variants = (
+                    "قرد مضحك",
+                    "قرد مضحك meme",
+                    "صورة مضحكة",
+                    "شخصية كرتونية مضحكة",
+                    "funny monkey",
+                    "funny face meme",
+                )
+                query = secrets.choice(variants)
                 image_url = _search_lookalike_image(query, exclude_urls=excluded)
                 if image_url and image_url in excluded:
                     # If all current results were previously used, clear the
@@ -5468,54 +5731,60 @@ class TalkinBot:
         threading.Thread(target=worker, name="lookalike-search", daemon=True).start()
         return True
 
-    def _send_steal_image(self, room, game_key):
-        filename = GAME_IMAGE_FILES.get(game_key)
-        base = _public_base_url()
-        image = ASSETS_DIR / filename if filename else None
-        if base and image and image.is_file():
-            try:
+    def _send_steal_image(self, room, game_key, winner_name=""):
+        if winner_name:
+            self._send_game_winner_card(game_key, winner_name, [room])
+        else:
+            base = _public_base_url()
+            filename = GAME_IMAGE_FILES.get(game_key)
+            image = ASSETS_DIR / filename if filename else None
+            if base and image and image.is_file():
                 self.send_room_media(room, f"{base}/assets/{filename}", "image")
-            except Exception as exc:
-                self.log("[GAME] steal result image failed:", repr(exc))
 
     def _room_member_usernames_for_steal(self, room, exclude_username=""):
-        """Return a complete/randomizable member list from the current room."""
+        """Return only users currently present in the same live room."""
         excluded = {_norm_user(exclude_username), _norm_user(BOT_ID)}
         candidates = []
         seen = set()
-
-        def add_user(value):
-            u = str(value or "").strip().lstrip("@").strip()
+        live = self.room_users.get(room, {}) if room else {}
+        if not isinstance(live, dict):
+            return candidates
+        for username in live.keys():
+            u = str(username or "").strip().lstrip("@").strip()
             key = _norm_user(u)
-            if not u or not key or key in excluded or key in seen or _is_master_name(u):
-                return
+            if not u or not key or key in excluded or key in seen:
+                continue
+            # Do not allow stealing from the configured master.
+            if _is_master_name(u):
+                continue
             seen.add(key)
             candidates.append(u)
-
-        # Live cache first.
-        live = self.room_users.get(room, {}) if room else {}
-        if isinstance(live, dict):
-            for username in live.keys():
-                add_user(username)
-
-        # Complete persistent roster next, including members who are offline.
-        try:
-            for username in _persistent_roster_users(room):
-                add_user(username)
-        except Exception as exc:
-            self.log("[GAME] persistent steal roster lookup failed:", repr(exc))
-
-        # Native DB roster as an additional fallback/source.
-        if getattr(self, "db", None):
-            try:
-                for item in self.db.room_users(room) or []:
-                    if isinstance(item, dict):
-                        add_user(item.get("username"))
-                    else:
-                        add_user(item)
-            except Exception as exc:
-                self.log("[GAME] steal room member lookup failed:", repr(exc))
         return candidates
+
+    def _steal_protected(self, username):
+        key = _norm_user(username)
+        if not key:
+            return False
+        expires = float(self.steal_protection.get(key, 0) or 0)
+        if expires <= time.time():
+            self.steal_protection.pop(key, None)
+            return False
+        return True
+
+    def _horse_game(self, room, sender):
+        """Protect the player from the steal game for one minute."""
+        now = time.time()
+        key = _norm_user(sender)
+        self.steal_protection[key] = now + 60.0
+        self.send_room_text(
+            room,
+            f"🐎🛡️ @{sender} حصل على حصانة!\n"
+            f"━━━━━━━━━━━━\n"
+            f"⏱️ الحماية من السرقة: دقيقة واحدة\n"
+            f"🔓 تنتهي بعد 60 ثانية.\n"
+            f"━━━━━━━━━━━━"
+        )
+        return True
 
     def _steal_game(self, room, sender, requested_victim=""):
         if not self._game_cooldown_notice(room, sender, 30.0, "اسرق"):
@@ -5525,7 +5794,6 @@ class TalkinBot:
         self.send_room_text(room, f"🕵️ @{sender} جاري البحث عن الضحية...")
         if not members:
             self.send_room_text(room, "❌ فشلت السرقة: لا يوجد عضو آخر متاح للسرقة حالياً.")
-            self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
             return True
 
@@ -5544,6 +5812,14 @@ class TalkinBot:
             victim = secrets.choice(members)
 
         victim_balance = _get_points(victim)
+        if self._steal_protected(victim):
+            self.send_room_text(
+                room,
+                f"🐎🛡️ @{victim} محصّن حالياً.\n"
+                f"❌ فشلت السرقة، الحصانة تحميه من السرقة لمدة دقيقة."
+            )
+            _record_game(sender, "steal", 0, 500)
+            return True
         if victim_balance < 500:
             self.send_room_text(
                 room,
@@ -5551,7 +5827,6 @@ class TalkinBot:
                 f"❌ فشلت السرقة، المسروق @{victim} مفلس.\n"
                 f"💰 رصيده: {_fmt_points(victim_balance)}"
             )
-            self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
             return True
 
@@ -5563,7 +5838,6 @@ class TalkinBot:
                 f"🚔 السرقة حرام، تم إبلاغ الشرطة! 😁\n"
                 f"❌ لم تتم السرقة."
             )
-            self._send_steal_image(room, "اسرق_فشل")
             _record_game(sender, "steal", 0, 500)
             return True
 
@@ -5578,9 +5852,190 @@ class TalkinBot:
             f"🎁 @{sender} حصل على +500 نقطة.\n"
             f"💰 رصيد السارق: {_fmt_points(thief_balance)}"
         )
-        self._send_steal_image(room, "اسرق_نجاح")
         _record_game(sender, "steal", 500, 500)
         _record_game(victim, "steal", -500, 500)
+        return True
+
+
+    # --------------------- 10 Text-Only Bot Games ---------------------
+    def _table_bot_game(self, room, sender):
+        import random
+        if not self._game_cooldown_notice(room, sender, 40.0, "طاولة"):
+            return True
+        player = random.randint(1, 6) + random.randint(1, 6)
+        bot = random.randint(1, 6) + random.randint(1, 6)
+        if player > bot:
+            reward = 100
+            self._game_award(sender, reward)
+            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🏆 فزت بـ {reward} نقطة!"
+        elif player < bot:
+            reward = 0
+            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤖 البوت فاز!"
+        else:
+            reward = 0
+            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤝 تعادل!"
+        _record_game(sender, "طاولة", 1, reward)
+        self.send_room_text(room, result)
+        return True
+
+    def _uno_bot_game(self, room, sender):
+        import random
+        if not self._game_cooldown_notice(room, sender, 40.0, "اونو"):
+            return True
+        colors = ["🔴", "🟡", "🟢", "🔵"]
+        p_color, p_num = random.choice(colors), random.randint(0, 9)
+        b_color, b_num = random.choice(colors), random.randint(0, 9)
+        if p_num > b_num:
+            reward = 100
+            self._game_award(sender, reward)
+            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🏆 فزت بـ {reward} نقطة!"
+        elif p_num < b_num:
+            reward = 0
+            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤖 البوت فاز!"
+        else:
+            reward = 0
+            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤝 تعادل!"
+        _record_game(sender, "اونو", 1, reward)
+        self.send_room_text(room, result)
+        return True
+
+    def _bot_game_text(self, room, sender, game_key, title, body, reward):
+        """Shared helper for the new bot-vs-player text games. No images."""
+        if not self._game_cooldown_notice(room, sender, 40.0, game_key):
+            return True
+        balance = self._game_award(sender, reward)
+        _record_game(sender, game_key, reward, 0)
+        self.send_room_text(
+            room,
+            f"{title}\n━━━━━━━━━━━━━━\n{body}\n"
+            f"🎁 المكافأة: +{_fmt_points(reward)} نقطة\n"
+            f"💰 رصيدك: {_fmt_points(balance)}\n━━━━━━━━━━━━━━"
+        )
+        return True
+
+    def _coin_bot_game(self, room, sender, choice=""):
+        if not self._game_cooldown_notice(room, sender, 40.0, "عملة"):
+            return True
+        choice = str(choice or "").strip()
+        key = (str(room), _norm_user(sender))
+        if choice in ("وجه", "كتابة"):
+            result = secrets.choice(("وجه", "كتابة"))
+            won = choice == result
+            reward = 40 if won else 0
+            balance = self._game_award(sender, reward)
+            _record_game(sender, "coin", reward, 0)
+            self.send_room_text(room, f"🪙 لعبة العملة\n━━━━━━━━━━━━━━\n@{sender}\n🎯 اختيارك: {choice}\n🪙 النتيجة: {result}\n{('🏆 فزت!' if won else '❌ لم تفز هذه المرة.')}\n🎁 +{_fmt_points(reward)} نقطة\n💰 رصيدك: {_fmt_points(balance)}")
+            return True
+        self.pending_bot_choices[key] = {"game": "coin", "created": time.time(), "result": secrets.choice(("وجه", "كتابة"))}
+        self.send_room_text(room, f"🪙 لعبة العملة\n━━━━━━━━━━━━━━\n@{sender}\n\u20661.\u2069 وجه\n\u20662.\u2069 كتابة\n\n📌 أرسل الرقم فقط")
+        return True
+
+    def _wheel_bot_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender, 40.0, "عجلة"):
+            return True
+        rewards = [0, 10, 20, 30, 50, 75, 100, 150]
+        reward = secrets.choice(rewards)
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "wheel", reward, 0)
+        self.send_room_text(
+            room,
+            f"🎡 عجلة الحظ\n━━━━━━━━━━━━━━\n@{sender}\n"
+            f"🎯 دارت العجلة وتوقفت على: {_fmt_points(reward)} نقطة\n"
+            f"🎁 المكافأة: +{_fmt_points(reward)} نقطة\n"
+            f"💰 رصيدك: {_fmt_points(balance)}\n━━━━━━━━━━━━━━"
+        )
+        return True
+
+    def _box_bot_game(self, room, sender, raw):
+        raw = str(raw or "").strip()
+        m = re.fullmatch(r"صندوق[@ ]([1-3])", raw, re.I)
+        if not self._game_cooldown_notice(room, sender, 40.0, "صندوق"):
+            return True
+        key = (str(room), _norm_user(sender))
+        chosen = int(m.group(1)) if m else None
+        if chosen is None:
+            self.pending_bot_choices[key] = {
+                "game": "box", "created": time.time(),
+                "prize_box": secrets.randbelow(3) + 1,
+                "reward": secrets.choice([0, 20, 50, 100, 200]),
+            }
+            self.send_room_text(room, f"📦 لعبة الصناديق\n━━━━━━━━━━━━━━\n@{sender}\n\u20661.\u2069 صندوق 1\n\u20662.\u2069 صندوق 2\n\u20663.\u2069 صندوق 3\n\n📌 أرسل الرقم فقط")
+            return True
+        prize_box = secrets.randbelow(3) + 1
+        reward = secrets.choice([0, 20, 50, 100, 200]) if chosen == prize_box else 0
+        body = (f"📦 اخترت الصندوق {chosen}\n🏆 الصندوق الرابح: {prize_box}\n✅ ربحت!" if reward else f"📦 اخترت الصندوق {chosen}\n🎲 الصندوق الرابح كان: {prize_box}\n❌ لم تربح.")
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "box", reward, 0)
+        self.send_room_text(room, f"📦 لعبة الصناديق\n━━━━━━━━━━━━━━\n@{sender}\n{body}\n🎁 +{_fmt_points(reward)} نقطة\n💰 رصيدك: {_fmt_points(balance)}")
+        return True
+
+    def _cup_bot_game(self, room, sender, raw):
+        m = re.fullmatch(r"(?:كوب|كأس)[@ ]([1-3])", str(raw or "").strip(), re.I)
+        if not self._game_cooldown_notice(room, sender, 40.0, "كوب"):
+            return True
+        chosen = int(m.group(1)) if m else None
+        hidden = secrets.randbelow(3) + 1
+        reward = secrets.choice([25, 50, 100, 150]) if chosen == hidden else 0
+        if chosen is None:
+            body = "🥤 اختر الكوب: كوب@1 أو كوب@2 أو كوب@3"
+        elif reward:
+            body = f"🥤 اخترت الكوب {chosen}\n🏆 الكأس الصحيح: {hidden}\n✅ وجدت الجائزة!"
+        else:
+            body = f"🥤 اخترت الكوب {chosen}\n🎲 الجائزة كانت في الكوب: {hidden}\n❌ الكوب الخطأ."
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "cup", reward, 0)
+        self.send_room_text(room, f"🥤 لعبة الكؤوس\n━━━━━━━━━━━━━━\n@{sender}\n{body}\n🎁 +{_fmt_points(reward)} نقطة\n💰 الرصيد: {_fmt_points(balance)}")
+        return True
+
+    def _monster_bot_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender, 40.0, "وحش"):
+            return True
+        player = secrets.randbelow(6) + 1
+        monster = secrets.randbelow(6) + 1
+        if player > monster:
+            reward = 80
+            result = "⚔️ هزمت الوحش!"
+        elif player < monster:
+            reward = 0
+            result = "💀 الوحش هزمك."
+        else:
+            reward = 0
+            result = "🤝 تعادل مع الوحش — لا توجد جائزة."
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "monster", reward, 0)
+        self.send_room_text(room, f"👹 معركة الوحش\n━━━━━━━━━━━━━━\n👤 قوتك: {player}\n👹 قوة الوحش: {monster}\n{result}\n🎁 +{_fmt_points(reward)} نقطة\n💰 الرصيد: {_fmt_points(balance)}")
+        return True
+
+    def _volcano_bot_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender, 40.0, "بركان"):
+            return True
+        result = secrets.randbelow(5)
+        reward_map = {0: 0, 1: 20, 2: 40, 3: 80, 4: 150}
+        reward = reward_map[result]
+        outcome = "🌋 خرجت الجائزة من البركان!" if reward else "🌋 انفجر البركان ولم تجد جائزة."
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "volcano", reward, 0)
+        self.send_room_text(room, f"🌋 لعبة البركان\n━━━━━━━━━━━━━━\n@{sender}\n{outcome}\n🎁 +{_fmt_points(reward)} نقطة\n💰 الرصيد: {_fmt_points(balance)}")
+        return True
+
+    def _bird_bot_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender, 40.0, "طائر"):
+            return True
+        birds = [("🐦 عصفور", 15), ("🦅 نسر", 75), ("🦉 بومة", 35), ("🦜 ببغاء", 25), ("🌫️ لم يظهر طائر", 0)]
+        bird, reward = secrets.choice(birds)
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "bird", reward, 0)
+        self.send_room_text(room, f"🪶 صيد الطائر\n━━━━━━━━━━━━━━\n@{sender}\n🎯 ظهر: {bird}\n🎁 +{_fmt_points(reward)} نقطة\n💰 الرصيد: {_fmt_points(balance)}")
+        return True
+
+    def _star_bot_game(self, room, sender):
+        if not self._game_cooldown_notice(room, sender, 40.0, "نجم"):
+            return True
+        stars = [("⭐ عادية", 10), ("🌟 لامعة", 30), ("💫 نادرة", 75), ("✨ أسطورية", 200), ("🌑 لم تلتقط نجماً", 0)]
+        star, reward = secrets.choice(stars)
+        balance = self._game_award(sender, reward)
+        _record_game(sender, "star", reward, 0)
+        self.send_room_text(room, f"⭐ لعبة النجمة\n━━━━━━━━━━━━━━\n@{sender}\n🎯 حظك: {star}\n🎁 +{_fmt_points(reward)} نقطة\n💰 الرصيد: {_fmt_points(balance)}")
         return True
 
     def _million_bank_game(self, room, sender_name):
@@ -5600,27 +6055,101 @@ class TalkinBot:
         target_rooms = self._active_rooms() or [room]
         for target_room in target_rooms:
             self.send_room_text(target_room, winner_text)
-        try:
-            base = _public_base_url()
-            card = render_game_winner_card("بنك مليون", sender_name, winner_photo)
-            if base and card.is_file():
-                url = f"{base}/games/{card.name}"
-                self._verify_public_media_url(url, "image")
-                for target_room in target_rooms:
-                    self.send_room_media(target_room, url, "image")
-        except Exception as exc:
-            self.log("[GAME] million bank winner card failed:", repr(exc))
+        self._send_game_winner_card("بنك مليون", sender_name, target_rooms)
         return True
+
+    def _handle_pending_bot_choice(self, room, text, sender_name):
+        """Resolve number-only replies for عملة/صندوق choice prompts."""
+        raw = str(text or "").strip()
+        if not raw or not sender_name:
+            return False
+        digit_map = {
+            "1": 1, "2": 2, "3": 3,
+            "١": 1, "٢": 2, "٣": 3,
+            "\u20661.\u2069": 1, "\u20662.\u2069": 2, "\u20663.\u2069": 3,
+            "🟦1": 1, "🟦2": 2, "🟦3": 3,
+            "🟦\u20661.\u2069": 1, "🟦\u20662.\u2069": 2, "🟦\u20663.\u2069": 3,
+        }
+        choice = digit_map.get(raw)
+        if choice is None:
+            return False
+        key = (str(room), _norm_user(sender_name))
+        pending = self.pending_bot_choices.get(key)
+        if not isinstance(pending, dict):
+            return False
+        if time.time() - float(pending.get("created", 0) or 0) > 120:
+            self.pending_bot_choices.pop(key, None)
+            self.send_room_text(room, f"⏰ @{sender_name} انتهى وقت الاختيار. أرسل أمر اللعبة من جديد.")
+            return True
+        game = pending.get("game")
+        if game == "coin":
+            if choice not in (1, 2):
+                self.send_room_text(room, "❌ اختر 1 أو 2 فقط.\n\u20661.\u2069 وجه\n\u20662.\u2069 كتابة")
+                return True
+            result = pending.get("result") or secrets.choice(("وجه", "كتابة"))
+            selected = "وجه" if choice == 1 else "كتابة"
+            won = selected == result
+            reward = 40 if won else 0
+            self.pending_bot_choices.pop(key, None)
+            balance = self._game_award(sender_name, reward)
+            _record_game(sender_name, "coin", reward, 0)
+            self.send_room_text(room, f"🪙 لعبة العملة\n━━━━━━━━━━━━━━\n@{sender_name}\n🎯 اختيارك: {selected}\n🪙 النتيجة: {result}\n{('🏆 فزت!' if won else '❌ لم تفز هذه المرة.')}\n🎁 +{_fmt_points(reward)} نقطة\n💰 رصيدك: {_fmt_points(balance)}")
+            return True
+        if game == "box":
+            if choice not in (1, 2, 3):
+                self.send_room_text(room, "❌ اختر 1 أو 2 أو 3 فقط.")
+                return True
+            prize_box = int(pending.get("prize_box") or 1)
+            reward = int(pending.get("reward") or 0) if choice == prize_box else 0
+            self.pending_bot_choices.pop(key, None)
+            balance = self._game_award(sender_name, reward)
+            _record_game(sender_name, "box", reward, 0)
+            body = (f"📦 اخترت الصندوق {choice}\n🏆 الصندوق الرابح: {prize_box}\n✅ ربحت!" if reward else f"📦 اخترت الصندوق {choice}\n🎲 الصندوق الرابح كان: {prize_box}\n❌ لم تربح.")
+            self.send_room_text(room, f"📦 لعبة الصناديق\n━━━━━━━━━━━━━━\n@{sender_name}\n{body}\n🎁 +{_fmt_points(reward)} نقطة\n💰 رصيدك: {_fmt_points(balance)}")
+            return True
+        return False
+
+    def _run_game_command_async(self, room, text, sender_name):
+        """Run game logic outside the WebSocket receive callback.
+
+        Some legacy games intentionally use time.sleep() for their reveal
+        animation. Keeping them off the receive thread means a following NS
+        command is received and handled immediately instead of waiting for the
+        game to finish sleeping.
+        """
+        def worker():
+            try:
+                self.handle_game_command(room, text, sender_name)
+            except Exception as exc:
+                self.log("[GAME] async handler failed:", repr(exc))
+                try:
+                    self.report_master_error("الألعاب", exc, room)
+                except Exception:
+                    pass
+        threading.Thread(
+            target=worker,
+            name="game-command",
+            daemon=True,
+        ).start()
+        return True
+
 
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
+        if self._handle_pending_bot_choice(room, raw, sender_name):
+            return True
         # Do not run the verification gate for ordinary conversation.  The
         # caller may pass every room message here, so first require a known
         # bot/game command; unrelated text must be ignored silently.
         if not _looks_like_bot_command(raw):
             return False
         low=raw.casefold()
+        normalized_raw = raw.replace("ة", "ه")
+        # Game-name normalization: Arabic ه/ة variants are treated as the same
+        # command (e.g. سناره/سنارة, حصانه/حصانة), while preserving raw text
+        # for commands that contain user arguments.
+        game_low = low.replace("ة", "ه")
 
         # Master-only diagnostic: send the current billion-game image privately
         # to the master, without publishing it in the room.
@@ -5671,34 +6200,62 @@ class TalkinBot:
         if not _games_enabled_for_room(room):
             self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
             return True
-        if low.startswith("زرع"):
+        if game_low in ("حصانه", "حصانه!"):
+            return self._horse_game(room, sender_name)
+        if low.replace("ة", "ه").startswith("زرع"):
             return self._crop_command(room, sender_name, raw)
-        if low.startswith("فيس"):
-            m=re.fullmatch(r"فيس[@ ](.+)", raw, re.I)
+        if low.replace("ة", "ه").startswith("فيس"):
+            m=re.fullmatch(r"فيس[@ ](.+)", normalized_raw, re.I)
             return self._fruit_match(room, sender_name, m.group(1).strip() if m else "")
         # New fixed-prize global games. Each one has a single worldwide queue:
         # first verified player opens it, the next verified player joins, then
         # the winner receives +500 and the loser loses 500.
         fixed_games=("سنارة","برق","ياقوت","صدام","كاشف")
-        if low in tuple(x.casefold() for x in fixed_games):
-            game_name=next(x for x in fixed_games if x.casefold()==low)
+        # Use the same ة→ه normalization for canonical names so both
+        # سنارة and سناره reach the exact same game handler.
+        fixed_lookup={_norm_user(x.replace("ة", "ه")): x for x in fixed_games}
+        if _norm_user(game_low) in fixed_lookup:
+            game_name=fixed_lookup[_norm_user(game_low)]
             return self._queue_fixed_game(room,sender_name,game_name,500)
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.
-        m=re.fullmatch(r"(مراهنة|مراهنه|رهان|مضاربة|مضاربه|حظي)@([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"(مراهنه|رهان|مضاربه|حظي)[@\s]+([0-9]+)", normalized_raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, m.group(1), int(m.group(2)))
         # Investment with a stake is PvP, exactly like the wager games.
-        m=re.fullmatch(r"استثمار@([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"استثمار[@\s]+([0-9]+)", normalized_raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, "استثمار", int(m.group(1)))
         # Plain "استثمار" is a free game against the bot, text only.
-        if low == "استثمار":
+        if game_low == "استثمار":
             return self._investment_bot_game(room, sender_name)
-        m=re.fullmatch(r"حظ@([0-9]+)", raw, re.I)
+        m=re.fullmatch(r"حظ[@\s]+([0-9]+)", normalized_raw, re.I)
         if m:
             return self._lottery_game(room, sender_name, int(m.group(1)))
-        if low == "بنك مليون":
+        if game_low == "طاوله":
+            return self._table_bot_game(room, sender_name)
+        if game_low == "اونو":
+            return self._uno_bot_game(room, sender_name)
+        if game_low == "عمله":
+            return self._coin_bot_game(room, sender_name)
+        m = re.fullmatch(r"(?:عملة|عمله)[@ ](وجه|كتابة)", raw, re.I)
+        if m:
+            return self._coin_bot_game(room, sender_name, m.group(1))
+        if game_low == "عجله":
+            return self._wheel_bot_game(room, sender_name)
+        if low.replace("ة", "ه").startswith("صندوق"):
+            return self._box_bot_game(room, sender_name, normalized_raw)
+        if low.replace("ة", "ه").startswith("كوب") or low.replace("ة", "ه").startswith("كاس"):
+            return self._cup_bot_game(room, sender_name, normalized_raw)
+        if low == "وحش":
+            return self._monster_bot_game(room, sender_name)
+        if low == "بركان":
+            return self._volcano_bot_game(room, sender_name)
+        if low == "طائر":
+            return self._bird_bot_game(room, sender_name)
+        if low == "نجم":
+            return self._star_bot_game(room, sender_name)
+        if game_low in ("بنك مليون", "بنك"):
             return self._million_bank_game(room, sender_name)
         if low in ("مليار","billion"):
             if not self._game_cooldown_notice(room, sender_name, 420.0, "مليار"):
@@ -5725,40 +6282,31 @@ class TalkinBot:
                 if not winner_photo:
                     winner_photo = self._lookup_profile_photo(sender_name)
 
-                zeros = "⭐" * 9  # 1,000,000,000 contains nine zeros.
+                zeros = "⭐" * 9  # 1k,000,000 contains nine zeros.
                 self.send_room_text(
                     room,
                     f"🏆✨ مبروك! تم الحصول على المليار ✨🏆\n"
                     f"━━━━━━━━━━━━━━━━\n"
                     f"✅ @{sender_name}\n"
                     f"💰 لقد حصلت علي مليار\n"
-                    f"🔢 رقم المليار: 1,000,000,000\n"
+                    f"🔢 رقم المليار: 1k,000,000\n"
                     f"🎉 مبروك يا بطل!\n"
                     f"{zeros}\n"
                     f"━━━━━━━━━━━━━━━━"
                 )
 
                 try:
-                    card = render_billion_card(sender_name, winner_photo)
                     base = _public_base_url()
-                    if base and card.is_file():
-                        url = f"{base}/billion/{card.name}"
-                        self._verify_public_media_url(url, "image")
-                        self.send_room_media(room, url, "image")
-                        # Publish the same generated winner card to every room.
-                        for target_room in self._active_rooms():
-                            if str(target_room).casefold() == str(room).casefold():
-                                continue
-                            try:
-                                self.send_room_text(
-                                    target_room,
-                                    f"🏆✨ تم الحصول على المليار!\n👑 الفائز: @{sender_name}\n💰 1,000,000,000\n{zeros}"
-                                )
-                                self.send_room_media(target_room, url, "image")
-                            except Exception as exc:
-                                self.log("[GAME] billion publish failed:", target_room, repr(exc))
-                    else:
-                        self.log("[GAME] billion card public URL unavailable")
+                    if not base:
+                        raise RuntimeError("PUBLIC_BASE_URL أو RAILWAY_PUBLIC_DOMAIN غير مضبوط")
+                    card = render_billion_card(sender_name, winner_photo)
+                    url = f"{base}/billion/{card.name}"
+                    self._verify_public_media_url(url, "image")
+                    # Publish the same generated winner card to every active room.
+                    target_rooms = self._active_rooms() or [room]
+                    for target_room in target_rooms:
+                        self.send_room_media(target_room, url, "image")
+                    self.log("[GAME] billion winner card sent", sender_name, len(target_rooms))
                 except Exception as exc:
                     self.log("[GAME] billion winner card failed:", repr(exc))
             else:
@@ -5770,14 +6318,14 @@ class TalkinBot:
                     f"━━━━━━━━━━━━━━"
                 )
             return True
-        if low in ("حظ","الحظ","luck"):
+        if game_low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
         if low in ("حجر","ورق","مقص"):
             if not self._game_cooldown_notice(room, sender_name, 30.0, "حجر_ورق_مقص"):
                 return True
             bot_choice=secrets.choice(("حجر","ورق","مقص"))
             win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
-            if low==bot_choice: result="🤝 تعادل"; reward=5
+            if low==bot_choice: result="🤝 تعادل"; reward=0
             elif win: result="🏆 فزت"; reward=15
             else: result="❌ خسرت"; reward=0
             balance=self._game_award(sender_name,reward)
@@ -5790,7 +6338,7 @@ class TalkinBot:
             return self._steal_game(room, sender_name, m.group(1).strip().lstrip("@"))
         if low == "اسرق":
             return self._steal_game(room, sender_name)
-        if low in ("سرقة", "رشوة"):
+        if game_low in ("سرقه"):
             if not self._game_cooldown_notice(room, sender_name, 30.0, "سرقة" if low == "سرقة" else "رشوة"):
                 return True
             label = "🕵️ سرقة" if low == "سرقة" else "💼 رشوة"
@@ -5812,17 +6360,39 @@ class TalkinBot:
             idx = max(1, min(int(part), len(page_sections))) - 1
             text = page_sections[idx]
             if idx < len(page_sections) - 1:
-                text += "\n\n📌 للقائمة التالية اكتب ns"
+                text += "\n\n📌 للقائمة التالية اكتب Ns"
             else:
                 text += "\n\n✅ انتهت أقسام هذه القائمة."
-        if private_to:
-            self._send_help_chunks("chat_message", text, to=private_to)
-        elif room:
-            self._send_help_chunks("room_message", text, room=room)
+        # a3 is intentionally one single message: the 13 bot-vs-bot games
+        # must never be split into two chat bubbles. Other help sections keep
+        # the normal safe line batching.
+        if int(page) == 3:
+            if private_to:
+                self._send_text_packets("chat_message", text, to=private_to)
+            elif room:
+                self._send_text_packets("room_message", text, room=room)
+        else:
+            if private_to:
+                self._send_help_chunks("chat_message", text, to=private_to)
+            elif room:
+                self._send_help_chunks("room_message", text, room=room)
 
     def _send_game_help_section(self, room=None, private_to=None, part=1):
-        # Backward-compatible wrapper for older callers.
-        self._send_help_section(room=room, private_to=private_to, page=3, part=part)
+        # A3 is always one complete message per list; no batching or delay.
+        sections = _help_sections_from_messages().get(3, [])
+        if not sections:
+            return False
+        idx = max(1, min(int(part), len(sections))) - 1
+        text = sections[idx]
+        if idx < len(sections) - 1:
+            text += "\n\n📌 للقائمة التالية اكتب Ns"
+        else:
+            text += "\n\n📌 هذه آخر قائمة في A3."
+        if private_to:
+            return self._send_text_packets("chat_message", text, to=private_to)
+        if room:
+            return self._send_text_packets("room_message", text, room=room)
+        return False
 
     def _send_help(self, room=None, private_to=None, page=1, game_part=1):
         self._send_help_section(room=room, private_to=private_to, page=page, part=game_part)
@@ -5838,15 +6408,17 @@ class TalkinBot:
         _body_text = str(body or "").strip()
         _body_low = _body_text.casefold()
         if _body_low in ("اوامر", "الاوامر", "help", "مساعدة"):
-            menu = _command_menu_for(_is_master_name(sender), is_private=is_private)
+            menu = _command_menu_for(_is_primary_master(sender), is_private=is_private)
             if is_private:
                 self.send_private_text(sender, menu)
             elif room:
                 self.send_room_text(room, menu)
             return True
-        _m_public_help = re.fullmatch(r"(?:help|a)([1-6])", _body_low)
+        _m_public_help = re.fullmatch(r"a([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
+            if _page == 1 and not (_is_primary_master(sender) and is_private):
+                return True
             _key = (str(room), _norm_user(sender))
             self.help_pages[_key] = _page
             self.help_page_part[_key] = 1
@@ -5855,15 +6427,45 @@ class TalkinBot:
             return True
         if _body_low in ("ns", "n", "التالي", "القائمة التالية", "next"):
             key = (str(room), _norm_user(sender))
+            # ns only works after the user explicitly opened a category with a1..a6.
+            # Never default to a1, otherwise a bare ns in a room would expose admin help.
+            if key not in self.help_pages:
+                target = "a1 إلى a6" if (_is_primary_master(sender) and is_private) else "a2 إلى a6"
+                msg = f"📌 اكتب {target} أولًا لفتح قائمة الأوامر، ثم استخدم ns للتالي."
+                if is_private:
+                    self.send_private_text(sender, msg)
+                elif room:
+                    self.send_room_text(room, msg)
+                return True
+            sections_map = _help_sections_from_messages()
             current_page = int(self.help_pages.get(key, 1) or 1)
-            sections = _help_sections_from_messages().get(current_page, [])
+            current_page = max(1, min(6, current_page))
+            sections = sections_map.get(current_page, [])
             total = max(1, len(sections))
             part = int(self.help_page_part.get(key, 1) or 1)
-            part = (part % total) + 1
-            self.help_page_part[key] = part
-            self.help_game_part[key] = part
-            self._send_help(room=room, private_to=sender if is_private else None,
-                            page=current_page, game_part=part)
+
+            # ns moves only inside the category the user opened.
+            # It must NEVER jump from a3 to a2 (or between a1..a6).
+            if part < total:
+                part += 1
+                self.help_pages[key] = current_page
+                self.help_page_part[key] = part
+                self.help_game_part[key] = part
+                self._send_help(room=room, private_to=sender if is_private else None,
+                                page=current_page, game_part=part)
+            else:
+                # The current category is finished. Stay on it and tell the
+                # user that there are no more lists in this category.
+                self.help_pages[key] = current_page
+                self.help_page_part[key] = part
+                self.help_game_part[key] = part
+                label = {1: "الإدارة", 2: "الموسيقى والتفاعلات", 3: "الألعاب",
+                         4: "الهدايا والنشر", 5: "النقاط", 6: "الغرف"}.get(current_page, "القائمة")
+                msg = f"✅ انتهت قوائم {label}.\n📌 للانتقال إلى قائمة أخرى اكتب a1 إلى a6."
+                if is_private:
+                    self.send_private_text(sender, msg)
+                elif room:
+                    self.send_room_text(room, msg)
             return True
 
         is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
@@ -6029,7 +6631,7 @@ class TalkinBot:
             return True
         # `اوامر` shows the organized menu only.
         if low in ("اوامر الماستر", "اوامر_الماستر"):
-            if not _is_master_name(sender):
+            if not _is_primary_master(sender):
                 return False
             target = sender if is_private else None
             menu = _command_menu_for(True, is_private=is_private)
@@ -6040,16 +6642,16 @@ class TalkinBot:
             return True
         if low in ("اوامر","الاوامر","help","مساعدة"):
             target = sender if is_private else None
-            menu = _command_menu_for(_is_master_name(sender), is_private=is_private)
+            menu = _command_menu_for(_is_primary_master(sender), is_private=is_private)
             if target:
                 self.send_private_text(target, menu)
             else:
                 self.send_room_text(room, menu)
             return True
-        m_help = re.fullmatch(r"help([1-6])", low)
+        m_help = re.fullmatch(r"a([1-6])", low)
         if m_help:
             page=int(m_help.group(1))
-            if page == 1 and (not _is_master_name(sender) or not is_private):
+            if page == 1 and (not _is_primary_master(sender) or not is_private):
                 return True
             key=(str(room), _norm_user(sender))
             self.help_pages[key]=page
@@ -6059,14 +6661,44 @@ class TalkinBot:
             return True
         if low in ("ns","n","التالي","القائمة التالية","next"):
             key=(str(room), _norm_user(sender))
+            # Do not assume a1 when ns is sent without opening a category.
+            if key not in self.help_pages:
+                target = "a1 إلى a6" if (_is_primary_master(sender) and is_private) else "a2 إلى a6"
+                msg=f"📌 اكتب {target} أولًا لفتح قائمة الأوامر، ثم استخدم ns للتالي."
+                if is_private:
+                    self.send_private_text(sender,msg)
+                elif room:
+                    self.send_room_text(room,msg)
+                return True
+            sections_map = _help_sections_from_messages()
             current_page=int(self.help_pages.get(key,1) or 1)
-            sections = _help_sections_from_messages().get(current_page, [])
-            total = max(1, len(sections))
-            part = int(self.help_page_part.get(key, self.help_game_part.get(key,1)) or 1)
-            part = (part % total) + 1
-            self.help_page_part[key]=part
-            self.help_game_part[key]=part
-            self._send_help(room=room, private_to=sender if is_private else None, page=current_page, game_part=part)
+            current_page=max(1,min(6,current_page))
+            sections=sections_map.get(current_page, [])
+            total=max(1,len(sections))
+            part=int(self.help_page_part.get(key, self.help_game_part.get(key,1)) or 1)
+
+            # ns moves only inside the currently opened category.
+            # Do not jump from a3 to a2/a4 or between any other categories.
+            if part < total:
+                part += 1
+                self.help_pages[key]=current_page
+                self.help_page_part[key]=part
+                self.help_game_part[key]=part
+                if current_page == 3:
+                    self._send_game_help_section(room=room, private_to=sender if is_private else None, part=part)
+                else:
+                    self._send_help(room=room, private_to=sender if is_private else None, page=current_page, game_part=part)
+            else:
+                self.help_pages[key]=current_page
+                self.help_page_part[key]=part
+                self.help_game_part[key]=part
+                label={1:"الإدارة",2:"الموسيقى والتفاعلات",3:"الألعاب",
+                       4:"الهدايا والنشر",5:"النقاط",6:"الغرف"}.get(current_page,"القائمة")
+                msg=f"✅ انتهت قوائم {label}.\n📌 للانتقال إلى قائمة أخرى اكتب a1 إلى a6."
+                if is_private:
+                    self.send_private_text(sender,msg)
+                else:
+                    self.send_room_text(room,msg)
             return True
         if low in ("نقاطي","points"):
             self.send_private_text(sender, _points_summary_text(sender))
@@ -6758,11 +7390,15 @@ class TalkinBot:
             _save_persistent_rooms(self.known_rooms)
         event_id = str(event.get(41, ""))
         username = str(event.get(22, "") or "").strip()
+        # NS is a navigation command. Every newly received NS must be accepted
+        # immediately; do not let the transport replay/duplicate cache suppress
+        # rapid NS presses.
+        is_ns_navigation = event_type == "text" and _is_ns_command(body)
         role = str(event.get(8, "") or "").strip().lower()
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
         # Do not log room message contents, usernames, room names, or media events.
-        if self._is_duplicate_incoming(
+        if (not is_ns_navigation) and self._is_duplicate_incoming(
             "room",
             (event_type, room, frm, to, body, str(event.get(7, "") or "")),
             event_id,
@@ -6959,6 +7595,10 @@ class TalkinBot:
                 self.log("[WORD-FILTER] failed:", repr(exc))
             return
 
+        # صورتي/صورتك: صورة عشوائية من الويب داخل الغرفة.
+        if self._handle_random_picture_command(room, body, frm):
+            return
+
         # شبيه: متاح كأمر غرفة مستقل ولا يحتاج توثيقاً.
         if self._handle_lookalike_command(room, body, frm):
             return
@@ -7032,7 +7672,7 @@ class TalkinBot:
         if self._handle_management_command(room, body, frm):
             return
 
-        if self.handle_game_command(room, body, frm):
+        if self._run_game_command_async(room, body, frm):
             return
 
         if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
@@ -7105,7 +7745,9 @@ class TalkinBot:
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
                     media_url = str(cm.get(6, "") or "").strip()
-                    if self._is_duplicate_incoming(
+                    # Every NS is a fresh navigation request. Do not suppress
+                    # rapid NS commands with the normal transport de-dup cache.
+                    if (not _is_ns_command(body)) and self._is_duplicate_incoming(
                         "private",
                         (frm, body, media_url),
                         str(cm.get(41, "") or result.get("uid", "") or ""),
@@ -7169,7 +7811,7 @@ class TalkinBot:
                         else:
                             self.send_private_text(frm, f"🔒 @{frm} يحتاج توثيقاً لاستخدام الهدايا.\n{_verification_notice()}")
                             return
-                    if body and _is_verified_user(frm) and self.handle_game_command(self.room, body, frm):
+                    if body and _is_verified_user(frm) and self._run_game_command_async(self.room, body, frm):
                         return
                     if _is_master_name(frm) and body:
                         # Reuse room command handling with the command-context room.
