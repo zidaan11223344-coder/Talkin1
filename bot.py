@@ -6591,27 +6591,6 @@ class TalkinBot:
         text=str(body or "").strip()
         low=text.casefold()
 
-        # Direct private message for ALL users: رساله اسم_المستخدم نص الرسالة
-        # Example: رساله ahmd555 السلام عليكم
-        # لا ترسل للجميع؛ ترسل فقط للمستخدم المحدد.
-        # الماستر لديه أمر مستقل للبث الخاص للجميع: رساله خاص@النص
-        m_direct_message = re.fullmatch(r"(?:رساله|رسالة)\s+@?([^\s@]+)\s+(.+)", text, re.I | re.S)
-        if m_direct_message:
-            target = m_direct_message.group(1).strip()
-            message_text = m_direct_message.group(2).strip()
-            if not target or not message_text:
-                self.send_private_text(sender, "❌ الصيغة: رساله اسم_المستخدم نص الرسالة")
-                return True
-            try:
-                sent = self.send_private_text(target, message_text)
-                if sent:
-                    self.send_private_text(sender, f"✅ تم إرسال الرسالة الخاصة إلى @{target}.")
-                else:
-                    self.send_private_text(sender, f"⚠️ تعذر إرسال الرسالة إلى @{target}.")
-            except Exception as exc:
-                self.send_private_text(sender, f"❌ تعذر إرسال الرسالة إلى @{target}: {exc}")
-            return True
-
         # Master-only room broadcast: رسالهغرف@النص / رسالةغرف@النص.
         m_room_broadcast = re.fullmatch(r"(?:رسالهغرف|رسالةغرف|رساله\s+غرفه|رسالة\s+غرفه)@(.+)", text, re.I | re.S)
         if m_room_broadcast:
@@ -7668,6 +7647,22 @@ class TalkinBot:
         if frm == BOT_ID:
             return
 
+        # Direct private message for everyone:
+        #   رساله اسم_المستخدم نص الرسالة
+        #   رساله@اسم_المستخدم نص الرسالة
+        # This MUST be intercepted before the admin-command gate so it is
+        # never echoed to the room. No public confirmation is sent either.
+        m_direct_public = re.fullmatch(r"(?:رساله|رسالة)\s*@?([^\s@]+)\s+(.+)", body.strip(), re.I | re.S)
+        if m_direct_public:
+            target = m_direct_public.group(1).strip()
+            message_text = m_direct_public.group(2).strip()
+            if target and message_text:
+                try:
+                    self.send_private_text(target, message_text)
+                except Exception as exc:
+                    self.log("[DIRECT-MESSAGE] failed", target, repr(exc))
+                return
+
         # Administrative commands are private to the configured master. Do
         # not send an authorization message to other users and do not allow
         # verified/VIP users to reach the management handlers accidentally.
@@ -7876,6 +7871,20 @@ class TalkinBot:
                     media_url = str(cm.get(6, "") or "").strip()
                     # Every NS is a fresh navigation request. Do not suppress
                     # rapid NS commands with the normal transport de-dup cache.
+                    # Direct private message is a user command, not an admin
+                    # command. Intercept it before any management/broadcast
+                    # routing so the message body never appears in a room.
+                    m_direct_private = re.fullmatch(r"(?:رساله|رسالة)\s*@?([^\s@]+)\s+(.+)", body, re.I | re.S)
+                    if m_direct_private:
+                        target = m_direct_private.group(1).strip()
+                        message_text = m_direct_private.group(2).strip()
+                        if target and message_text:
+                            try:
+                                self.send_private_text(target, message_text)
+                            except Exception as exc:
+                                self.log("[DIRECT-MESSAGE] failed", target, repr(exc))
+                            return
+
                     if (not _is_ns_command(body)) and self._is_duplicate_incoming(
                         "private",
                         (frm, body, media_url),
