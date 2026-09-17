@@ -1972,6 +1972,15 @@ def _bot_protection_data():
 def _bot_blocked_users():
     return set(_bot_protection_data().get("bot_blocked_users", []))
 
+def _bot_protection_enabled():
+    return bool(_bot_protection_data().get("bot_protection_enabled", True))
+
+def _save_bot_protection_enabled(enabled):
+    data = _bot_protection_data()
+    data["bot_protection_enabled"] = bool(enabled)
+    _save_local_json(MODERATION_FILE, data)
+    return bool(enabled)
+
 def _save_bot_blocked_users(users):
     data = _bot_protection_data()
     data["bot_blocked_users"] = sorted({_norm_user(x) for x in users if _norm_user(x)})
@@ -3152,6 +3161,8 @@ class TalkinBot:
         self.moderation_enabled, moderation_words = _load_moderation_config()
         self.banned_words = set(moderation_words)
         self.bot_blocked_users = _bot_blocked_users()
+        self.bot_protection_enabled = _bot_protection_enabled()
+        self._bot_protection_menu_state = None
         self._bot_block_notice_at = {}
         self.text_limit = max(80, int(os.getenv("TALKIN_TEXT_LIMIT", "180")))
         _ensure_replies_file()
@@ -3782,7 +3793,8 @@ class TalkinBot:
             "\u20661.\u2069 توثيق\n"
             "\u20662.\u2069 شكاوي أو مقترحات\n"
             "\u20663.\u2069 توثيق لحساب اخر\n"
-            "ارسل رقم 1 او 2 او 3"
+            "\u20664.\u2069 طلب توثيق VIP\n"
+            "ارسل رقم 1 او 2 او 3 او 4"
         )
 
     def _offline_support_menu(self, username: str = ""):
@@ -4037,6 +4049,27 @@ class TalkinBot:
         if low in ("3", "🟦3", "🟦\u20663.\u2069", "\u20663.\u2069", "توثيق لحساب اخر", "توثيق لحساب آخر", "وثق حساب اخر", "وثق حساب آخر"):
             sessions[key] = "verify_other"
             self.send_private_text(sender, "👤 أرسل اسم المستخدم الذي تريد توثيقه الآن.")
+            return True
+
+        # Option 4: request VIP verification for another account. The master
+        # forwards the requested username to the configured administration
+        # account; no VIP grant is performed automatically.
+        if low in ("4", "🟦4", "🟦\u20664.\u2069", "\u20664.\u2069", "طلب توثيق vip", "توثيق vip"):
+            sessions[key] = "verify_vip"
+            self.send_private_text(sender, "👑 أرسل اسم المستخدم المراد توثيقه VIP الآن.")
+            return True
+
+        if sessions.get(key) == "verify_vip":
+            target = body.strip().lstrip("@").split()[0] if body else ""
+            if not target:
+                return True
+            owner = str(MASTER_SUPPORT_USERNAME or "").strip()
+            if owner:
+                self.send_private_text(owner, f"👑 طلب توثيق VIP من @{sender}\n👤 الحساب المطلوب: @{target}")
+                self.send_private_text(sender, "✅ تم إرسال طلب توثيق VIP إلى الإدارة.")
+            else:
+                self.send_private_text(sender, "❌ إدارة الماستر غير مضبوطة حالياً.")
+            sessions.pop(key, None)
             return True
 
         if sessions.get(key) == "verify_other":
@@ -7238,14 +7271,39 @@ class TalkinBot:
                 self.send_private_text(sender, "🚫 هذا الأمر مخصص للماستر والإدارة فقط.")
             return False
         # Personal bot protection: it never calls native room moderation.
+        protection_state = getattr(self, "_bot_protection_menu_state", None)
+        if protection_state and (protection_state == _norm_user(sender) or protection_state == _norm_user(sender) + ":delete") and low not in ("حمايه البوت", "حماية البوت"):
+            if low in ("1", "تشغيل"):
+                self.bot_protection_enabled = True
+                _save_bot_protection_enabled(True)
+                self._bot_protection_menu_state = None
+                self.send_private_text(sender, "✅ تم تشغيل حماية البوت.")
+                return True
+            if low in ("2", "إيقاف", "ايقاف"):
+                self.bot_protection_enabled = False
+                _save_bot_protection_enabled(False)
+                self._bot_protection_menu_state = None
+                self.send_private_text(sender, "🛑 تم إيقاف حماية البوت.")
+                return True
+            if low in ("3", "المحظورين", "عرض المحظورين"):
+                blocked = sorted(self.bot_blocked_users)
+                self.send_private_text(sender, "🛡️ المحظورون داخل البوت:\n" + ("\n".join(f"{i}. @{x}" for i, x in enumerate(blocked, 1)) if blocked else "لا يوجد مستخدمون محظورون."))
+                return True
+            if low in ("4", "حذف محظور", "حذف المحظورين"):
+                self._bot_protection_menu_state = _norm_user(sender) + ":delete"
+                self.send_private_text(sender, "✍️ أرسل اسم المستخدم المراد حذفه من قائمة المحظورين.")
+                return True
+            if protection_state.endswith(":delete"):
+                target = _norm_user(text)
+                if target:
+                    self.bot_blocked_users.discard(target)
+                    _save_bot_blocked_users(self.bot_blocked_users)
+                self._bot_protection_menu_state = None
+                self.send_private_text(sender, f"✅ تم حذف @{target} من قائمة المحظورين.")
+                return True
         if low in ("حمايه البوت", "حماية البوت", "bot protection", "bot_protection"):
-            blocked = sorted(self.bot_blocked_users)
-            msg = ("🛡️ حماية البوت\n"
-                   "• تشغيل تلقائي: حظر داخلي بعد 10 رسائل متتالية\n"
-                   "• الحظر شخصي داخل البوت ولا يحظر المستخدم من الغرفة\n"
-                   "• تم حظر: " + (", ".join("@" + x for x in blocked) if blocked else "لا يوجد مستخدمون") + "\n"
-                   "الأوامر: حمايه البوت | المحظورين | فك حظر@المستخدم")
-            self.send_private_text(sender, msg)
+            self._bot_protection_menu_state = _norm_user(sender)
+            self.send_private_text(sender, "🛡️ حماية البوت\n1. تشغيل\n2. إيقاف\n3. عرض المحظورين\n4. حذف محظور\n\nأرسل رقم العملية.")
             return True
         if low in ("المحظورين", "المحظورون", "قائمة المحظورين", "bot blocked"):
             blocked = sorted(self.bot_blocked_users)
@@ -7981,7 +8039,7 @@ class TalkinBot:
         # Word filter runs before games/normal commands. It uses the same native
         # room ban operation as b@, with Arabic normalization and no public reply.
         room_cfg = _room_moderation_config(room)
-        if room_cfg["enabled"] and not _is_master_name(frm):
+        if getattr(self, "bot_protection_enabled", _bot_protection_enabled()) and not _is_master_name(frm):
             now = time.time()
             state = self._room_repeat_state[room]
             last_sender = str(state.get("sender", ""))
@@ -8204,12 +8262,9 @@ class TalkinBot:
                     # private service flow and performs verification itself.
                     if MASTER_SERVICE_ENABLED and self._handle_master_account_service(frm, body):
                         return
-                    # When the master account is absent, the primary bot provides
-                    # the private verification/support service. This must not depend
-                    # on MASTER_SERVICE_ENABLED, because that flag is reserved for
-                    # the standalone master process itself.
-                    if not self._master_is_online() and self._handle_offline_master_service(frm, body):
-                        return
+                    # The primary bot does not show the master-service menu.
+                    # That menu belongs exclusively to the standalone master
+                    # account when MASTER_SERVICE_ENABLED is active.
                     if body and media_url:
                         if not _is_verified_user(frm):
                             self.send_room_text(self.room, f"🔒 @{frm} يحتاج توثيقاً لاستخدام النشر.\n{_verification_notice()}")
