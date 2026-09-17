@@ -3647,15 +3647,18 @@ class TalkinBot:
             return False
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            # Talkin room_message expects the audio media type here.
-            # Keep the public URL as a real audio file (not a text URL).
+            # Private shared songs must be sent as Talkin's playable audio
+            # message (the client renders it as the audio/voice-message bubble).
+            # Do not send the MP3 URL as text or as an image.
             mt = "audio"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         elif mt != "image":
             mt = str(media_type or "image").strip().lower() or "image"
         kwargs = {"type_": mt, "to": username, "url": media_url}
-        if mt == "voice":
+        if mt == "audio":
+            # Include duration so the Talkin client can render the playable
+            # audio message correctly, matching the private-message format.
             kwargs["length"] = str(max(0, int(duration or 0)))
         return self.send_query(encode_query("chat_message", **kwargs))
 
