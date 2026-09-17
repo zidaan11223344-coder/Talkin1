@@ -1659,9 +1659,9 @@ def _save_game_levels_snapshot():
 def _game_welcome(username, room):
     """Build the level-aware welcome shown whenever a player enters a room."""
     level, label, plays = _game_level_info(username)
-    rank = _game_star_rank(username)
-    star_line = (f"\n⭐ ترتيب النجوم: {'⭐' * (11 - rank)}"
-                 if rank else "\n⭐ ترتيب النجوم: ⭐")
+    # Stars represent the player's game level directly: level 4 = four stars,
+    # while the highest level 10 receives ten stars.
+    star_line = f"\n⭐ ترتيب النجوم\n       {'⭐' * level}"
     return (f"🎮 دخل @{username}\n"
             f"{label} قيمة المستوى\n"
             f"🏠 الغرفة: {room}\n"
