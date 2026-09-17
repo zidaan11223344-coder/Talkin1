@@ -3584,7 +3584,9 @@ class TalkinBot:
             return False
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            mt = "voice"
+            # Talkin room_message expects the audio media type here.
+            # Keep the public URL as a real audio file (not a text URL).
+            mt = "audio"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         elif mt != "image":
@@ -4428,7 +4430,9 @@ class TalkinBot:
         """
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            mt = "voice"
+            # Talkin room_message expects the audio media type here.
+            # Keep the public URL as a real audio file (not a text URL).
+            mt = "audio"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         kwargs = {"type_": mt, "room": str(room or "").strip(), "url": str(media_url or "").strip()}
@@ -4618,7 +4622,7 @@ class TalkinBot:
                 target_rooms=self._active_rooms()
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
-                    self.send_room_media(target_room,url,"voice",duration)
+                    self.send_room_media(target_room,url,"audio",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
                 self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
@@ -4633,7 +4637,7 @@ class TalkinBot:
             return True
         title = str(info.get("title") or "أغنية")
         self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
-        self.send_private_media(target, str(info["url"]), "voice", int(info.get("duration") or 0))
+        self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
@@ -6224,13 +6228,14 @@ class TalkinBot:
                     url = f"{base}/games/{card.name}"
 
                 self._verify_public_media_url(url, "image")
-                # Important: send the media packet itself, not only a text URL.
-                self.send_private_media(recipient, url, "image")
-                self.send_private_text(
-                    recipient,
-                    f"✅ تم تصميم وإرسال صورة {game_word} باسم @{target_name} في الخاص."
+                # Send the generated check image directly into the room where
+                # the master issued the command. Do not send it privately.
+                self.send_room_media(room, url, "image")
+                self.send_room_text(
+                    room,
+                    f"✅ صورة {game_word} باسم @{target_name} تم إرسالها في الغرفة."
                 )
-                self.log("[GAME-CHECK] private image sent", key, target_name, recipient)
+                self.log("[GAME-CHECK] room image sent", key, target_name, room)
             except Exception as exc:
                 self.log("[GAME-CHECK] failed:", repr(exc))
                 self.send_private_text(recipient, f"❌ تعذر تصميم/إرسال صورة {game_word}: {exc}")
