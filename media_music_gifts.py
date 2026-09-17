@@ -9,7 +9,7 @@ except Exception:
     yt_dlp = None
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
 except Exception:
     Image = ImageDraw = ImageFont = None
 
@@ -195,7 +195,14 @@ def gift_card_url(gid, sender, receiver):
             return gift_url(gift_image(gid))
     target=MEDIA_DIR/'gifts'; target.mkdir(exist_ok=True)
     dst=target/(f'gift_{int(gid):02d}_{uuid.uuid4().hex[:8]}.png')
-    image=Image.open(template).convert('RGBA')
+    # Use one of the three supplied gift variants as the artwork layer. The
+    # elegant template is a transparent frame/overlay, not the gift itself.
+    # This keeps repeated sends visually different while preserving the
+    # repository assets as the source of truth.
+    artwork=Image.open(gift_image(gid)).convert('RGBA')
+    image=ImageOps.fit(artwork, (1400, 1435), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+    template_image=Image.open(template).convert('RGBA').resize(image.size, Image.Resampling.LANCZOS)
+    image.alpha_composite(template_image)
     draw=ImageDraw.Draw(image)
     font_path=GIFT_DIR/'NotoSansArabic-SemiBold.ttf'
     font_small=GIFT_DIR/'DejaVuSans.ttf'
@@ -206,10 +213,14 @@ def gift_card_url(gid, sender, receiver):
     except Exception:
         ar_font=en_font=title_font=ImageFont.load_default()
     cx=image.width//2
-    emoji,name=GIFTS.get(str(gid), ('🎁','هدية'))
-    draw.text((cx, 235), f'{emoji} {name}', font=title_font, fill='#4b241d', anchor='mm', stroke_width=1, stroke_fill='#f0c27b')
-    draw.text((cx, 430), f'المرسل / Sender: @{sender}', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
-    draw.text((cx, 515), f'المستقبل / Receiver: @{receiver}', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    _emoji,name=GIFTS.get(str(gid), ('🎁','هدية'))
+    # Keep Arabic labels and account names on separate lines so a font that
+    # lacks Latin glyphs cannot turn usernames into replacement boxes.
+    draw.text((cx, 235), name, font=title_font, fill='#4b241d', anchor='mm', stroke_width=1, stroke_fill='#f0c27b')
+    draw.text((cx, 420), 'المرسل', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    draw.text((cx, 475), f'@{sender}', font=en_font, fill='#3f211b', anchor='mm')
+    draw.text((cx, 545), 'المستقبل', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    draw.text((cx, 600), f'@{receiver}', font=en_font, fill='#3f211b', anchor='mm')
     draw.text((cx, 650), 'A special gift for you', font=en_font, fill='#6a3428', anchor='mm')
     image.save(dst, format='PNG', optimize=True)
     return base + '/media/gifts/' + quote(dst.name)

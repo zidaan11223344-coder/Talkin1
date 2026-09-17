@@ -2512,10 +2512,11 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     else:
         template = Image.new("RGBA", (1239, 1270), (0, 0, 0, 0))
 
-    # Work at a genuinely large final canvas.  Keep the template's original
+    # Work at a genuinely large final canvas. Keep the template's original
     # aspect ratio so the frame is enlarged horizontally and vertically
-    # without being stretched.
-    target_w = 900
+    # without being stretched. This is large enough for clear sharing on
+    # modern phones while remaining practical for chat media.
+    target_w = 1200
     target_h = max(1, round(target_w * template.height / template.width))
     template = template.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
