@@ -1644,8 +1644,8 @@ def _game_top10_message():
         return "🏆 توب الألعاب\nلا توجد نتائج بعد."
     lines = []
     for position, (_level, _label, plays, username) in enumerate(rows, 1):
-        rank = "🥇 1" if position == 1 else str(position)
-        lines.append(f"{rank} @{username} لعب {plays}")
+        rank = {1: "🥇 1", 2: "🥈 2", 3: "🥉 3"}.get(position, str(position))
+        lines.append(f"{rank} {username} لعب {plays}")
     return "🏆 توب الألعاب\n" + "\n".join(lines)
 
 

@@ -24,8 +24,9 @@ def test_levels_stars_top10_and_welcome(tmp_path, monkeypatch):
     assert bot._game_star_rank("user10") == 10
     assert len(bot._game_top10()) == 10
     top_message = bot._game_top10_message()
-    assert "🥇 1 @user1 لعب 20000" in top_message
-    assert "10 @user10 لعب 90" in top_message
+    assert "🥇 1 user1 لعب 20000" in top_message
+    assert "10 user10 لعب 90" in top_message
+    assert "@" not in top_message
     assert len(top_message.splitlines()) == 11
     welcome = bot._game_welcome("user1", "room")
     assert "🎮 دخل @user1" in welcome
