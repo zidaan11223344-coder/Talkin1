@@ -2954,12 +2954,10 @@ class TalkinBot:
         self._master_online_rooms = set()
         self._offline_support_sessions = {}
         self._offline_support_recent = {}
-        # Keep rejected rooms tracked for history, but exclude them from
-        # broadcasts and reconnect attempts until the master retries them.
-        raw_blocked = _load_local_json(BLOCKED_ROOMS_FILE, [])
-        if isinstance(raw_blocked, dict):
-            raw_blocked = raw_blocked.get("rooms", [])
-        self.blocked_rooms = {_norm_room(r) for r in (raw_blocked if isinstance(raw_blocked, list) else []) if _norm_room(r)}
+        # A room's access state is authoritative only when reported by the
+        # current Talkin server session. Never restore blocked rooms from a
+        # local exception file, because permissions may have changed.
+        self.blocked_rooms = set()
         self._blocked_room_reasons = {}
         self._blocked_room_notices = set()
         self._pending_room_joins = {}
@@ -3183,24 +3181,21 @@ class TalkinBot:
         self._heartbeat_thread = None
 
     def _save_blocked_rooms(self):
-        try:
-            _save_local_json(BLOCKED_ROOMS_FILE, {"version": 1, "rooms": sorted(self.blocked_rooms)})
-        except Exception as exc:
-            self.log("[ROOM] blocked rooms save failed", repr(exc))
+        # Kept as a compatibility hook for old callers. Blocked rooms are not
+        # persisted; the server response is the only source of truth.
+        self.blocked_rooms.clear()
 
     def _mark_room_blocked(self, room: str, reason: str = ""):
         room = _norm_room(room)
         if not room:
             return
-        self.blocked_rooms.add(room)
         if reason:
             self._blocked_room_reasons[room] = reason
         self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != room}
         self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != room}
         self.room_users.pop(room, None)
         _save_persistent_rooms(self.known_rooms)
-        self._save_blocked_rooms()
-        self.log("[ROOM] marked blocked/inaccessible:", room, reason)
+        self.log("[ROOM] server rejected room (not persisted as exception):", room, reason)
 
     def _room_failure_message(self, room: str, event_type: str):
         event_type = str(event_type or "").replace("_rejoin", "").replace("room_full _rejoin", "room_full")
@@ -3395,8 +3390,7 @@ class TalkinBot:
             rooms.add(str(self.room).strip())
         rooms.update(str(r).strip() for r in self.room_users.keys() if str(r).strip())
         rooms.update(str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip())
-        blocked = {_norm_room(r) for r in getattr(self, "blocked_rooms", set())}
-        return sorted(r for r in rooms if _norm_room(r) not in blocked)
+        return sorted(rooms)
 
     def broadcast_all_rooms(self, text: str):
         """Send one public game announcement to every room currently tracked by the bot."""
@@ -7615,10 +7609,8 @@ class TalkinBot:
             pending_join = self._pending_room_joins.pop(rnorm, None)
             if pending_join and pending_join.get("timer"):
                 pending_join["timer"].cancel()
-            self.blocked_rooms.discard(rnorm)
             self._blocked_room_reasons.pop(rnorm, None)
             self._blocked_room_notices.discard(rnorm)
-            self._save_blocked_rooms()
             requester = str((pending_join or {}).get("requested_by", "") or "").strip()
             if requester:
                 self.send_private_text(requester, f"✅ أكد الخادم دخول البوت إلى الغرفة: {room}")
@@ -7668,7 +7660,7 @@ class TalkinBot:
                     self.send_private_text(recipient, notice)
                     self._blocked_room_notices.add(blocked_room)
                 if BOT_MASTER and _norm_user(recipient) != _norm_user(BOT_MASTER):
-                    self.send_private_text(BOT_MASTER, f"⚠️ تعذر دخول البوت غرفة: {room}\n{reason_text}\nتم وضعها في الاستثناءات ولن يحاول الدخول إليها تلقائياً.")
+                    self.send_private_text(BOT_MASTER, f"⚠️ رد الخادم برفض دخول البوت إلى الغرفة: {room}\n{reason_text}\nلم تُحفظ الغرفة في قائمة الاستثناءات؛ أعد المحاولة بعد تعديل صلاحيات البوت.")
 
         if ACK_ROOM_EVENTS and result.get("uid"):
             try:
@@ -7863,8 +7855,6 @@ class TalkinBot:
         walk(rooms)
         if not found:
             return
-        blocked = {_norm_room(r) for r in self.blocked_rooms}
-        found = {r for r in found if _norm_room(r) not in blocked}
         self.log("[ROOM-LIST] loaded", len(found), "rooms")
         # Keep the historical list so reconnect can restore rooms previously selected by the master.
         self.known_rooms.update(found)
@@ -8186,14 +8176,12 @@ class TalkinBot:
         # Keep every room selected by the master. A reconnect restores the
         # existing room set once; room-event handlers never leave/rejoin in a
         # loop, which avoids the visible leave/join cycle.
-        blocked_norm = {_norm_room(r) for r in getattr(self, "blocked_rooms", set())}
         rooms_to_restore = set() if MASTER_SERVICE_ENABLED else {
             str(r).strip() for r in self.known_rooms
-            if str(r).strip() and _norm_room(r) not in blocked_norm
+            if str(r).strip()
         }
         if self.room and not MASTER_SERVICE_ENABLED:
-            if _norm_room(self.room) not in blocked_norm:
-                rooms_to_restore.add(str(self.room).strip())
+            rooms_to_restore.add(str(self.room).strip())
         for room in sorted(rooms_to_restore):
             self.join_room(room, force=True)
 
