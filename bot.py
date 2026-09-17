@@ -1637,6 +1637,18 @@ def _game_top10():
     return rows[:10]
 
 
+def _game_top10_message():
+    """Compact top-games message: rank, username, and total plays only."""
+    rows = _game_top10()
+    if not rows:
+        return "🏆 توب الألعاب\nلا توجد نتائج بعد."
+    lines = []
+    for position, (_level, _label, plays, username) in enumerate(rows, 1):
+        rank = "🥇 1" if position == 1 else str(position)
+        lines.append(f"{rank} @{username} لعب {plays}")
+    return "🏆 توب الألعاب\n" + "\n".join(lines)
+
+
 def _save_game_levels_snapshot():
     """Persist derived levels/ranks as a separately backed-up JSON record."""
     players = {}
@@ -6949,16 +6961,7 @@ class TalkinBot:
             self.send_private_text(sender, _points_summary_text(sender))
             return True
         if low in ("توب الألعاب", "توب الالعاب", "top games", "games top"):
-            rows = _game_top10()
-            if rows:
-                lines = []
-                for position, (_level, label, plays, username) in enumerate(rows, 1):
-                    medal = "🥇" if position == 1 else f"{position}."
-                    prefix = "👑 ذهبي" if position == 1 else f"مستوى {_level}"
-                    lines.append(f"{medal} @{username} — {prefix} ({label}) | {plays} جولة")
-                message = "🏆 توب الألعاب — أفضل 10\n━━━━━━━━━━━━\n" + "\n".join(lines)
-            else:
-                message = "🏆 توب الألعاب\n━━━━━━━━━━━━\nلا توجد نتائج بعد."
+            message = _game_top10_message()
             if is_private:
                 self.send_private_text(sender, message)
             else:
@@ -7708,7 +7711,7 @@ class TalkinBot:
                 self.send_room_text(room, f"👑 لقد أتاكم الزعيم\n👤 {username}\n🏠 الغرفة: {room}")
             elif username and _norm_user(username) != _norm_user(BOT_ID):
                 level, _label, _plays = _game_level_info(username)
-                if _plays <= 0:
+                if _plays <= 0 or _game_star_rank(username) is None:
                     return
                 welcomes_enabled = bool(getattr(self, "custom_welcome_enabled", True))
                 cw = self.custom_welcomes.get(_norm_user(username)) if welcomes_enabled else None
