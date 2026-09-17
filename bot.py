@@ -1663,7 +1663,7 @@ def _game_welcome(username, room):
     # while the highest level 10 receives ten stars.
     star_line = f"\n⭐ ترتيب النجوم\n       {'⭐' * level}"
     return (f"🎮 دخل @{username}\n"
-            f"{label} قيمة المستوى\n"
+            f"{label}\n"
             f"🏠 الغرفة: {room}\n"
             f"🏅 مستوى الألعاب: {level}\n"
             f"🎯 جولاتك: {plays}{star_line}")
