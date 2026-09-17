@@ -4968,7 +4968,8 @@ class TalkinBot:
         return total
 
     def _cleanup_expired_wagers(self):
-        timeout = max(30, int(os.getenv("WAGER_TIMEOUT_SECONDS", "180")))
+        # مدة البحث عن منافس لأي لعبة انتظار = دقيقتان فقط.
+        timeout = 120
         now = time.time()
         expired = []
         with self.game_lock:
@@ -4977,7 +4978,28 @@ class TalkinBot:
                     expired.append((key, waiting))
                     self.wager_waiting.pop(key, None)
         for _, waiting in expired:
-            self.log("[GAME] expired wager", waiting.get("game"), waiting.get("user"))
+            room = str(waiting.get("room") or "").strip()
+            game = str(waiting.get("game") or "اللعبة").strip()
+            user = str(waiting.get("user") or "").strip()
+            if room:
+                self.send_room_text(room, f"⌛ انتهى وقت البحث عن منافس في لعبة {game}.\n❌ تم إلغاء اللعبة تلقائياً بعد دقيقتين لعدم وجود منافس.")
+            self.log("[GAME] expired wager", game, user)
+
+    def _cleanup_expired_fixed_games(self):
+        # ألعاب سنارة/برق/ياقوت/صدام/كاشف تنتظر منافساً لمدة دقيقتين فقط.
+        timeout = 120
+        now = time.time()
+        expired = []
+        with self.game_lock:
+            for game_name, waiting in list(self.fixed_game_waiting.items()):
+                if now - float(waiting.get("created", 0) or 0) >= timeout:
+                    expired.append((game_name, waiting))
+                    self.fixed_game_waiting.pop(game_name, None)
+        for game_name, waiting in expired:
+            room = str(waiting.get("room") or "").strip()
+            if room:
+                self.send_room_text(room, f"⌛ انتهى وقت البحث عن منافس في لعبة {game_name}.\n❌ تم إلغاء اللعبة تلقائياً بعد دقيقتين لعدم وجود منافس.")
+            self.log("[GAME] expired fixed game", game_name, waiting.get("user"))
 
     def _wager_result(self, first, second, game_name):
         """Resolve a global PvP wager and publish the result only to both origin rooms."""
@@ -5032,11 +5054,20 @@ class TalkinBot:
         if amount <= 0:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
-        # The 30-second interval belongs to this game only; another game can be played immediately.
+        # أولاً ننظف الألعاب التي تجاوزت دقيقتين، ثم نتحقق هل لدى المستخدم
+        # نفس اللعبة معلقة بالفعل. هذا الفحص يسبق فاصل الـ40 ثانية حتى يظهر
+        # تنبيه واضح بدلاً من أن يصمت البوت أو يعطي رسالة فاصل عادية.
+        self._cleanup_expired_wagers()
+        with self.game_lock:
+            existing = self.wager_waiting.get(game_name.casefold())
+            if existing and _norm_user(existing.get("user")) == _norm_user(sender):
+                self.send_room_text(room, f"⏳ @{sender} لديك لعبة {game_name} شغالة حالياً.\n🎯 ما زالت تبحث عن منافس.\n⌛ مدة البحث دقيقتان فقط، وبعدها تُلغى تلقائياً إذا لم يدخل منافس.")
+                return True
+
+        # الفاصل 40 ثانية لنفس اللعبة فقط، أما الألعاب المختلفة فمسموحة فوراً.
         if not self._game_cooldown_notice(room, sender, 40.0, game_name):
             return True
 
-        self._cleanup_expired_wagers()
         # GLOBAL queue: the same game challenge is shared by every room.
         # Same-room play is allowed; room is intentionally NOT part of the key.
         key = game_name.casefold()
@@ -5176,6 +5207,13 @@ class TalkinBot:
     def _queue_fixed_game(self, room, sender, game_name, prize=500):
         """Global two-player queue; both players may enter from the same room or different rooms."""
         prize=int(prize)
+        self._cleanup_expired_fixed_games()
+        with self.game_lock:
+            existing = self.fixed_game_waiting.get(game_name)
+            if existing and _norm_user(existing.get("user")) == _norm_user(sender):
+                self.send_room_text(room, f"⏳ @{sender} لديك لعبة {game_name} شغالة حالياً.\n🎯 ما زالت تبحث عن منافس.\n⌛ مدة البحث دقيقتان فقط، وبعدها تُلغى تلقائياً إذا لم يدخل منافس.")
+                return True
+
         if not self._game_cooldown_notice(room, sender, 40.0,game_name):
             return True
         if not _is_primary_master(sender) and _get_points(sender) < prize:
