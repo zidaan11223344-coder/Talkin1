@@ -10,7 +10,7 @@ def test_levels_stars_top10_and_welcome(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "GAME_LEVELS_FILE", levels_file)
     stats = {}
     for i in range(1, 11):
-        plays = 2000 if i == 1 else max(1, 100 - i)
+        plays = 20000 if i == 1 else max(1, 100 - i)
         stats[f"user{i}"] = {
             "username": f"user{i}",
             "games": {"test": {"plays": plays, "points": plays, "staked": 0}},
@@ -18,16 +18,19 @@ def test_levels_stars_top10_and_welcome(tmp_path, monkeypatch):
     stats["vip"] = {"username": "vip", "games": {}}
     stats_file.write_text(json.dumps(stats), encoding="utf-8")
 
-    assert bot._game_level_info("user1")[0] == 7
+    assert bot._game_level_info("user1")[0] == 10
     assert bot._game_star_rank("user1") == 1
     assert bot._game_star_rank("user7") == 7
-    assert bot._game_star_rank("user8") is None
+    assert bot._game_star_rank("user10") == 10
     assert len(bot._game_top10()) == 10
-    assert "مستوى الألعاب: 7" in bot._game_welcome("user1", "room")
-    assert "★★★★★★★" in bot._game_welcome("user1", "room")
+    welcome = bot._game_welcome("user1", "room")
+    assert "دخل @user1" in welcome
+    assert "مستوى الألعاب: 10" in welcome
+    assert "أسطورة الأساطير" in welcome
+    assert 'color="#FFD700">★★★★★★★★★★</font>' in welcome
     bot._save_game_levels_snapshot()
     snapshot = json.loads(levels_file.read_text(encoding="utf-8"))
-    assert snapshot["players"]["user1"]["level"] == 7
+    assert snapshot["players"]["user1"]["level"] == 10
     assert snapshot["players"]["user1"]["star_rank"] == 1
 
 

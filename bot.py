@@ -1587,6 +1587,9 @@ GAME_LEVELS = (
     (500, "ملك الألعاب"),
     (1000, "سيد الألعاب"),
     (2000, "إمبراطور الألعاب"),
+    (5000, "بطل الألعاب"),
+    (10000, "نجم الألعاب"),
+    (20000, "أسطورة الأساطير"),
 )
 
 
@@ -1604,7 +1607,7 @@ def _game_level_info(username):
 
 
 def _game_star_rank(username):
-    """Top-seven rank: first place has seven stars, seventh has one."""
+    """Top-ten rank: first place has ten gold stars, tenth has one."""
     rows = []
     for key, item in _game_stats_data().items():
         if not isinstance(item, dict):
@@ -1614,7 +1617,7 @@ def _game_star_rank(username):
         if plays:
             rows.append((level, plays, _norm_user(name), name))
     rows.sort(key=lambda row: (-row[0], -row[1], row[2]))
-    for rank, row in enumerate(rows[:7], 1):
+    for rank, row in enumerate(rows[:10], 1):
         if row[2] == _norm_user(username):
             return rank
     return None
@@ -1657,10 +1660,12 @@ def _game_welcome(username, room):
     """Build the level-aware welcome shown whenever a player enters a room."""
     level, label, plays = _game_level_info(username)
     rank = _game_star_rank(username)
-    star_line = f"\n⭐ ترتيب النجوم: {'★' * (8 - rank)}" if rank else ""
-    return (f"🎮 أهلاً بك يا @{username}\n"
+    star_line = (f"\nترتيب النجوم: <font color=\"#FFD700\">{'★' * (11 - rank)}</font>"
+                 if rank else "\nترتيب النجوم: ⭐")
+    return (f"🎮 دخل @{username}\n"
+            f"🏆 {label}\n"
             f"🏠 الغرفة: {room}\n"
-            f"🏅 مستوى الألعاب: {level} — {label}\n"
+            f"🏅 مستوى الألعاب: {level}\n"
             f"🎯 جولاتك: {plays}{star_line}")
 
 
