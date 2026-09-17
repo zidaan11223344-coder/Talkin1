@@ -3563,11 +3563,39 @@ class TalkinBot:
         return self._send_text_packets("chat_message", text, to=username)
 
     def send_private_media(self, username: str, media_url: str, media_type: str, duration: int = 0):
-        """Send audio/image back to the private-chat sender."""
-        return self.send_query(encode_query(
+        """Send media to a private chat using the same Query media fields as rooms.
+
+        Private text can arrive even when the media URL is unreachable, so
+        validate the public file first.  A transient WebSocket write failure
+        is retried once; this is especially important after the preceding
+        caption packet, which can briefly congest the Talkin connection.
+        """
+        username = str(username or "").strip().lstrip("@")
+        media_url = str(media_url or "").strip()
+        media_type = str(media_type or "").strip().lower()
+        if not username or username == BOT_ID or not media_url:
+            return False
+        if media_type not in {"audio", "image", "video", "file"}:
+            raise ValueError(f"unsupported private media type: {media_type}")
+        if media_type == "audio":
+            self._verify_public_media_url(media_url, "audio")
+        payload = encode_query(
             "chat_message", type_=media_type, to=username, url=media_url,
             length=str(max(0, int(duration or 0))) if media_type == "audio" else None
-        ))
+        )
+        last_error = None
+        for attempt in range(2):
+            try:
+                result = self.send_query(payload)
+                if attempt:
+                    self.log("[MEDIA] private media delivered after retry:", username, media_type)
+                return result
+            except Exception as exc:
+                last_error = exc
+                self.log("[MEDIA] private media send failed:", username, media_type, repr(exc))
+                if attempt == 0:
+                    time.sleep(0.8)
+        raise last_error
 
     def _master_is_online(self):
         """Return the latest presence state known by this bot connection."""
@@ -4614,7 +4642,16 @@ class TalkinBot:
         # the text packet on the same socket. Give the text frame a short
         # head start so the recipient receives both messages.
         time.sleep(0.25)
-        self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
+        try:
+            self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
+        except Exception as exc:
+            self.log("[MUSIC] private share audio failed:", repr(exc))
+            notice = f"⚠️ تعذر إرسال ملف الأغنية إلى @{target}. الرابط العام للصوت غير متاح حالياً."
+            if room:
+                self.send_room_text(room, notice)
+            else:
+                self.send_private_text(sender, notice)
+            return True
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
