@@ -24,10 +24,9 @@ def test_levels_stars_top10_and_welcome(tmp_path, monkeypatch):
     assert bot._game_star_rank("user10") == 10
     assert len(bot._game_top10()) == 10
     welcome = bot._game_welcome("user1", "room")
-    assert "دخل @user1" in welcome
-    assert "مستوى الألعاب: 10" in welcome
-    assert "أسطورة الأساطير" in welcome
-    assert "🌟🌟🌟🌟🌟🌟🌟🌟🌟🌟" in welcome
+    assert "أهلاً بك يا @user1" in welcome
+    assert "مستوى الألعاب: 10 — أسطورة الأساطير" in welcome
+    assert "⭐ ترتيب النجوم: ★★★★★★★★★★" in welcome
     bot._save_game_levels_snapshot()
     snapshot = json.loads(levels_file.read_text(encoding="utf-8"))
     assert snapshot["players"]["user1"]["level"] == 10
