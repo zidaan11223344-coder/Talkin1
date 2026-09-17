@@ -316,7 +316,7 @@ _STATE_FILE_NAMES = (
     "messages.json", "published_posts.json", "game_stats.json", "game_levels.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
     "moderation.json", "mf.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
-    "custom_commands.json", "repair_state.json",
+    "custom_commands.json", "repair_state.json", "wager_state.json", "backup_manifest.json",
 )
 
 def _json_has_real_data(path):
@@ -1124,6 +1124,26 @@ def _github_get_file(local_path):
         print(f"[GITHUB] read failed for {Path(local_path).name}: {exc}", flush=True)
         return None
 
+
+def _github_list_state_files():
+    """Discover future JSON state files already present in the backup folder."""
+    if not GITHUB_SYNC_ENABLED:
+        return []
+    try:
+        url = _github_url(GITHUB_DATA_DIR)
+        response = requests.get(url, headers=_github_headers(),
+                                params={"ref": GITHUB_BRANCH}, timeout=15)
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        return sorted({str(item.get("name")) for item in payload
+                       if isinstance(item, dict)
+                       and str(item.get("name", "")).endswith(".json")})
+    except Exception as exc:
+        print(f"[GITHUB] state listing failed: {exc}", flush=True)
+        return []
+
 def _github_put_file(local_path, data, sha=None):
     """Create or update a JSON file in GitHub reliably.
 
@@ -1187,7 +1207,11 @@ def _github_restore_or_seed_state():
     print(f"[GITHUB] persistent state enabled: {GITHUB_REPO}@{GITHUB_BRANCH}/{GITHUB_DATA_DIR}", flush=True)
     _GITHUB_RESTORING = True
     try:
-        for name in _STATE_FILE_NAMES:
+        names = list(_STATE_FILE_NAMES)
+        for name in _github_list_state_files():
+            if name not in names:
+                names.append(name)
+        for name in names:
             local = DATA_DIR / name
             try:
                 remote = _github_get_file(local)
@@ -1232,16 +1256,29 @@ def _github_sync_after_local_save(path, data):
 
 
 def _queue_github_full_backup():
-    """Queue every existing JSON state file for a non-blocking full backup."""
+    """Queue every JSON state file plus a checksum manifest for full backup."""
     if not GITHUB_SYNC_ENABLED:
         return 0
     queued = 0
-    for name in _STATE_FILE_NAMES:
+    manifest = {"version": 1, "generated_at": int(time.time()), "files": {}}
+    names = set(_STATE_FILE_NAMES)
+    names.update(path.name for path in DATA_DIR.glob("*.json"))
+    for name in sorted(names):
+        if name == "backup_manifest.json":
+            continue
         path = DATA_DIR / name
         data = _load_local_json(path, None)
         if path.is_file() and data is not None:
             _github_sync_after_local_save(path, data)
             queued += 1
+            raw = path.read_bytes()
+            manifest["files"][name] = {
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+    manifest_path = DATA_DIR / "backup_manifest.json"
+    _github_sync_after_local_save(manifest_path, manifest)
+    queued += 1
     return queued
 
 
@@ -1279,7 +1316,7 @@ def _github_sync_worker():
         for bot, sender in requests_to_notify:
             try:
                 notice = (
-                    "✅ تم النسخ الاحتياطي بنجاح إلى GitHub (Talkin4)."
+                    "✅ تم النسخ الاحتياطي بنجاح إلى GitHub (Talkin1)."
                     if backup_ok else
                     "❌ اكتمل النسخ الاحتياطي جزئياً؛ تعذر رفع ملف أو أكثر. راجع سجل Railway."
                 )
