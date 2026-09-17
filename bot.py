@@ -1875,7 +1875,7 @@ def _default_help_sections():
             '📋 أوامر الإدارة — 2\n━━━━━━━━━━━━\nتشغيل الحماية — تشغيل حماية الغرفة\nإيقاف الحماية — إيقاف حماية الغرفة\nmr@عدد — تحديد حد التكرار\nخاص@النص — إرسال رسالة خاصة لجميع المستخدمين\nرسالة@النص — نفس الأمر\nbroadcast@النص — نفس الأمر\nنسخ احتياطي — إنشاء نسخة احتياطية\nإعادة تشغيل البوت — إعادة تشغيل البوت\nتشغيل الماستر — تشغيل حساب الماستر\nإيقاف الماستر — إيقاف حساب الماستر\nحالة الماستر — حالة حساب الماستر\n\n📌 هذه الأوامر مخصصة للماستر/الإدارة حسب صلاحية الأمر.',
         ],
         2: [
-            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال:\.sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
+            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
             '❤️ التفاعلات والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — يقول جاري البحث عن صورتك يا @اسم ثم يبحث عن صورة ويرسلها في الروم\nشبيه@اسم — البحث عن الشبيه\nشبيهك@اسم — البحث عن شبيهك\n\n📌 التفاعل يكون على كود المنشور/المحتوى المرسل من البوت.',
         ],
         3: [
@@ -3900,7 +3900,7 @@ class TalkinBot:
         still rejected immediately.
         """
         role = self._bot_room_role(room)
-        if role in {"owner", "creator", "room_owner", "room_creator"}:
+        if role in {"owner", "creator", "room_owner", "room_creator", "admin", "moderator", "mod"}:
             return True
         if role in {"admin", "moderator", "mod", "member", "user", "none"}:
             # If role was explicitly learned from a live roster, reject it.
@@ -4616,6 +4616,10 @@ class TalkinBot:
             return True
         title = str(info.get("title") or "أغنية")
         self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
+        # Talkin can drop a private media packet when it immediately follows
+        # the text packet on the same socket. Give the text frame a short
+        # head start so the recipient receives both messages.
+        time.sleep(0.25)
         self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
@@ -7284,13 +7288,15 @@ class TalkinBot:
             if not target:
                 self.send_private_text(sender,"❌ الصيغة: دخول@اسم_الغرفة"); return True
             if _norm_room(target) in getattr(self, "blocked_rooms", set()):
-                self.send_private_text(
-                    sender,
-                    f"🚫 البوت محظور من الغرفة: {target}\n"
-                    "ارفع البوت إشرافاً أو أونر ثم أعد المحاولة.",
-                )
-                return True
-            if self.join_room(target, requested_by=sender):
+                blocked_key = _norm_room(target)
+                self.blocked_rooms.discard(blocked_key)
+                self._blocked_room_reasons.pop(blocked_key, None)
+                self._blocked_room_notices.discard(blocked_key)
+                self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != blocked_key}
+                self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != blocked_key}
+                self._save_blocked_rooms()
+                _save_persistent_rooms(self.known_rooms)
+            if self.join_room(target, force=True, requested_by=sender):
                 self.send_private_text(sender, f"⏳ تم إرسال طلب دخول الغرفة: {target}. انتظر تأكيد الخادم.")
             else:
                 self.send_private_text(sender, f"⚠️ تعذر إرسال طلب دخول الغرفة: {target}.")
