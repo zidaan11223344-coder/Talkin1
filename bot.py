@@ -1081,7 +1081,7 @@ def _save_local_json(path, data):
 # Never hard-code the token in bot.py. For public repositories, remember that
 # committed member/verification/points data becomes publicly readable.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_REPO = os.getenv("GITHUB_REPO", "zidaan11223344-coder/Talkin4").strip()
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
 GITHUB_DATA_DIR = os.getenv("GITHUB_DATA_DIR", "bot_data").strip().strip("/")
 GITHUB_SYNC_ENABLED = bool(GITHUB_TOKEN and GITHUB_REPO and os.getenv("GITHUB_SYNC", "1").strip().lower() not in {"0", "false", "no", "off"})
@@ -1566,7 +1566,7 @@ def _looks_like_bot_command(text):
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
     normalized_low = low.replace("ة", "ه")
@@ -1587,7 +1587,7 @@ def _looks_like_admin_command(text):
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
-        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "توثيق الكل", "وثق الكل", "verify",
+        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
 
@@ -7171,21 +7171,19 @@ class TalkinBot:
                 self.send_private_text(sender, "🛑 تم إيقاف الدعوات.")
             return True
 
-        # is@username: report the rooms where the user is currently present.
-        m_is = re.fullmatch(r"is@(.+)", text.strip(), re.I)
+        # s@username: report the rooms where the user is currently present.
+        m_is = re.fullmatch(r"s@(.+)", text.strip(), re.I)
         if m_is:
             target = m_is.group(1).strip().lstrip("@")
             if not target:
-                self.send_private_text(sender, "❌ الصيغة: is@اسم المستخدم")
+                self.send_private_text(sender, "❌ الصيغة: s@اسم المستخدم")
                 return True
             if not _is_primary_master(sender):
                 return True
             key = _norm_user(target)
-            active_rooms = set()
-            active_rooms.update(str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip())
-            active_rooms.update(str(r).strip() for r in getattr(self, "room_users", {}).keys() if str(r).strip())
-            if getattr(self, "room", None):
-                active_rooms.add(str(self.room).strip())
+            # Only server-confirmed rooms are eligible; persisted rosters and
+            # the current command context are not proof of live presence.
+            active_rooms = {str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip()}
             matches = []
             for active_room in sorted(active_rooms):
                 users = getattr(self, "room_users", {}).get(active_room, {}) or {}
@@ -7194,11 +7192,11 @@ class TalkinBot:
                         matches.append((active_room, username))
                         break
             if matches:
-                lines = [f"🔎 نتيجة البحث عن @{target}", f"🟢 متصل في {len(matches)} غرفة:"]
+                lines = [f"🔎 نتيجة البحث عن @{target}", f"🟢 أكد الخادم اتصال @{target} في {len(matches)} غرفة:"]
                 lines.extend(f"🏠 {room_name} — @{username}" for room_name, username in matches)
                 self.send_private_text(sender, "\n".join(lines))
             else:
-                self.send_private_text(sender, f"🔴 @{target} غير متصل حالياً في أي غرفة ظاهرة للبوت.")
+                self.send_private_text(sender, f"🔴 أكد الخادم أن @{target} غير متصل حالياً في أي غرفة متصلة بالبوت.")
             return True
 
         # Word-filter controls are master-only and persist in moderation.json.
@@ -7854,9 +7852,6 @@ class TalkinBot:
         room = str(event.get(13, self.room))
         if room and room != BOT_MASTER:
             self.known_rooms.add(room)
-            if not hasattr(self, "connected_rooms"):
-                self.connected_rooms = set()
-            self.connected_rooms.add(room)
             _save_persistent_rooms(self.known_rooms)
         event_id = str(event.get(41, ""))
         username = str(event.get(22, "") or "").strip()
@@ -7942,6 +7937,10 @@ class TalkinBot:
                     # Keep master moderation silent; confirmation is logged only.
                     self.log(f"[MOD] server confirmed room={room} target=@{changed_user} role={changed_role}")
         elif event_type in ("you_joined", "you_rejoined"):
+            # The server's join acknowledgement is the source of truth for
+            # the session-only connected-room list.
+            if room:
+                self.connected_rooms.add(room)
             self.last_joined_room = room
             rnorm = _norm_room(room)
             pending_join = self._pending_room_joins.pop(rnorm, None)
@@ -8057,7 +8056,8 @@ class TalkinBot:
                 and not _is_master_name(frm)
                 and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
                 and not (re.fullmatch(r"sb@([^@]+)@(\d+)", body.strip(), re.I) and _is_verified_user(frm))
-                and not (is_publish_command and _is_verified_user(frm))):
+                and not (is_publish_command and _is_verified_user(frm))
+                and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}):
             if not _is_verified_user(frm):
                 self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
@@ -8304,6 +8304,7 @@ class TalkinBot:
                             and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
                             and not (re.fullmatch(r"sb@([^@]+)@(\d+)", body.strip(), re.I) and _is_verified_user(frm))
                             and not (is_publish_command and _is_verified_user(frm))
+                            and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}
                             and not re.match(r"^دخول@.+$", body, re.I)):
                         if not _is_verified_user(frm):
                             self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
@@ -8346,14 +8347,10 @@ class TalkinBot:
                             else:
                                 self.invites_enabled = False
                                 self.send_private_text(frm, "🛑 تم إيقاف الدعوات.")
-                        elif re.fullmatch(r"is@(.+)", body.strip(), re.I) and _is_primary_master(frm):
-                            target = re.fullmatch(r"is@(.+)", body.strip(), re.I).group(1).strip().lstrip("@")
+                        elif re.fullmatch(r"s@(.+)", body.strip(), re.I) and _is_primary_master(frm):
+                            target = re.fullmatch(r"s@(.+)", body.strip(), re.I).group(1).strip().lstrip("@")
                             key = _norm_user(target)
-                            active_rooms = set()
-                            active_rooms.update(str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip())
-                            active_rooms.update(str(r).strip() for r in getattr(self, "room_users", {}).keys() if str(r).strip())
-                            if self.room:
-                                active_rooms.add(str(self.room).strip())
+                            active_rooms = {str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip()}
                             matches = []
                             for active_room in sorted(active_rooms):
                                 for username in (getattr(self, "room_users", {}).get(active_room, {}) or {}):
@@ -8361,11 +8358,11 @@ class TalkinBot:
                                         matches.append((active_room, username))
                                         break
                             if matches:
-                                lines = [f"🔎 نتيجة البحث عن @{target}", f"🟢 متصل في {len(matches)} غرفة:"]
+                                lines = [f"🔎 نتيجة البحث عن @{target}", f"🟢 أكد الخادم اتصال @{target} في {len(matches)} غرفة:"]
                                 lines.extend(f"🏠 {room_name} — @{username}" for room_name, username in matches)
                                 self.send_private_text(frm, "\n".join(lines))
                             else:
-                                self.send_private_text(frm, f"🔴 @{target} غير متصل حالياً في أي غرفة ظاهرة للبوت.")
+                                self.send_private_text(frm, f"🔴 أكد الخادم أن @{target} غير متصل حالياً في أي غرفة متصلة بالبوت.")
                         elif cmd in ("inv", "دعوات", "invite"):
                             if not getattr(self, "invites_enabled", True):
                                 self.send_private_text(frm, "🛑 الدعوات متوقفة حالياً. أرسل: تشغيل الدعوات")
