@@ -1959,6 +1959,25 @@ def _save_room_moderation(room, **changes):
     _save_local_json(MODERATION_FILE, data)
     return cfg
 
+def _bot_protection_data():
+    data = _load_local_json(MODERATION_FILE, {})
+    if not isinstance(data, dict):
+        data = {}
+    blocked = data.get("bot_blocked_users", [])
+    if not isinstance(blocked, list):
+        blocked = []
+    data["bot_blocked_users"] = sorted({_norm_user(x) for x in blocked if _norm_user(x)})
+    return data
+
+def _bot_blocked_users():
+    return set(_bot_protection_data().get("bot_blocked_users", []))
+
+def _save_bot_blocked_users(users):
+    data = _bot_protection_data()
+    data["bot_blocked_users"] = sorted({_norm_user(x) for x in users if _norm_user(x)})
+    _save_local_json(MODERATION_FILE, data)
+    return set(data["bot_blocked_users"])
+
 def _room_manager(bot, room, sender):
     if _is_master_name(sender):
         return True
@@ -3132,6 +3151,8 @@ class TalkinBot:
         self._heartbeat_thread = None
         self.moderation_enabled, moderation_words = _load_moderation_config()
         self.banned_words = set(moderation_words)
+        self.bot_blocked_users = _bot_blocked_users()
+        self._bot_block_notice_at = {}
         self.text_limit = max(80, int(os.getenv("TALKIN_TEXT_LIMIT", "180")))
         _ensure_replies_file()
         self.db = DatabaseBridge(self.log)
@@ -5170,6 +5191,8 @@ class TalkinBot:
             room = str(waiting.get("room") or "").strip()
             game = str(waiting.get("game") or "اللعبة").strip()
             user = str(waiting.get("user") or "").strip()
+            if waiting.get("reserved") and not _is_primary_master(user):
+                _add_points(user, int(waiting.get("stake", 0) or 0))
             if room:
                 self.send_room_text(room, f"⌛ انتهى وقت البحث عن منافس في لعبة {game}.\n❌ تم إلغاء اللعبة تلقائياً بعد دقيقتين لعدم وجود منافس.")
             self.log("[GAME] expired wager", game, user)
@@ -5186,6 +5209,8 @@ class TalkinBot:
                     self.fixed_game_waiting.pop(game_name, None)
         for game_name, waiting in expired:
             room = str(waiting.get("room") or "").strip()
+            if waiting.get("reserved") and not _is_primary_master(waiting.get("user")):
+                _add_points(waiting.get("user"), int(waiting.get("prize", 0) or 0))
             if room:
                 self.send_room_text(room, f"⌛ انتهى وقت البحث عن منافس في لعبة {game_name}.\n❌ تم إلغاء اللعبة تلقائياً بعد دقيقتين لعدم وجود منافس.")
             self.log("[GAME] expired fixed game", game_name, waiting.get("user"))
@@ -5198,10 +5223,10 @@ class TalkinBot:
 
         # Each player risks the amount they entered. The winner receives the
         # opponent's stake; the winner's own stake is returned implicitly.
-        if not _is_master_name(loser.get("user")):
-            _add_points(loser.get("user"), -loser_stake)
+        # Both stakes were reserved atomically when players joined. Do not
+        # debit again here; return the winner's stake and add the loser's stake.
         if not _is_master_name(winner.get("user")):
-            _add_points(winner.get("user"), loser_stake)
+            _add_points(winner.get("user"), winner_stake + loser_stake)
 
         game_key = {
             "رهان":"bet", "مراهنة":"bet", "مضاربة":"duel", "مضاربه":"duel",
@@ -5286,10 +5311,15 @@ class TalkinBot:
                 # Their room and stake are both preserved for the final result.
                 self.wager_waiting.pop(key, None)
             elif error is None:
+                # Reserve the stake immediately. This prevents spending the same
+                # balance in another game while the challenge is open.
+                if not _is_primary_master(sender):
+                    _add_points(sender, -amount)
                 self.wager_waiting[key] = {
                     "user": sender,
                     "room": room,
                     "stake": amount,
+                    "reserved": True,
                     "game": game_name,
                     "created": time.time(),
                 }
@@ -5299,10 +5329,15 @@ class TalkinBot:
             return True
 
         if waiting:
+            # The second stake is reserved before resolving the match. The
+            # first player's stake was reserved when the challenge opened.
+            if not _is_primary_master(sender):
+                _add_points(sender, -amount)
             second = {
                 "user": sender,
                 "room": room,
                 "stake": amount,
+                "reserved": True,
                 "game": game_name,
             }
             self._wager_result(waiting, second, game_name)
@@ -5346,25 +5381,10 @@ class TalkinBot:
         prize = int(prize)
         winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
 
-        # Re-check balances at settlement so a player cannot join with 500,
-        # spend it elsewhere, and then fall below the fixed loss amount.
-        for player in (first, second):
-            username = player.get("user")
-            if not _is_primary_master(username) and _get_points(username) < prize:
-                rooms=[]
-                for target in (first.get("room"), second.get("room")):
-                    target=str(target or "").strip()
-                    if target and target.casefold() not in {r.casefold() for r in rooms}:
-                        rooms.append(target)
-                msg=f"⚠️ تم إلغاء جولة {game_name}. اللاعب @{username} لا يملك {prize} نقطة كافية للمخاطرة."
-                for r in rooms:
-                    self.send_room_text(r,msg)
-                return
-
-        if not _is_primary_master(loser.get("user")):
-            _add_points(loser.get("user"), -prize)
+        # Both stakes were reserved when players joined. Return the winner's
+        # stake plus the loser's stake; never debit again at settlement.
         if not _is_primary_master(winner.get("user")):
-            _add_points(winner.get("user"), prize)
+            _add_points(winner.get("user"), prize * 2)
 
         game_key=game_name
         _record_game(loser.get("user"), game_key, -prize, prize)
@@ -5417,7 +5437,9 @@ class TalkinBot:
                 self.fixed_game_waiting.pop(game_name,None)
 
         if waiting:
-            second={"user":sender,"room":room}
+            if not _is_primary_master(sender):
+                _add_points(sender, -prize)
+            second={"user":sender,"room":room,"reserved":True,"prize":prize}
             self._fixed_game_result(waiting,second,game_name,prize)
             # Cooldown was already recorded by _game_ready using only game + user.
             # Same-room participation remains allowed.
@@ -5434,7 +5456,9 @@ class TalkinBot:
         with self.game_lock:
             # Re-check in case another event created the queue while we prepared.
             if game_name not in self.fixed_game_waiting:
-                self.fixed_game_waiting[game_name]={"user":sender,"room":room,"created":time.time()}
+                if not _is_primary_master(sender):
+                    _add_points(sender, -prize)
+                self.fixed_game_waiting[game_name]={"user":sender,"room":room,"created":time.time(),"reserved":True,"prize":prize}
             else:
                 return True
         self.broadcast_all_rooms(challenge)
@@ -7213,7 +7237,27 @@ class TalkinBot:
             if _looks_like_admin_command(text):
                 self.send_private_text(sender, "🚫 هذا الأمر مخصص للماستر والإدارة فقط.")
             return False
-
+        # Personal bot protection: it never calls native room moderation.
+        if low in ("حمايه البوت", "حماية البوت", "bot protection", "bot_protection"):
+            blocked = sorted(self.bot_blocked_users)
+            msg = ("🛡️ حماية البوت\n"
+                   "• تشغيل تلقائي: حظر داخلي بعد 10 رسائل متتالية\n"
+                   "• الحظر شخصي داخل البوت ولا يحظر المستخدم من الغرفة\n"
+                   "• تم حظر: " + (", ".join("@" + x for x in blocked) if blocked else "لا يوجد مستخدمون") + "\n"
+                   "الأوامر: حمايه البوت | المحظورين | فك حظر@المستخدم")
+            self.send_private_text(sender, msg)
+            return True
+        if low in ("المحظورين", "المحظورون", "قائمة المحظورين", "bot blocked"):
+            blocked = sorted(self.bot_blocked_users)
+            self.send_private_text(sender, "🛡️ المحظورون داخل البوت:\n" + ("\n".join("• @" + x for x in blocked) if blocked else "لا يوجد مستخدمون محظورون."))
+            return True
+        unban = re.fullmatch(r"(?:فك حظر|unblock)@(.+)", text.strip(), re.I)
+        if unban:
+            target = _norm_user(unban.group(1))
+            self.bot_blocked_users.discard(target)
+            _save_bot_blocked_users(self.bot_blocked_users)
+            self.send_private_text(sender, f"✅ تم فك الحظر الداخلي عن @{target}.")
+            return True
         # "غرفي" must show only rooms that are actually connected in the
         # current WebSocket session. known_rooms is historical and may contain
         # rooms saved from an earlier run, so it must NOT be used here.
@@ -7911,6 +7955,16 @@ class TalkinBot:
                     self.log("[DIRECT-MESSAGE] failed", target, repr(exc))
                 return
 
+        # Personal bot ban: silently ignore subsequent traffic except for a
+        # rate-limited acknowledgement. This is deliberately not a room ban.
+        self.bot_blocked_users = getattr(self, "bot_blocked_users", _bot_blocked_users())
+        if _norm_user(frm) in self.bot_blocked_users and not _is_master_name(frm):
+            now_blocked = time.time()
+            last_notice = float(getattr(self, "_bot_block_notice_at", {}).get(_norm_user(frm), 0.0) or 0.0)
+            if now_blocked - last_notice >= 30.0:
+                self.send_room_text(room, f"🚫 @{frm} تم حظرك اشتباه فلود")
+                self._bot_block_notice_at[_norm_user(frm)] = now_blocked
+            return
         # Administrative commands are private to the configured master. Do
         # not send an authorization message to other users and do not allow
         # verified/VIP users to reach the management handlers accidentally.
@@ -7948,8 +8002,9 @@ class TalkinBot:
             text_count = int(state.get("text_count", 0) or 0)
             limit = room_cfg["repeat_limit"]
             if sender_count >= limit or text_count >= limit:
-                self.send_admin(room, frm, "ban")
-                self.send_room_text(room, f"🚫 تم حظر @{frm}\nالسبب: تكرار مشبوه")
+                self.bot_blocked_users.add(_norm_user(frm))
+                _save_bot_blocked_users(self.bot_blocked_users)
+                self.send_room_text(room, f"🚫 @{frm} تم حظرك اشتباه فلود")
                 state.clear()
                 return
             if sender_count == limit - 1 or text_count == limit - 1:
