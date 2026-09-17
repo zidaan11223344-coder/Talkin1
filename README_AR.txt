@@ -12,4 +12,5 @@ GITHUB_TOKEN=التوكن الخاص بك
 - لا تضع GITHUB_TOKEN داخل bot.py.
 - يجب أن يكون التوكن Fine-grained وله صلاحية Contents: Read and write للمستودع.
 - الملفات ستظهر داخل مجلد bot_data في المستودع.
+- تشمل النسخة الاحتياطية إحصاءات الألعاب ومستويات اللاعبين وترتيب النجوم في `game_stats.json` و`game_levels.json`.
 - لا تشارك التوكن في المحادثة.

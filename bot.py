@@ -295,6 +295,7 @@ POINTS_FILE = DATA_DIR / "points.json"
 MESSAGES_FILE = DATA_DIR / "messages.json"
 PUBLISHED_FILE = DATA_DIR / "published_posts.json"
 GAME_STATS_FILE = DATA_DIR / "game_stats.json"
+GAME_LEVELS_FILE = DATA_DIR / "game_levels.json"
 GAME_CONTROL_FILE = DATA_DIR / "game_control.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
 TRACKED_ROOMS_FILE = DATA_DIR / "tracked_rooms.json"
@@ -312,7 +313,7 @@ MVIP_MASTERS_FILE = DATA_DIR / "mvip_masters.json"
 # NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
 _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
-    "messages.json", "published_posts.json", "game_stats.json", "game_control.json", "crop_plots.json",
+    "messages.json", "published_posts.json", "game_stats.json", "game_levels.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
     "moderation.json", "mf.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json",
@@ -1633,6 +1634,25 @@ def _game_top10():
     return rows[:10]
 
 
+def _save_game_levels_snapshot():
+    """Persist derived levels/ranks as a separately backed-up JSON record."""
+    players = {}
+    for key, item in _game_stats_data().items():
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or key).strip().lstrip("@")
+        level, label, plays = _game_level_info(username)
+        if plays:
+            players[_norm_user(username)] = {
+                "username": username,
+                "level": level,
+                "label": label,
+                "plays": plays,
+                "star_rank": _game_star_rank(username),
+            }
+    _save_local_json(GAME_LEVELS_FILE, {"version": 1, "players": players})
+
+
 def _game_welcome(username, room):
     """Build the level-aware welcome shown whenever a player enters a room."""
     level, label, plays = _game_level_info(username)
@@ -1660,6 +1680,7 @@ def _record_game(username, game_key, points_delta=0, stake=0):
     item["games"] = games
     data[key] = item
     _save_local_json(GAME_STATS_FILE, data)
+    _save_game_levels_snapshot()
 
 
 def _game_stats(username, game_key):
