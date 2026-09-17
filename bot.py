@@ -1660,7 +1660,7 @@ def _game_welcome(username, room):
     """Build the level-aware welcome shown whenever a player enters a room."""
     level, label, plays = _game_level_info(username)
     rank = _game_star_rank(username)
-    star_line = (f"\nترتيب النجوم: <font color=\"#FFD700\">{'★' * (11 - rank)}</font>"
+    star_line = (f"\nترتيب النجوم: {'🌟' * (11 - rank)}"
                  if rank else "\nترتيب النجوم: ⭐")
     return (f"🎮 دخل @{username}\n"
             f"🏆 {label}\n"
