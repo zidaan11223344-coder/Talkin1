@@ -3571,11 +3571,28 @@ class TalkinBot:
         return self._send_text_packets("chat_message", text, to=username)
 
     def send_private_media(self, username: str, media_url: str, media_type: str, duration: int = 0):
-        """Send audio/image back to the private-chat sender."""
-        return self.send_query(encode_query(
-            "chat_message", type_=media_type, to=username, url=media_url,
-            length=str(max(0, int(duration or 0))) if media_type == "audio" else None
-        ))
+        """Send a real Talkin private media message.
+
+        Talkin uses ``image`` for pictures and ``voice`` for playable voice/audio
+        messages.  The older build used ``audio`` here; that can be accepted as
+        a query but is not rendered by the client, so it falls back to text.
+        Query field 7 is the media URL and field 3 is the voice duration.
+        """
+        username = str(username or "").strip().lstrip("@")
+        media_url = str(media_url or "").strip()
+        if not username or username == BOT_ID or not media_url:
+            return False
+        mt = str(media_type or "").strip().lower()
+        if mt in ("audio", "voice", "sound", "mp3"):
+            mt = "voice"
+        elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
+            mt = "image"
+        elif mt != "image":
+            mt = str(media_type or "image").strip().lower() or "image"
+        kwargs = {"type_": mt, "to": username, "url": media_url}
+        if mt == "voice":
+            kwargs["length"] = str(max(0, int(duration or 0)))
+        return self.send_query(encode_query("chat_message", **kwargs))
 
     def _master_is_online(self):
         """Return the latest presence state known by this bot connection."""
@@ -4405,21 +4422,19 @@ class TalkinBot:
 
 
     def send_room_media(self, room: str, media_url: str, media_type: str, duration: int = 0):
-        """Send room media using Query's normal room/url fields.
+        """Send a real Talkin room media packet.
 
-        Text messages already prove that Query field ``room`` (field 6) is
-        the room identifier. Media uses the same field; ``length`` (field 3)
-        carries the optional audio duration. Putting the room in ``password``
-        made Talkin accept the packet but discard the image/audio payload.
+        Pictures use ``image``; audio is exposed by Talkin as ``voice``.
         """
-        if media_type == "audio":
-            return self.send_query(encode_query(
-                "room_message", type_="audio",
-                length=str(max(0, int(duration or 0))), room=room, url=media_url
-            ))
-        return self.send_query(encode_query(
-            "room_message", type_=media_type, room=room, url=media_url
-        ))
+        mt = str(media_type or "").strip().lower()
+        if mt in ("audio", "voice", "sound", "mp3"):
+            mt = "voice"
+        elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
+            mt = "image"
+        kwargs = {"type_": mt, "room": str(room or "").strip(), "url": str(media_url or "").strip()}
+        if mt == "voice":
+            kwargs["length"] = str(max(0, int(duration or 0)))
+        return self.send_query(encode_query("room_message", **kwargs))
 
     def _music_download(self,query):
         """Search/download public audio and return an MP3 ready for TalkinChat.
@@ -4603,7 +4618,7 @@ class TalkinBot:
                 target_rooms=self._active_rooms()
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
-                    self.send_room_media(target_room,url,"audio",duration)
+                    self.send_room_media(target_room,url,"voice",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
                 self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
@@ -4618,7 +4633,7 @@ class TalkinBot:
             return True
         title = str(info.get("title") or "أغنية")
         self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
-        self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
+        self.send_private_media(target, str(info["url"]), "voice", int(info.get("duration") or 0))
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
