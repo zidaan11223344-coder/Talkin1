@@ -2053,7 +2053,7 @@ def _default_help_sections():
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
-            '❤️ التفاعلات والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — يقول جاري البحث عن صورتك يا @اسم ثم يبحث عن صورة ويرسلها في الروم\nشبيه@اسم — البحث عن الشبيه\nشبيهك@اسم — البحث عن شبيهك\n\n📌 التفاعل يكون على كود المنشور/المحتوى المرسل من البوت.',
+            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي أو صورتك — بحث آمن عن صورة مناسبة لاسمك\n.صوره اسم_المستخدم — بحث آمن عن صورة المستخدم\nشبيه@اسم — بحث آمن عن الشبيه\nشبيهك@اسم — بحث آمن عن شبيهك\n\n📌 النتائج العامة من الإنترنت، مع تفعيل SafeSearch ومنع البحث عن الصور المخلة.',
         ],
         3: [
             '🎮 A3 — الألعاب — 1: ضد البوت (نصية)\n━━━━━━━━━━━━\n\u20661.\u2069 حجر / ورق / مقص\n\u20662.\u2069 استثمار\n\u20663.\u2069 حظ\n\u20664.\u2069 عملة أو عمله@وجه/كتابة\n\u20665.\u2069 عجلة\n\u20666.\u2069 صندوق أو صندوق@1..3\n\u20667.\u2069 كوب أو كأس@1..3\n\u20668.\u2069 وحش\n\u20669.\u2069 بركان\n🔟 طائر\n\u206611.\u2069 نجم\n\u206612.\u2069 طاولة\n\u206613.\u2069 اونو\n\n📌 هذه الألعاب ضد البوت\n📌 نتائجها نصية فقط بدون صور',
@@ -2894,7 +2894,7 @@ def _search_lookalike_image(query, exclude_urls=None):
     try:
         r = requests.get(
             "https://www.bing.com/images/search",
-            params={"q": q, "form": "HDRSC2", "first": "1"},
+            params={"q": q + " safe for work", "form": "HDRSC2", "first": "1", "adlt": "strict"},
             headers=headers,
             timeout=LOOKALIKE_TIMEOUT,
         )
@@ -5815,6 +5815,12 @@ class TalkinBot:
             "shimaa", "salma", "sama", "samar", "hanan", "wafa", "eman", "arwa",
             "jana", "janna", "tala", "lara", "lina", "yasmin", "yasmine", "aseel"
         }
+        explicit_male = {"هيبه", "الهيبه", "الهيبة", "ملك", "الملك", "ابو", "ابو الشباب"}
+        explicit_female = {"اميره بحجابي", "اميرة بحجابي", "اميره", "اميرة", "ملكة", "الملكة", "بنت", "بنوتة"}
+        if raw in explicit_male or compact in {re.sub(r"[\s_.-]+", "", x.casefold()) for x in explicit_male}:
+            return "male"
+        if raw in explicit_female or compact in {re.sub(r"[\s_.-]+", "", x.casefold()) for x in explicit_female}:
+            return "female"
         if compact in {re.sub(r"[\s_.-]+", "", x.casefold()) for x in male}:
             return "male"
         if compact in {re.sub(r"[\s_.-]+", "", x.casefold()) for x in female}:
@@ -5824,14 +5830,35 @@ class TalkinBot:
             return "female"
         return "unknown"
 
-    def _picture_search_queries_for_name(self, name):
-        """اختيار عشوائي متنوع: 40% شباب، 40% بنات، و20% قرود."""
-        roll = secrets.randbelow(100)
-        if roll < 40:
-            return ("شباب حلوين", "شباب عرب", "شباب وسيمين")
-        if roll < 80:
-            return ("بنات حلوات", "بنات عرب", "بنات جميلات")
-        return ("قرود", "قرد مضحك", "قرود مضحكة", "funny monkey")
+    def _picture_gender_hint(self, name):
+        """Use explicit roster profile metadata when available, otherwise name hints.
+        This is a playful search category, never a claim about a person's identity.
+        """
+        key = _norm_user(name)
+        for roster in getattr(self, "room_users", {}).values():
+            value = roster.get(name) if isinstance(roster, dict) else None
+            if isinstance(value, dict):
+                gender = str(value.get("gender") or value.get("sex") or value.get("profile_gender") or "").casefold()
+                if gender in ("male", "m", "ذكر", "ولد"): return "male"
+                if gender in ("female", "f", "أنثى", "انثى", "بنت"): return "female"
+            if isinstance(roster, dict):
+                for username, item in roster.items():
+                    if _norm_user(username) == key and isinstance(item, dict):
+                        gender = str(item.get("gender") or item.get("sex") or "").casefold()
+                        if gender in ("male", "m", "ذكر", "ولد"): return "male"
+                        if gender in ("female", "f", "أنثى", "انثى", "بنت"): return "female"
+        return self._classify_picture_name(name)
+
+    def _picture_search_queries_for_name(self, name, gender=None):
+        """Return mostly monkey results, with safe gender-aware playful categories."""
+        gender = gender or self._picture_gender_hint(name)
+        if secrets.randbelow(100) < 60:
+            return ("قرود لطيفة", "قرود مضحكة", "monkeys safe for work", "قرود في الطبيعة")
+        if gender == "male":
+            return ("شباب وسيمين safe for work", "شباب بشعين بشكل كوميدي", "شباب عرب محترمين")
+        if gender == "female":
+            return ("بنات حلوات safe for work", "بنات بشعات بشكل كوميدي", "بنات عرب محترمات")
+        return ("أشخاص مضحكون safe for work", "شخصيات كرتونية", "قرود لطيفة")
 
     def _handle_random_picture_command(self, room, body, sender):
         """Handle صورتي/صورتك and .صوره username with name-aware playful searches."""
@@ -5860,13 +5887,13 @@ class TalkinBot:
                     query = secrets.choice(variants)
                     image_url = None
                     # For monkey results, use Wikimedia Commons first, then Bing as a fallback.
-                    if query in {"قرود", "قرد مضحك", "قرود مضحكة", "funny monkey"}:
+                    if any(token in query.casefold() for token in ("قرود", "قرد", "monkey")):
                         image_url = _search_monkey_image(exclude_urls=excluded)
                     if not image_url:
                         image_url = _search_lookalike_image(query, exclude_urls=excluded)
                     if image_url and image_url in excluded:
                         excluded.clear()
-                        if query in {"قرود", "قرد مضحك", "قرود مضحكة", "funny monkey"}:
+                        if any(token in query.casefold() for token in ("قرود", "قرد", "monkey")):
                             image_url = _search_monkey_image()
                         if not image_url:
                             image_url = _search_lookalike_image(query)
@@ -5910,11 +5937,15 @@ class TalkinBot:
             try:
                 recent = getattr(self, "_random_picture_recent", {}); room_key = str(room)
                 excluded = set(recent.get(room_key, []))
-                variants = ("شباب حلوين", "بنات حلوات", "قرود")
+                variants = self._picture_search_queries_for_name(sender, self._picture_gender_hint(sender))
                 query = secrets.choice(variants)
-                image_url = _search_lookalike_image(query, exclude_urls=excluded)
+                image_url = (_search_monkey_image(exclude_urls=excluded)
+                             if any(token in query.casefold() for token in ("قرود", "قرد", "monkey"))
+                             else _search_lookalike_image(query, exclude_urls=excluded))
                 if image_url and image_url in excluded:
-                    excluded.clear(); image_url = _search_lookalike_image(query)
+                    excluded.clear(); image_url = (_search_monkey_image()
+                                                  if any(token in query.casefold() for token in ("قرود", "قرد", "monkey"))
+                                                  else _search_lookalike_image(query))
                 if not image_url:
                     self.send_room_text(room, "❌ لم أجد صورة مناسبة حالياً."); return
                 local = _download_lookalike_image(image_url, sender)
@@ -5975,21 +6006,18 @@ class TalkinBot:
                 excluded = set(recent.get(target_key, []))
                 # Randomize the theme so repeated commands can return different
                 # images. Keep the queries non-explicit and suitable for chat.
-                variants = (
-                    "قرد مضحك",
-                    "قرد مضحك meme",
-                    "صورة مضحكة",
-                    "شخصية كرتونية مضحكة",
-                    "funny monkey",
-                    "funny face meme",
-                )
+                variants = self._picture_search_queries_for_name(target, self._picture_gender_hint(target))
                 query = secrets.choice(variants)
-                image_url = _search_lookalike_image(query, exclude_urls=excluded)
+                image_url = (_search_monkey_image(exclude_urls=excluded)
+                             if any(token in query.casefold() for token in ("قرود", "قرد", "monkey"))
+                             else _search_lookalike_image(query, exclude_urls=excluded))
                 if image_url and image_url in excluded:
                     # If all current results were previously used, clear the
                     # rolling history and allow a genuinely new search result.
                     excluded.clear()
-                    image_url = _search_lookalike_image(query)
+                    image_url = (_search_monkey_image()
+                                 if any(token in query.casefold() for token in ("قرود", "قرد", "monkey"))
+                                 else _search_lookalike_image(query))
                 if not image_url:
                     self.send_room_text(room, f"❌ لم أجد صورة مناسبة لـ @{target}.")
                     return
