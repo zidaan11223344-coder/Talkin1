@@ -5848,6 +5848,7 @@ class TalkinBot:
         if not members:
             self.send_room_text(room, "❌ فشلت السرقة: لا يوجد عضو آخر متاح للسرقة حالياً.")
             _record_game(sender, "steal", 0, 500)
+            self._send_game_winner_card("اسرق_فشل", sender, [room])
             return True
 
         # `اسرق` = choose a victim randomly; `اسرق@username` / `اسرق username` = target that member.
@@ -5872,6 +5873,7 @@ class TalkinBot:
                 f"❌ فشلت السرقة، الحصانة تحميه من السرقة لمدة دقيقة."
             )
             _record_game(sender, "steal", 0, 500)
+            self._send_game_winner_card("اسرق_فشل", sender, [room])
             return True
         if victim_balance < 500:
             self.send_room_text(
@@ -5881,6 +5883,7 @@ class TalkinBot:
                 f"💰 رصيده: {_fmt_points(victim_balance)}"
             )
             _record_game(sender, "steal", 0, 500)
+            self._send_game_winner_card("اسرق_فشل", sender, [room])
             return True
 
         # The result is random each attempt: usually success, sometimes the police catch the thief.
@@ -5907,6 +5910,7 @@ class TalkinBot:
         )
         _record_game(sender, "steal", 500, 500)
         _record_game(victim, "steal", -500, 500)
+        self._send_game_winner_card("اسرق_نجاح", sender, [room])
         return True
 
 
