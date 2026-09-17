@@ -1528,8 +1528,8 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "نرد", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
+        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
@@ -3007,6 +3007,7 @@ class TalkinBot:
         self.help_game_part = {}  # legacy alias used by older code
         self.help_page_part = {}
         self.pending_bot_choices = {}
+        self.stock_pending = {}
         # Global wager queues, crop timers, and fruit-match state.
         self.wager_waiting = {}
         # Global fixed-prize PvP queues: one open challenge per game name.
@@ -4875,6 +4876,9 @@ class TalkinBot:
         # كل الألعاب تستخدم نفس مدة الفاصل، لكن لكل لعبة مفتاح مستقل.
         game_key = _norm_user(str(game_name or "general").replace("ة", "ه")) or "general"
         cooldown = 40.0
+        # الماستر الأساسي مستثنى من فاصل الـ40 ثانية في جميع الألعاب.
+        if _is_primary_master(username):
+            return True, 0
         key = (game_key, _norm_user(username))
         now = time.time()
         with self.game_lock:
@@ -4942,11 +4946,11 @@ class TalkinBot:
             "🍀 حظ — لعبة عشوائية مع البوت.\n"
             "🎯 حظ@المبلغ — حظ عشوائي بمبلغ ضد البوت.\n"
             "🎯 حظي@المبلغ أو حظي المبلغ — تحدي حظ لاعب ضد لاعب.\n"
-            "📊 استثمار@المبلغ أو استثمار المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
-            "🤖 استثمار — استثمار مجاني مع البوت بدون مبلغ.\n"
+            "📊 استثمار@المبلغ — استثمار لاعب ضد لاعب مثل الرهان.\n"
             "🎰 مليار — فرصة عشوائية للفوز بمليار نقطة.\n"
             "🏦 بنك مليون — فرصة عشوائية للفوز بمليون نقطة بنفس النظام.\n"
             "🌱 زرع — حتى 5 محاصيل نشطة لكل مستخدم، وكل نوع مرة واحدة فقط.\n"
+            "📈 بورصة — اختر 1 ذهب، 2 نفط، 3 معادن ثم أرسل الرقم، والجائزة نقاط حسب حركة السوق.\n"
             "🆕 سنارة | برق | ياقوت | صدام | كاشف — ألعاب عالمية، الجائزة 500 نقطة.\n"
             "🐎 حصانه — يحصّن المستخدم من السرقة لمدة دقيقة.\n"
             "🕵️ اسرق — اختر عضوًا عشوائيًا من الموجودين حالياً في نفس الغرفة وحاول سرقة 500 نقطة منه.\n"
@@ -5413,6 +5417,10 @@ class TalkinBot:
         if amount < 0:
             self.send_room_text(room, "❌ المبلغ غير صحيح.")
             return True
+        # في لعبة الحظ: مبلغ الرهان يحدده اللاعب بدون سقف.
+        # الجائزة التي يدفعها البوت عند الفوز ثابتة = 10,000 نقطة فقط.
+        # لذلك إذا ربح اللاعب بعد خصم رهانه، تضاف له 10,000 نقطة،
+        # وإذا خسر يبقى خصم الرهان كما هو ولا توجد جائزة.
         with self.game_lock:
             if amount and not _is_primary_master(sender):
                 balance_before = _get_points(sender)
@@ -5424,17 +5432,12 @@ class TalkinBot:
             # Cryptographically strong random draw; the amount is never used as
             # the random seed and cannot force a matching payout.
             roll = secrets.randbelow(1000) + 1
-            if roll <= 60:
-                multiplier = 5
-            elif roll <= 180:
-                multiplier = 3
-            elif roll <= 400:
-                multiplier = 2
-            elif roll <= 650:
-                multiplier = 1
+            # الحظ المدفوع: البوت يدفع 10,000 فقط عند الفوز،
+            # ولا يضرب مبلغ اللاعب في مضاعف.
+            if amount:
+                reward = 10_000 if roll <= 500 else 0
             else:
-                multiplier = 0
-            reward = amount * multiplier if amount else secrets.choice((10, 20, 30, 50, 100))
+                reward = secrets.choice((10, 20, 30, 50, 100))
             if reward:
                 balance = self._game_award(sender, reward)
                 result = f"🎉 ربحت: +{_fmt_points(reward)} نقطة"
@@ -5454,6 +5457,55 @@ class TalkinBot:
             self._send_game_winner_card("luck", sender, [room])
         return True
 
+    def _stock_exchange_game(self, room, sender, choice=None):
+        """Free stock exchange game: choose gold, oil, or minerals by number."""
+        key = (_norm_room(room), _norm_user(sender))
+        if choice is None:
+            if not self._game_cooldown_notice(room, sender, 40.0, "بورصة"):
+                return True
+            self.stock_pending[key] = {"room": room, "user": sender, "created": time.time()}
+            self.send_room_text(room, "📈💰 البورصة\n━━━━━━━━━━━━━━\n1️⃣ 🥇 ذهب\n2️⃣ 🛢️ نفط\n3️⃣ ⛏️ معادن\n\n🎯 أرسل رقم الخيار 1 أو 2 أو 3.\n⌛ لديك دقيقتان لاختيارك.")
+            return True
+        try: choice = int(choice)
+        except Exception: choice = 0
+        if choice not in (1,2,3):
+            self.send_room_text(room, "❌ اختر 1 أو 2 أو 3 فقط.")
+            return True
+        self.stock_pending.pop(key, None)
+        names={1:("🥇","الذهب"),2:("🛢️","النفط"),3:("⛏️","المعادن")}
+        icon,name=names[choice]
+        # بورصة بدون رهان مالي: اللاعب يختار سلعة، ثم يحصل على مكافأة
+        # نقاط متغيرة حسب حركة السوق، كما لو كانت صفقة بورصة مصغرة.
+        market = {
+            1: [(0,20),(20,20),(50,25),(100,20),(150,10),(200,5)],
+            2: [(0,25),(20,20),(50,20),(100,20),(150,10),(200,5)],
+            3: [(0,30),(20,20),(50,20),(100,15),(150,10),(200,5)],
+        }
+        outcomes=market[choice]
+        roll=secrets.randbelow(100) + 1
+        acc=0
+        reward=0
+        for amount, chance in outcomes:
+            acc += chance
+            if roll <= acc:
+                reward=amount
+                break
+        if reward >= 200:
+            result="📈🚀 صعود قوي للسوق!"
+        elif reward >= 100:
+            result="📈💹 ارتفاع جيد وتحقيق ربح ممتاز."
+        elif reward >= 50:
+            result="📊 ارتفاع متوسط في السعر."
+        elif reward > 0:
+            result="📉 حركة بسيطة وربح محدود."
+        else:
+            result="📉 هبوط في السوق هذه الجولة، لا توجد أرباح."
+        balance=self._game_award(sender,reward)
+        _record_game(sender,"stock",reward,0)
+        self.send_room_text(room,f"📈💰 البورصة\n━━━━━━━━━━━━━━\n👤 اللاعب: @{sender}\n{icon} الاختيار: {name}\n{result}\n🎁 المكافأة: +{_fmt_points(reward)} نقطة\n💰 الرصيد: {_fmt_points(balance)}")
+        if reward > 0: self._send_game_winner_card("stock",sender,[room])
+        return True
+
     def _investment_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "استثمار"):
             return True
@@ -5462,7 +5514,7 @@ class TalkinBot:
         # player gets a winning outcome; losses and draws receive no points.
         roll=secrets.randbelow(100) + 1
         if roll <= 20:
-            reward=100
+            reward=200
             result="🏆 فوز كبير!"
         elif roll <= 40:
             reward=50
@@ -5866,7 +5918,7 @@ class TalkinBot:
         player = random.randint(1, 6) + random.randint(1, 6)
         bot = random.randint(1, 6) + random.randint(1, 6)
         if player > bot:
-            reward = 100
+            reward = 200
             self._game_award(sender, reward)
             result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🏆 فزت بـ {reward} نقطة!"
         elif player < bot:
@@ -5887,7 +5939,7 @@ class TalkinBot:
         p_color, p_num = random.choice(colors), random.randint(0, 9)
         b_color, b_num = random.choice(colors), random.randint(0, 9)
         if p_num > b_num:
-            reward = 100
+            reward = 200
             self._game_award(sender, reward)
             result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🏆 فزت بـ {reward} نقطة!"
         elif p_num < b_num:
@@ -5922,7 +5974,7 @@ class TalkinBot:
         if choice in ("وجه", "كتابة"):
             result = secrets.choice(("وجه", "كتابة"))
             won = choice == result
-            reward = 40 if won else 0
+            reward = 200 if won else 0
             balance = self._game_award(sender, reward)
             _record_game(sender, "coin", reward, 0)
             self.send_room_text(room, f"🪙 لعبة العملة\n━━━━━━━━━━━━━━\n@{sender}\n🎯 اختيارك: {choice}\n🪙 النتيجة: {result}\n{('🏆 فزت!' if won else '❌ لم تفز هذه المرة.')}\n🎁 +{_fmt_points(reward)} نقطة\n💰 رصيدك: {_fmt_points(balance)}")
@@ -5934,7 +5986,7 @@ class TalkinBot:
     def _wheel_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "عجلة"):
             return True
-        rewards = [0, 10, 20, 30, 50, 75, 100, 150]
+        rewards = [0, 20, 40, 60, 80, 100, 150, 200]
         reward = secrets.choice(rewards)
         balance = self._game_award(sender, reward)
         _record_game(sender, "wheel", reward, 0)
@@ -5976,7 +6028,7 @@ class TalkinBot:
             return True
         chosen = int(m.group(1)) if m else None
         hidden = secrets.randbelow(3) + 1
-        reward = secrets.choice([25, 50, 100, 150]) if chosen == hidden else 0
+        reward = secrets.choice([50, 80, 120, 200]) if chosen == hidden else 0
         if chosen is None:
             body = "🥤 اختر الكوب: كوب@1 أو كوب@2 أو كوب@3"
         elif reward:
@@ -5994,7 +6046,7 @@ class TalkinBot:
         player = secrets.randbelow(6) + 1
         monster = secrets.randbelow(6) + 1
         if player > monster:
-            reward = 80
+            reward = 200
             result = "⚔️ هزمت الوحش!"
         elif player < monster:
             reward = 0
@@ -6011,7 +6063,7 @@ class TalkinBot:
         if not self._game_cooldown_notice(room, sender, 40.0, "بركان"):
             return True
         result = secrets.randbelow(5)
-        reward_map = {0: 0, 1: 20, 2: 40, 3: 80, 4: 150}
+        reward_map = {0: 0, 1: 30, 2: 60, 3: 120, 4: 200}
         reward = reward_map[result]
         outcome = "🌋 خرجت الجائزة من البركان!" if reward else "🌋 انفجر البركان ولم تجد جائزة."
         balance = self._game_award(sender, reward)
@@ -6022,7 +6074,7 @@ class TalkinBot:
     def _bird_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "طائر"):
             return True
-        birds = [("🐦 عصفور", 15), ("🦅 نسر", 75), ("🦉 بومة", 35), ("🦜 ببغاء", 25), ("🌫️ لم يظهر طائر", 0)]
+        birds = [("🐦 عصفور", 30), ("🦅 نسر", 100), ("🦉 بومة", 60), ("🦜 ببغاء", 200), ("🌫️ لم يظهر طائر", 0)]
         bird, reward = secrets.choice(birds)
         balance = self._game_award(sender, reward)
         _record_game(sender, "bird", reward, 0)
@@ -6032,7 +6084,7 @@ class TalkinBot:
     def _star_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "نجم"):
             return True
-        stars = [("⭐ عادية", 10), ("🌟 لامعة", 30), ("💫 نادرة", 75), ("✨ أسطورية", 200), ("🌑 لم تلتقط نجماً", 0)]
+        stars = [("⭐ عادية", 20), ("🌟 لامعة", 50), ("💫 نادرة", 100), ("✨ أسطورية", 200), ("🌑 لم تلتقط نجماً", 0)]
         star, reward = secrets.choice(stars)
         balance = self._game_award(sender, reward)
         _record_game(sender, "star", reward, 0)
@@ -6090,7 +6142,7 @@ class TalkinBot:
             result = pending.get("result") or secrets.choice(("وجه", "كتابة"))
             selected = "وجه" if choice == 1 else "كتابة"
             won = selected == result
-            reward = 40 if won else 0
+            reward = 200 if won else 0
             self.pending_bot_choices.pop(key, None)
             balance = self._game_award(sender_name, reward)
             _record_game(sender_name, "coin", reward, 0)
@@ -6138,6 +6190,15 @@ class TalkinBot:
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
+        stock_key=(_norm_room(room), _norm_user(sender_name))
+        pending_stock=self.stock_pending.get(stock_key)
+        if pending_stock:
+            if time.time()-float(pending_stock.get("created",0) or 0) >= 120:
+                self.stock_pending.pop(stock_key,None)
+                self.send_room_text(room,"⌛ انتهت مهلة البورصة. اكتب بورصة من جديد.")
+                return True
+            if re.fullmatch(r"[1-3]",raw):
+                return self._stock_exchange_game(room,sender_name,int(raw))
         if self._handle_pending_bot_choice(room, raw, sender_name):
             return True
         # Do not run the verification gate for ordinary conversation.  The
@@ -6218,18 +6279,23 @@ class TalkinBot:
         if _norm_user(game_low) in fixed_lookup:
             game_name=fixed_lookup[_norm_user(game_low)]
             return self._queue_fixed_game(room,sender_name,game_name,500)
+        if game_low in ("بورصه", "بورصة"):
+            return self._stock_exchange_game(room, sender_name)
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.
         m=re.fullmatch(r"(مراهنه|رهان|مضاربه|حظي)[@\s]+([0-9]+)", normalized_raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, m.group(1), int(m.group(2)))
-        # Investment with a stake is PvP, exactly like the wager games.
+        # حظ يا نصيب is the new name for the old stake-based investment game.
+        m=re.fullmatch(r"حظ[ _\s]+يا[ _\s]+نصيب[@\s]+([0-9]+)", normalized_raw, re.I)
+        if m:
+            return self._queue_wager(room, sender_name, "حظ يا نصيب", int(m.group(1)))
+        # استثمار@المبلغ هو أمر الاستثمار بالمبلغ، ويحتفظ بنفس نظام الرهان السابق.
         m=re.fullmatch(r"استثمار[@\s]+([0-9]+)", normalized_raw, re.I)
         if m:
             return self._queue_wager(room, sender_name, "استثمار", int(m.group(1)))
-        # Plain "استثمار" is a free game against the bot, text only.
-        if game_low == "استثمار":
-            return self._investment_bot_game(room, sender_name)
+        # بورصة@المبلغ ليست لعبة؛ البورصة الآن هي اختيار ذهب/نفط/معادن فقط.
+        # كلمة استثمار وحدها ليست لعبة ولا تدخل في فاصل الألعاب.
         m=re.fullmatch(r"حظ[@\s]+([0-9]+)", normalized_raw, re.I)
         if m:
             return self._lottery_game(room, sender_name, int(m.group(1)))
@@ -6327,7 +6393,7 @@ class TalkinBot:
             bot_choice=secrets.choice(("حجر","ورق","مقص"))
             win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
             if low==bot_choice: result="🤝 تعادل"; reward=0
-            elif win: result="🏆 فزت"; reward=15
+            elif win: result="🏆 فزت"; reward=200
             else: result="❌ خسرت"; reward=0
             balance=self._game_award(sender_name,reward)
             _record_game(sender_name,"rps",reward,0)
@@ -6344,7 +6410,7 @@ class TalkinBot:
                 return True
             label = "🕵️ سرقة" if low == "سرقة" else "💼 رشوة"
             won = secrets.randbelow(2) == 0
-            reward = secrets.randbelow(31) + 10 if won else 0
+            reward = secrets.randbelow(101) + 100 if won else 0
             balance = self._game_award(sender_name, reward)
             _record_game(sender_name, "misc", reward, 0)
             self.send_room_text(room, f"{label} @{sender_name}\n" + (f"🏆 نجحت وربحت {reward} نقطة." if won else "❌ لم تنجح هذه المرة.") + f"\n💰 {_fmt_points(balance)}")
@@ -6525,8 +6591,25 @@ class TalkinBot:
         text=str(body or "").strip()
         low=text.casefold()
 
+        # Master-only room broadcast: رسالهغرف@النص / رسالةغرف@النص.
+        m_room_broadcast = re.fullmatch(r"(?:رسالهغرف|رسالةغرف|رساله\s+غرفه|رسالة\s+غرفه)@(.+)", text, re.I | re.S)
+        if m_room_broadcast:
+            if not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 هذا الأمر مخصص للماستر الأساسي فقط.")
+                return True
+            message_text=m_room_broadcast.group(1).strip()
+            if not message_text:
+                self.send_private_text(sender, "❌ الصيغة: رساله غرفه@نص الرسالة")
+                return True
+            count=self.broadcast_all_rooms(message_text)
+            self.send_private_text(sender, f"📣 تم إرسال الرسالة إلى {count} غرفة.")
+            return True
+
         # Master-only private broadcast: خاص@النص / رسالة@النص / broadcast@النص.
-        m_broadcast = re.fullmatch(r"(?:خاص|رسالة|broadcast)@(.+)", text, re.I | re.S)
+        # Also accept: رساله خاص@النص / رسالة خاص@النص.
+        m_broadcast = re.fullmatch(r"(?:خاص|رسالة|رساله|broadcast)@(.+)", text, re.I | re.S)
+        if not m_broadcast:
+            m_broadcast = re.fullmatch(r"(?:رساله|رسالة)\s+خاص@(.+)", text, re.I | re.S)
         if m_broadcast:
             if not _is_primary_master(sender):
                 self.send_private_text(sender, "🔒 هذا الأمر مخصص للماستر الأساسي فقط.")
@@ -6704,20 +6787,24 @@ class TalkinBot:
         if low in ("نقاطي","points"):
             self.send_private_text(sender, _points_summary_text(sender))
             return True
-        mtop=re.fullmatch(r"توب\s*(رهان|مضاربة|حظي|استثمار)?", low)
+        mtop=re.fullmatch(r"توب\s*(رهان|مضاربة|حظي|حظ|استثمار|حظ يا نصيب|بورصة|بورصه)?", low)
         if low in ("توب","top") or mtop:
             game_label=mtop.group(1) if mtop else None
-            game_map={"رهان":"bet","مضاربة":"duel","حظي":"luck","استثمار":"investment"}
+            game_map={"رهان":"bet","مضاربة":"duel","حظي":"luck","حظ":"luck","استثمار":"investment","حظ يا نصيب":"investment","بورصة":"stock","بورصه":"stock"}
             if game_label:
                 rows=_game_top(game_map[game_label])
-                msg=f"🏆 توب {game_label}\n━━━━━━━━━━━━\n" + ("\n".join(f"{i}. @{u} — {_fmt_points(p)} نقطة | {pl} لعب" for i,(p,st,pl,u) in enumerate(rows,1)) if rows else "لا توجد نتائج بعد.")
+                def _top_medal(i):
+                    return {1:"🥇",2:"🥈",3:"🥉"}.get(i, f"{i}️⃣")
+                msg=f"🏆 توب {game_label}\n━━━━━━━━━━━━\n" + ("\n".join(f"{_top_medal(i)} @{u} — {_fmt_points(p)} نقطة | {pl} لعب" for i,(p,st,pl,u) in enumerate(rows,1)) if rows else "لا توجد نتائج بعد.")
             else:
                 data=_points_data(); rows=[]
                 for v in data.values():
                     try: rows.append((int(v.get("points",0)),v.get("username", "")))
                     except Exception: pass
                 rows.sort(reverse=True)
-                msg="🏆 توب النقاط\n━━━━━━━━━━━━\n"+"\n".join(f"{i}. @{u} — {_fmt_points(p)}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
+                def _top_medal(i):
+                    return {1:"🥇",2:"🥈",3:"🥉"}.get(i, f"{i}️⃣")
+                msg="🏆 توب النقاط\n━━━━━━━━━━━━\n"+"\n".join(f"{_top_medal(i)} @{u} — {_fmt_points(p)}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
