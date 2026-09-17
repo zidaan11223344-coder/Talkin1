@@ -1527,8 +1527,8 @@ def _looks_like_bot_command(text):
     prefixes = (
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
-        "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
+        "say ", "قل ", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
@@ -5927,7 +5927,7 @@ class TalkinBot:
         else:
             reward = 0
             result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤝 تعادل!"
-        _record_game(sender, "طاولة", 1, reward)
+        _record_game(sender, "طاولة", reward, reward)
         self.send_room_text(room, result)
         return True
 
@@ -5948,7 +5948,7 @@ class TalkinBot:
         else:
             reward = 0
             result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤝 تعادل!"
-        _record_game(sender, "اونو", 1, reward)
+        _record_game(sender, "اونو", reward, reward)
         self.send_room_text(room, result)
         return True
 
@@ -6590,6 +6590,27 @@ class TalkinBot:
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
         low=text.casefold()
+
+        # Direct private message for ALL users: رساله اسم_المستخدم نص الرسالة
+        # Example: رساله ahmd555 السلام عليكم
+        # لا ترسل للجميع؛ ترسل فقط للمستخدم المحدد.
+        # الماستر لديه أمر مستقل للبث الخاص للجميع: رساله خاص@النص
+        m_direct_message = re.fullmatch(r"(?:رساله|رسالة)\s+@?([^\s@]+)\s+(.+)", text, re.I | re.S)
+        if m_direct_message:
+            target = m_direct_message.group(1).strip()
+            message_text = m_direct_message.group(2).strip()
+            if not target or not message_text:
+                self.send_private_text(sender, "❌ الصيغة: رساله اسم_المستخدم نص الرسالة")
+                return True
+            try:
+                sent = self.send_private_text(target, message_text)
+                if sent:
+                    self.send_private_text(sender, f"✅ تم إرسال الرسالة الخاصة إلى @{target}.")
+                else:
+                    self.send_private_text(sender, f"⚠️ تعذر إرسال الرسالة إلى @{target}.")
+            except Exception as exc:
+                self.send_private_text(sender, f"❌ تعذر إرسال الرسالة إلى @{target}: {exc}")
+            return True
 
         # Master-only room broadcast: رسالهغرف@النص / رسالةغرف@النص.
         m_room_broadcast = re.fullmatch(r"(?:رسالهغرف|رسالةغرف|رساله\s+غرفه|رسالة\s+غرفه)@(.+)", text, re.I | re.S)
@@ -7296,23 +7317,43 @@ class TalkinBot:
             return True
         m_single_invite = re.fullmatch(r"i@(.+)", text.strip(), re.I)
         if m_single_invite:
-            target = m_single_invite.group(1).strip().lstrip("@")
+            target = m_single_invite.group(1).strip().lstrip("@").strip()
             target_room = str(room or self.room or "").strip()
             if not target or not target_room:
                 self.send_private_text(sender, "❌ الصيغة: i@اسم_المستخدم داخل غرفة.")
                 return True
+            if not getattr(self, "invites_enabled", True):
+                self.send_private_text(sender, "🛑 الدعوات متوقفة حالياً. أرسل: تشغيل الدعوات")
+                return True
+            # Direct invite must use the same normal private-invite sender as the
+            # automatic `inv` system. The previous code referenced an undefined
+            # variable `sent` and therefore never actually sent the invitation.
+            role_ok = self._inv_bot_owner_allowed(target_room)
+            if role_ok is False:
+                reply = "⚠️ ارفع البوت أونر في الغرفة ثم أعد الأمر i@اسم_المستخدم."
+                if is_private:
+                    self.send_private_text(sender, reply)
+                else:
+                    self.send_room_text(target_room, reply)
+                return True
+            if role_ok is None:
+                self.send_private_text(sender, "⏳ جاري التحقق من رتبة البوت. أعد i@اسم_المستخدم بعد لحظات إذا لزم الأمر.")
+                return True
             try:
-                msg = f"✅ تم إرسال دعوة @{target} إلى الغرفة {target_room}." if sent else f"⚠️ الدعوة @{target} أُرسلت سابقًا أو تعذر إرسالها."
+                sent = self.send_private_invite(target, target_room, inviter=sender)
+                msg = (f"✅ تم إرسال الدعوة الخاصة إلى @{target} للغرفة {target_room}."
+                       if sent else
+                       f"⚠️ الدعوة إلى @{target} أُرسلت سابقاً أو تعذر إرسالها.")
                 if is_private:
                     self.send_private_text(sender, msg)
                 else:
-                    self.send_room_text(room, msg)
+                    self.send_room_text(target_room, msg)
             except Exception as exc:
                 msg = f"❌ تعذر إرسال الدعوة إلى @{target}: {exc}"
                 if is_private:
                     self.send_private_text(sender, msg)
                 else:
-                    self.send_room_text(room, msg)
+                    self.send_room_text(target_room, msg)
             return True
         if low.startswith("say ") or low.startswith("قل "):
             parts=text.split(None,1); msg=parts[1].strip() if len(parts)==2 else ""
