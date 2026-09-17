@@ -6002,7 +6002,7 @@ class TalkinBot:
         return True
 
     def _million_bank_game(self, room, sender_name):
-        if not self._game_cooldown_notice(room, sender, 40.0, "بنك مليون"):
+        if not self._game_cooldown_notice(room, sender_name, 40.0, "بنك مليون"):
             return True
         self.send_room_text(room, f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n✅ @{sender_name}\n🔎 جاري البحث عن الجائزة...\n━━━━━━━━━━━━━━")
         time.sleep(1.0)
@@ -6284,7 +6284,7 @@ class TalkinBot:
         if game_low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
         if low in ("حجر","ورق","مقص"):
-            if not self._game_cooldown_notice(room, sender, 40.0, "حجر_ورق_مقص"):
+            if not self._game_cooldown_notice(room, sender_name, 40.0, "حجر_ورق_مقص"):
                 return True
             bot_choice=secrets.choice(("حجر","ورق","مقص"))
             win=(low,bot_choice) in (("حجر","مقص"),("ورق","حجر"),("مقص","ورق"))
@@ -6302,7 +6302,7 @@ class TalkinBot:
         if low == "اسرق":
             return self._steal_game(room, sender_name)
         if game_low in ("سرقه"):
-            if not self._game_cooldown_notice(room, sender, 40.0, "سرقة" if low == "سرقة" else "رشوة"):
+            if not self._game_cooldown_notice(room, sender_name, 40.0, "سرقة" if low == "سرقة" else "رشوة"):
                 return True
             label = "🕵️ سرقة" if low == "سرقة" else "💼 رشوة"
             won = secrets.randbelow(2) == 0
