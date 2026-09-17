@@ -7683,20 +7683,39 @@ class TalkinBot:
         if frm == BOT_ID:
             return
 
-        # Direct private message for everyone:
+        # Direct private message for ordinary users:
         #   رساله اسم_المستخدم نص الرسالة
         #   رساله@اسم_المستخدم نص الرسالة
-        # This MUST be intercepted before the admin-command gate so it is
-        # never echoed to the room. No public confirmation is sent either.
+        # Never send the raw text. The recipient gets a formatted private
+        # notification containing sender, room and message; the requester
+        # gets a private success/failure result.
         m_direct_public = re.fullmatch(r"(?:رساله|رسالة)\s*@?([^\s@]+)\s+(.+)", body.strip(), re.I | re.S)
         if m_direct_public:
-            target = m_direct_public.group(1).strip()
+            target = m_direct_public.group(1).strip().lstrip("@")
             message_text = m_direct_public.group(2).strip()
             if target and message_text:
+                payload = (
+                    f"📩 لديك رسالة خاصة من @{frm}\n"
+                    f"🏠 الغرفة: {str(room or 'غير محددة').strip()}\n"
+                    f"📝 نص الرسالة: {message_text}"
+                )
                 try:
-                    self.send_private_text(target, message_text)
+                    sent = bool(self.send_private_text(target, payload))
                 except Exception as exc:
+                    sent = False
                     self.log("[DIRECT-MESSAGE] failed", target, repr(exc))
+
+                # Keep the result private even when this event is being
+                # processed through a room-command response context.
+                old_rerouting = getattr(self._master_reply_local, "rerouting", False)
+                try:
+                    self._master_reply_local.rerouting = True
+                    if sent:
+                        self.send_private_text(frm, f"✅ تم إرسال الرسالة إلى @{target} بنجاح.")
+                    else:
+                        self.send_private_text(frm, f"❌ فشل إرسال الرسالة إلى @{target}.")
+                finally:
+                    self._master_reply_local.rerouting = old_rerouting
                 return
 
         # Administrative commands are private to the configured master. Do
