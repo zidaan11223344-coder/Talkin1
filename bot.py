@@ -2498,13 +2498,8 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     return out
 
 
-def render_billion_card(winner_name, winner_photo_url=""):
-    """Use the existing game_billion.jpg and add a per-win winner overlay.
-
-    The original billion artwork is never replaced. A fresh output file is
-    generated for each win, containing the current winner name and, when
-    available, the winner's current profile photo.
-    """
+def render_billion_card(winner_name, winner_photo_url="", result_text="1,000,000,000 نقطة"):
+    """Render a compact, clear winner panel over the existing billion artwork."""
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
 
@@ -2513,50 +2508,75 @@ def render_billion_card(winner_name, winner_photo_url=""):
         raise FileNotFoundError(f"صورة المليار غير موجودة: {source}")
 
     image = Image.open(source).convert("RGBA")
-    # Keep the original dimensions of the existing billion artwork.
     w, h = image.size
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
 
-    # Elegant dark winner panel near the bottom; artwork itself remains intact.
-    panel_h = max(150, int(h * 0.25))
-    panel_y = max(0, h - panel_h - int(h * 0.035))
-    margin = max(18, int(w * 0.045))
-    panel = (margin, panel_y, w - margin, h - int(h * 0.035))
-    d.rounded_rectangle(panel, radius=max(16, int(w * 0.025)),
-                        fill=(8, 12, 24, 225), outline=(244, 196, 92, 255), width=max(2, int(w * 0.006)))
+    # Compact panel: substantially smaller than the old 25%-height panel.
+    panel_h = max(105, int(h * 0.16))
+    bottom_gap = max(10, int(h * 0.025))
+    margin = max(14, int(w * 0.035))
+    panel_y = max(0, h - panel_h - bottom_gap)
+    panel = (margin, panel_y, w - margin, h - bottom_gap)
 
-    # Current winner avatar, fetched from the current profile URL (not cached by
-    # the billion game itself).
-    avatar = _load_sender_avatar(winner_photo_url, max(90, int(h * 0.14)))
+    d.rounded_rectangle(
+        panel,
+        radius=max(14, int(w * 0.018)),
+        fill=(8, 12, 24, 232),
+        outline=(244, 196, 92, 255),
+        width=max(2, int(w * 0.004)),
+    )
+
+    # Keep the winner photo clear while fitting it beside the text.
+    avatar_size = max(68, int(panel_h * 0.70))
+    avatar = _load_sender_avatar(winner_photo_url, avatar_size)
     if avatar is not None:
-        ax = panel[0] + max(12, int(w * 0.025))
+        ax = panel[0] + max(10, int(w * 0.018))
         ay = panel_y + (panel_h - avatar.height) // 2
         overlay.alpha_composite(avatar, (ax, ay))
-        text_left = ax + avatar.width + max(14, int(w * 0.025))
+        text_left = ax + avatar.width + max(12, int(w * 0.018))
     else:
-        text_left = panel[0] + max(18, int(w * 0.035))
+        text_left = panel[0] + max(14, int(w * 0.025))
 
-    text_right = panel[2] - max(18, int(w * 0.035))
-    text_center = ((text_left + text_right) / 2, panel_y + panel_h * 0.32)
-    _draw_centered(d, text_center, "🏆 الفائز بالمليار", max(22, int(h * 0.055)),
-                   (255, 224, 145, 255), max(80, text_right - text_left))
-    _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
-                        "@" + str(winner_name or ""), max(24, int(h * 0.065)),
-                        (255, 255, 255, 255), max(80, text_right - text_left))
+    text_right = panel[2] - max(14, int(w * 0.025))
+    text_width = max(100, text_right - text_left)
+    text_center_x = (text_left + text_right) / 2
+
+    _draw_centered(
+        d,
+        (text_center_x, panel_y + panel_h * 0.31),
+        "الفائز: @" + str(winner_name or ""),
+        max(21, int(panel_h * 0.22)),
+        (255, 255, 255, 255),
+        text_width,
+    )
+    _draw_centered(
+        d,
+        (text_center_x, panel_y + panel_h * 0.70),
+        "النتيجة: " + str(result_text or ""),
+        max(18, int(panel_h * 0.18)),
+        (255, 224, 145, 255),
+        text_width,
+    )
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Keep only a small rolling set; never create a per-user permanent image.
+
     try:
-        old = sorted((x for x in out_dir.iterdir() if x.is_file()),
-                     key=lambda x: x.stat().st_mtime, reverse=True)
+        old = sorted(
+            (x for x in out_dir.iterdir() if x.is_file()),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
         for fp in old[19:]:
-            try: fp.unlink()
-            except Exception: pass
+            try:
+                fp.unlink()
+            except Exception:
+                pass
     except Exception:
         pass
+
     out = out_dir / f"billion_{uuid.uuid4().hex}.jpg"
     for quality in (92, 88, 84, 80, 76):
         image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
@@ -2565,51 +2585,94 @@ def render_billion_card(winner_name, winner_photo_url=""):
     return out
 
 
-def render_game_winner_card(game_key, winner_name, winner_photo_url=""):
-    """Keep the original game artwork and add a compact winner panel below it."""
+def _game_card_result_text(game_key):
+    """Short result line shown inside the compact winner card."""
+    key = str(game_key or "")
+    if key == "billion":
+        return "1,000,000,000 نقطة"
+    if key == "بنك مليون":
+        return "1,000,000 نقطة"
+    return "فوز بالجولة"
+
+
+def render_game_winner_card(game_key, winner_name, winner_photo_url="", result_text=""):
+    """Render a compact winner panel with a clear avatar, name and result."""
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
     source_name = GAME_IMAGE_FILES.get(game_key) or GAME_IMAGE_FILES.get("billion")
     source = ASSETS_DIR / source_name
     if not source.is_file():
         raise FileNotFoundError(f"صورة اللعبة غير موجودة: {source}")
+
     image = Image.open(source).convert("RGBA")
     w, h = image.size
-    panel_h = max(120, int(h * 0.22))
-    panel_y = max(0, h - panel_h - max(8, int(h * 0.025)))
-    margin = max(12, int(w * 0.035))
+    panel_h = max(105, int(h * 0.16))
+    bottom_gap = max(10, int(h * 0.025))
+    margin = max(14, int(w * 0.035))
+    panel_y = max(0, h - panel_h - bottom_gap)
+    panel = (margin, panel_y, w - margin, h - bottom_gap)
+
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    panel = (margin, panel_y, w - margin, h - max(8, int(h * 0.025)))
-    draw.rounded_rectangle(panel, radius=max(12, int(w * 0.02)), fill=(8, 12, 24, 232),
-                           outline=(244, 196, 92, 255), width=max(2, int(w * 0.004)))
-    avatar = _load_sender_avatar(winner_photo_url, max(70, int(h * 0.12)))
-    left = panel[0] + max(12, int(w * 0.025))
+    draw.rounded_rectangle(
+        panel,
+        radius=max(14, int(w * 0.018)),
+        fill=(8, 12, 24, 232),
+        outline=(244, 196, 92, 255),
+        width=max(2, int(w * 0.004)),
+    )
+
+    avatar_size = max(68, int(panel_h * 0.70))
+    avatar = _load_sender_avatar(winner_photo_url, avatar_size)
+    left = panel[0] + max(10, int(w * 0.018))
     if avatar is not None:
         ay = panel_y + (panel_h - avatar.height) // 2
         overlay.alpha_composite(avatar, (left, ay))
-        left += avatar.width + max(12, int(w * 0.02))
-    right = panel[2] - max(12, int(w * 0.025))
+        left += avatar.width + max(12, int(w * 0.018))
+
+    right = panel[2] - max(14, int(w * 0.025))
     center = (left + right) / 2
-    _draw_centered(draw, (center, panel_y + panel_h * 0.32), "🏆 الفائز",
-                   max(18, int(h * 0.045)), (255, 224, 145, 255), max(80, right - left))
-    _draw_name_centered(draw, (center, panel_y + panel_h * 0.70), "@" + str(winner_name or ""),
-                        max(20, int(h * 0.055)), (255, 255, 255, 255), max(80, right - left))
+    max_width = max(100, right - left)
+    result_text = result_text or _game_card_result_text(game_key)
+
+    _draw_centered(
+        draw,
+        (center, panel_y + panel_h * 0.31),
+        "الفائز: @" + str(winner_name or ""),
+        max(21, int(panel_h * 0.22)),
+        (255, 255, 255, 255),
+        max_width,
+    )
+    _draw_centered(
+        draw,
+        (center, panel_y + panel_h * 0.70),
+        "النتيجة: " + str(result_text),
+        max(18, int(panel_h * 0.18)),
+        (255, 224, 145, 255),
+        max_width,
+    )
+
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        old = sorted((x for x in out_dir.iterdir() if x.is_file()), key=lambda x: x.stat().st_mtime, reverse=True)
+        old = sorted(
+            (x for x in out_dir.iterdir() if x.is_file()),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
         for fp in old[29:]:
             fp.unlink(missing_ok=True)
     except Exception:
         pass
+
     out = out_dir / f"winner_{uuid.uuid4().hex}.jpg"
     for quality in (92, 88, 84, 80, 76):
         image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
         if out.stat().st_size <= 300 * 1024:
             break
     return out
+
 
 def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
     """Create a fresh publish card from the submitted image, like the billion card.
@@ -3584,9 +3647,9 @@ class TalkinBot:
             return False
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            # Talkin room_message expects the audio media type here.
-            # Keep the public URL as a real audio file (not a text URL).
-            mt = "audio"
+            # Talkin renders shared songs as the native playable voice-message bubble.
+            # Keep the public URL as the actual audio file and include its duration.
+            mt = "voice"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         elif mt != "image":
@@ -4430,9 +4493,8 @@ class TalkinBot:
         """
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            # Talkin room_message expects the audio media type here.
-            # Keep the public URL as a real audio file (not a text URL).
-            mt = "audio"
+            # Keep room songs as the native playable voice-message type.
+            mt = "voice"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         kwargs = {"type_": mt, "room": str(room or "").strip(), "url": str(media_url or "").strip()}
@@ -4622,7 +4684,7 @@ class TalkinBot:
                 target_rooms=self._active_rooms()
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
-                    self.send_room_media(target_room,url,"audio",duration)
+                    self.send_room_media(target_room,url,"voice",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
                 self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
@@ -4637,7 +4699,7 @@ class TalkinBot:
             return True
         title = str(info.get("title") or "أغنية")
         self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
-        self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
+        self.send_private_media(target, str(info["url"]), "voice", int(info.get("duration") or 0))
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
