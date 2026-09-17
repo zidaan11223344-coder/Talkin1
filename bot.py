@@ -3647,9 +3647,9 @@ class TalkinBot:
             return False
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            # Talkin renders shared songs as the native playable voice-message bubble.
-            # Keep the public URL as the actual audio file and include its duration.
-            mt = "voice"
+            # Talkin room_message expects the audio media type here.
+            # Keep the public URL as a real audio file (not a text URL).
+            mt = "audio"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         elif mt != "image":
@@ -4493,8 +4493,9 @@ class TalkinBot:
         """
         mt = str(media_type or "").strip().lower()
         if mt in ("audio", "voice", "sound", "mp3"):
-            # Keep room songs as the native playable voice-message type.
-            mt = "voice"
+            # Talkin room_message expects the audio media type here.
+            # Keep the public URL as a real audio file (not a text URL).
+            mt = "audio"
         elif mt in ("photo", "picture", "jpg", "jpeg", "png"):
             mt = "image"
         kwargs = {"type_": mt, "room": str(room or "").strip(), "url": str(media_url or "").strip()}
@@ -4684,7 +4685,7 @@ class TalkinBot:
                 target_rooms=self._active_rooms()
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
-                    self.send_room_media(target_room,url,"voice",duration)
+                    self.send_room_media(target_room,url,"audio",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
                 self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
@@ -4699,7 +4700,7 @@ class TalkinBot:
             return True
         title = str(info.get("title") or "أغنية")
         self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
-        self.send_private_media(target, str(info["url"]), "voice", int(info.get("duration") or 0))
+        self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
