@@ -1530,7 +1530,7 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "say ", "قل ", "تحويل للكل@", "خاص@", "رسالة@", "broadcast@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار", "فحص صورة المليون", "فحص صوره المليون", "فحص_صورة_المليون", "فحص بنك",
         "العاب", "ألعاب", "حظ", "نرد", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "is@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
@@ -5393,7 +5393,7 @@ class TalkinBot:
         return True
 
     def _lottery_game(self, room, sender, amount=0):
-        if not self._game_cooldown_notice(room, sender, 30.0, game_name):
+        if not self._game_cooldown_notice(room, sender, 30.0, "حظ"):
             return True
         amount = int(amount or 0)
         if amount < 0:
@@ -6139,101 +6139,86 @@ class TalkinBot:
         # for commands that contain user arguments.
         game_low = low.replace("ة", "ه")
 
-        # Master-only image diagnostics.
-        # Examples:
-        #   فحص مليار اسم احمد
+        # Master-only diagnostics: render the requested game card with a name
+        # and send the ACTUAL image privately to the requesting master.
+        # Supported examples:
+        #   فحص صورة المليار اسم احمد
+        #   فحص صورة المليون اسم احمد
         #   فحص بنك اسم احمد
-        # The bot renders the real game artwork with the requested username
-        # (and profile photo when available), then sends the generated image
-        # PRIVATELY to the master who issued the command. Nothing is posted
-        # to the room.
-        m_check_card = re.fullmatch(r"فحص\s+(مليار|بنك)(?:\s+اسم)?\s+(.+?)\s*", raw, re.I | re.S)
-        if m_check_card:
+        # A missing name falls back to the requesting master's name.
+        m_check = re.fullmatch(
+            r"فحص\s+(?:صورة|صوره|_صورة_)?\s*(مليار|مليون)|"
+            r"فحص\s+بنك\s+(?:اسم\s+)?(.+)",
+            raw,
+            re.I,
+        )
+        # The first alternative needs a second pass when a name is present.
+        m_check_named = re.fullmatch(
+            r"فحص\s+(?:صورة|صوره)\s+(مليار|مليون)\s+(?:اسم\s+)?(.+)",
+            raw,
+            re.I,
+        )
+        m_check_billion_legacy = low in (
+            "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار"
+        )
+        m_check_simple = re.fullmatch(r"فحص\s+(مليار|مليون)(?:\s+(?:اسم\s+)?(.+))?", raw, re.I)
+        m_check_bank = re.fullmatch(r"فحص\s+بنك(?:\s+(?:اسم\s+)?(.+))?", raw, re.I)
+        if m_check_named or m_check_simple or m_check_bank or m_check_billion_legacy:
             if not _is_master_name(sender_name):
                 self.send_room_text(room, "🔒 هذا الأمر مخصص للماستر فقط.")
                 return True
-            kind = m_check_card.group(1).strip()
-            target_name = m_check_card.group(2).strip().lstrip("@")
+
+            if m_check_named:
+                game_word = m_check_named.group(1).casefold()
+                target_name = (m_check_named.group(2) or sender_name).strip().lstrip("@")
+            elif m_check_simple:
+                game_word = m_check_simple.group(1).casefold()
+                target_name = (m_check_simple.group(2) or sender_name).strip().lstrip("@")
+            elif m_check_bank:
+                game_word = "مليون"
+                target_name = (m_check_bank.group(1) or sender_name).strip().lstrip("@")
+            else:
+                game_word = "مليار"
+                target_name = str(sender_name).strip().lstrip("@")
+
             if not target_name:
-                self.send_private_text(sender_name, "❌ اكتب اسم المستخدم، مثال: فحص مليار اسم احمد")
+                target_name = str(sender_name).strip().lstrip("@")
+            recipient = str(sender_name).strip().lstrip("@") or BOT_MASTER
+            key = "billion" if game_word == "مليار" else "بنك مليون"
+            source = ASSETS_DIR / GAME_IMAGE_FILES.get(key, "")
+            if not source.is_file():
+                self.send_private_text(recipient, f"❌ صورة لعبة {game_word} غير موجودة في مجلد assets.")
                 return True
             try:
-                if not PIL_AVAILABLE:
-                    raise RuntimeError("Pillow غير مثبت")
                 base = _public_base_url()
                 if not base:
-                    raise RuntimeError("PUBLIC_BASE_URL أو RAILWAY_PUBLIC_DOMAIN غير مضبوط")
-
-                target_key = _norm_user(target_name)
-                target_photo = getattr(self, "user_photos", {}).get(target_key, "")
-                if not target_photo:
-                    target_photo = self._lookup_profile_photo(target_name)
-
-                if kind == "مليار":
-                    source = ASSETS_DIR / GAME_IMAGE_FILES.get("billion", "game_billion.jpg")
-                    if not source.is_file():
-                        raise FileNotFoundError("صورة المليار غير موجودة في مجلد assets")
-                    card = render_billion_card(target_name, target_photo)
-                    url = f"{base}/billion/{card.name}"
-                    label = "المليار"
-                else:
-                    game_key = "بنك مليون"
-                    source = ASSETS_DIR / GAME_IMAGE_FILES.get(game_key, "game_million_bank.jpg")
-                    if not source.is_file():
-                        raise FileNotFoundError("صورة بنك مليون غير موجودة في مجلد assets")
-                    card = render_game_winner_card(game_key, target_name, target_photo)
-                    url = f"{base}/games/{card.name}"
-                    label = "بنك مليون"
-
-                self._verify_public_media_url(url, "image")
-                sent = bool(self.send_private_media(sender_name, url, "image"))
-                if sent:
-                    self.send_private_text(
-                        sender_name,
-                        f"✅ تم تصميم وفحص صورة {label} باسم @{target_name} وإرسالها لك بالخاص."
-                    )
-                else:
-                    self.send_private_text(sender_name, "❌ تم تصميم الصورة لكن تعذر إرسالها بالخاص.")
-            except Exception as exc:
-                self.log("[GAME] private image check failed:", repr(exc))
-                self.send_private_text(sender_name, f"❌ تعذر تجهيز صورة الفحص: {exc}")
-            return True
-
-        # Backward-compatible master diagnostic: send the plain billion
-        # artwork privately without a target username.
-        if low in ("فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار"):
-            if not _is_master_name(sender_name):
-                self.send_room_text(room, "🔒 هذا الأمر مخصص للماستر فقط.")
-                return True
-            recipient = sender_name if sender_name else BOT_MASTER
-            if not recipient:
-                self.log("[GAME] billion image check skipped: master recipient is not configured")
-                return True
-            image = ASSETS_DIR / GAME_IMAGE_FILES.get("billion", "game_billion.jpg")
-            if not image.is_file():
-                self.send_private_text(recipient, "❌ صورة المليار غير موجودة في مجلد assets.")
-                return True
-            base = _public_base_url()
-            if not base:
-                self.send_private_text(recipient, "❌ لا يوجد رابط عام لصورة المليار. تأكد من PUBLIC_BASE_URL أو Railway Domain.")
-                return True
-            try:
-                # Create a fresh JPEG copy for every inspection. This avoids
-                # client/CDN caching of the original assets URL and sends the
-                # actual billion template through the same media route used by
-                # the bot's private gift images.
+                    raise RuntimeError("PUBLIC_BASE_URL أو Railway Domain غير مضبوط")
                 if not PIL_AVAILABLE:
                     raise RuntimeError("Pillow غير مثبت")
-                check_dir = BASE_DIR / "generated_billion"
-                check_dir.mkdir(parents=True, exist_ok=True)
-                check_path = check_dir / f"billion_check_{uuid.uuid4().hex}.jpg"
-                Image.open(image).convert("RGB").save(check_path, "JPEG", quality=94, optimize=True)
-                url = f"{base}/billion/{check_path.name}"
+
+                winner_key = _norm_user(target_name)
+                winner_photo = getattr(self, "user_photos", {}).get(winner_key, "")
+                if not winner_photo:
+                    winner_photo = self._lookup_profile_photo(target_name)
+
+                if key == "billion":
+                    card = render_billion_card(target_name, winner_photo)
+                    url = f"{base}/billion/{card.name}"
+                else:
+                    card = render_game_winner_card("بنك مليون", target_name, winner_photo)
+                    url = f"{base}/games/{card.name}"
+
                 self._verify_public_media_url(url, "image")
+                # Important: send the media packet itself, not only a text URL.
                 self.send_private_media(recipient, url, "image")
-                self.send_private_text(recipient, "✅ تم إرسال صورة المليار بالقالب في الخاص.")
+                self.send_private_text(
+                    recipient,
+                    f"✅ تم تصميم وإرسال صورة {game_word} باسم @{target_name} في الخاص."
+                )
+                self.log("[GAME-CHECK] private image sent", key, target_name, recipient)
             except Exception as exc:
-                self.send_private_text(recipient, f"❌ تعذر إرسال صورة المليار: {exc}")
+                self.log("[GAME-CHECK] failed:", repr(exc))
+                self.send_private_text(recipient, f"❌ تعذر تصميم/إرسال صورة {game_word}: {exc}")
             return True
 
         # All games are available to verified accounts (including VIP).
