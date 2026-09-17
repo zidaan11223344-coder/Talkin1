@@ -43,4 +43,16 @@ def test_vip_keeps_original_welcome_at_level_one(tmp_path, monkeypatch):
     assert bot._game_level_info("vip")[0] == 1
     assert bot._game_welcome("vip", "room").startswith("🎮 أهلاً")
 
+
+def test_zero_rounds_have_no_room_welcome_and_twenty_are_new(tmp_path, monkeypatch):
+    stats_file = tmp_path / "game_stats.json"
+    monkeypatch.setattr(bot, "GAME_STATS_FILE", stats_file)
+    stats_file.write_text(json.dumps({
+        "zero": {"username": "zero", "games": {}},
+        "twenty": {"username": "twenty", "games": {"test": {"plays": 20}}},
+    }), encoding="utf-8")
+    assert bot._game_level_info("twenty")[1] == "لاعب جديد"
+    assert bot._game_level_info("twenty")[0] == 1
+    assert bot._game_level_info("zero")[2] == 0
+
 print("game levels: PASS")

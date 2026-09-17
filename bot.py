@@ -1580,8 +1580,8 @@ def _game_stats_data():
 
 # العتبات السابقة محفوظة حتى لا تتغير مستويات اللاعبين الحاليين.
 GAME_LEVELS = (
-    (0, "مبتدئ"),
-    (10, "لاعب نشيط"),
+    (0, "لاعب جديد"),
+    (21, "لاعب نشيط"),
     (50, "لاعب محترف"),
     (150, "أسطورة الألعاب"),
     (500, "ملك الألعاب"),
@@ -7708,6 +7708,8 @@ class TalkinBot:
                 self.send_room_text(room, f"👑 لقد أتاكم الزعيم\n👤 {username}\n🏠 الغرفة: {room}")
             elif username and _norm_user(username) != _norm_user(BOT_ID):
                 level, _label, _plays = _game_level_info(username)
+                if _plays <= 0:
+                    return
                 welcomes_enabled = bool(getattr(self, "custom_welcome_enabled", True))
                 cw = self.custom_welcomes.get(_norm_user(username)) if welcomes_enabled else None
                 if _is_vip_user(username):
