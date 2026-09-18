@@ -272,7 +272,7 @@ def _select_persistent_data_dir():
     if configured:
         candidates.append(Path(configured).expanduser())
     # Railway volume mount /data is the recommended permanent location.
-    candidates.append(Path("/data/chatbuz_bot"))
+    candidates.append(Path("/data/talkin1"))
     candidates.append(BASE_DIR / "data")
     for candidate in candidates:
         try:
@@ -356,7 +356,7 @@ _migrate_legacy_state_files()
 # Restore state from GitHub after the data directory and legacy migration are ready.
 
 # Giant Chat gift costs/labels; images remain the local Giant assets.
-GIFT_COSTS = {"1":10,"2":20,"3":30,"4":50,"5":80,"6":150,"7":200,"8":500,"9":800,"10":1000,"11":1500,"12":3000,"13":5000,"14":8000}
+GIFT_COSTS = {"1":50,"2":75,"3":100,"4":125,"5":150,"6":175,"7":200,"8":250,"9":300,"10":350,"11":400,"12":425,"13":450,"14":500}
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://chatp.net/api?").rstrip("?") + "?"
@@ -4886,10 +4886,19 @@ class TalkinBot:
         return self.send_query(encode_query("gifts", type_=GIFT_PROTOCOL, **kwargs))
 
     def gift_help(self, room):
-        lines = ["🎁 الهدايا المتاحة:"]
+        # قائمة الهدايا: نفس الأسماء والترتيب في GIFT_CATALOG، مع الأسعار الحالية.
+        lines = [
+            "🎁 الهدايا المتاحة",
+            "━━━━━━━━━━━━",
+        ]
         for k, (emoji, name) in GIFT_CATALOG.items():
-            lines.append(f"{k} {emoji} {name}")
-        lines.append("📌 الإرسال: sa@رقم_الهدية@اسم_المستخدم")
+            cost = GIFT_COSTS.get(str(k), 0)
+            lines.append(f"{k}️⃣ {emoji} {name} — 💰 {cost}")
+        lines.extend([
+            "━━━━━━━━━━━━",
+            "📌 للإرسال:",
+            "sa@رقم_الهدية@اسم_المستخدم",
+        ])
         self.send_room_text(room, "\n".join(lines))
 
     def _verify_public_media_url(self, url: str, media_kind: str = "image"):
@@ -5082,9 +5091,9 @@ class TalkinBot:
             )
             if private_to:
                 self.send_private_media(private_to, gift_url, "image")
-                self.send_private_text(private_to, f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة")
+                self.send_private_text(private_to, f"🎁 {item[0]} {item[1]}\n📤 {sender_name} ➜ 📥 {target}\n💰 {cost} نقطة")
             else:
-                gift_text = f"🎁 {item[0]} {item[1]} | 📤 {sender_name} ➜ 📥 {target} | 💰 {cost} نقطة"
+                gift_text = f"🎁 {item[0]} {item[1]}\n📤 {sender_name} ➜ 📥 {target}\n💰 {cost} نقطة"
                 self._broadcast_gift_to_all_rooms(gift_url, gift_text, room)
         except Exception as e:
             self.report_master_error("إرسال صورة الهدية", e, room)
@@ -5284,7 +5293,16 @@ class TalkinBot:
         _record_game(loser.get("user"), game_key, -loser_stake, loser_stake)
         _record_game(winner.get("user"), game_key, loser_stake, loser_stake)
 
-        text = f"🏆 انتهت لعبة {game_name}\n👑 الفائز: @{winner.get('user', '')}"
+        winner_name = str(winner.get("user", ""))
+        loser_name = str(loser.get("user", ""))
+        winner_profit = loser_stake
+        loser_loss = loser_stake
+        text = (
+            f"🏆 انتهت لعبة {game_name}\n"
+            f"👑 الفائز: @{winner_name}\n"
+            f"💰 ربح: +{_fmt_points(winner_profit)} نقطة\n"
+            f"❌ خسارة @{loser_name}: -{_fmt_points(loser_loss)} نقطة"
+        )
 
         # IMPORTANT: the queue is global across rooms, but the result is local
         # to exactly the two rooms where the two players entered the game.
