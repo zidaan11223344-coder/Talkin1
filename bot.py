@@ -6448,12 +6448,21 @@ class TalkinBot:
         reward = 1_000_000 if won else 0
         _record_game(sender_name, "million", reward, 0)
         if not won:
-            self.send_room_text(room, "🏦 بنك مليون\n❌ لم يحالفك الحظ هذه المرة. حاول لاحقاً.")
+            loss_text = (
+                "🏦 بنك مليون\n━━━━━━━━━━━━━━\n"
+                f"❌ @{sender_name} لم يحالفه الحظ هذه المرة.\n"
+                "💰 مبلغ الفوز: 0 نقطة\n"
+                "💸 مبلغ الخسارة: 0 نقطة\n"
+                "🍀 حظاً أوفر في المحاولة القادمة!\n"
+                "━━━━━━━━━━━━━━"
+            )
+            for target_room in (self._active_rooms() or [room]):
+                self.send_room_text(target_room, loss_text)
             return True
         self._game_award(sender_name, reward)
         winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
         winner_text = f"🏆✨ مبروك! فاز بنك مليون ✨🏆\n━━━━━━━━━━━━━━━━\n👑 الفائز: @{sender_name}\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n💸 مبلغ الخسارة: 0 نقطة\n━━━━━━━━━━━━━━━━"
-        target_rooms = [room]
+        target_rooms = self._active_rooms() or [room]
         for target_room in target_rooms:
             self.send_room_text(target_room, winner_text)
         self._send_game_winner_card("بنك مليون", sender_name, target_rooms)
@@ -6698,8 +6707,7 @@ class TalkinBot:
                     winner_photo = self._lookup_profile_photo(sender_name)
 
                 zeros = "⭐" * 9  # 1k,000,000 contains nine zeros.
-                self.send_room_text(
-                    room,
+                winner_text = (
                     f"🏆✨ مبروك! تم الحصول على المليار ✨🏆\n"
                     f"━━━━━━━━━━━━━━━━\n"
                     f"✅ @{sender_name}\n"
@@ -6710,6 +6718,9 @@ class TalkinBot:
                     f"{zeros}\n"
                     f"━━━━━━━━━━━━━━━━"
                 )
+                target_rooms = self._active_rooms() or [room]
+                for target_room in target_rooms:
+                    self.send_room_text(target_room, winner_text)
 
                 try:
                     base = _public_base_url()
@@ -6719,15 +6730,13 @@ class TalkinBot:
                     url = f"{base}/billion/{card.name}"
                     self._verify_public_media_url(url, "image")
                     # Publish the same generated winner card to every active room.
-                    target_rooms = [room]
                     for target_room in target_rooms:
                         self.send_room_media(target_room, url, "image")
                     self.log("[GAME] billion winner card sent", sender_name, len(target_rooms))
                 except Exception as exc:
                     self.log("[GAME] billion winner card failed:", repr(exc))
             else:
-                self.send_room_text(
-                    room,
+                loss_text = (
                     f"🎰🍀 لعبة المليار\n━━━━━━━━━━━━━━\n"
                     f"❌ @{sender_name} لم يحصل على المليار هذه المرة.\n"
                     f"💰 مبلغ الفوز: 0 نقطة\n"
@@ -6735,6 +6744,9 @@ class TalkinBot:
                     f"🍀 حظاً أوفر في المحاولة القادمة!\n"
                     f"━━━━━━━━━━━━━━"
                 )
+                target_rooms = self._active_rooms() or [room]
+                for target_room in target_rooms:
+                    self.send_room_text(target_room, loss_text)
             return True
         if game_low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
@@ -6892,7 +6904,11 @@ class TalkinBot:
         join_command = bool(re.match(r"^دخول@.+$", str(body or "").strip(), re.I))
         verification_manager_command = _is_verification_manager_command(body)
         points_transfer_command = bool(re.fullmatch(r"sb@([^@]+)@(\d+)", str(body or "").strip(), re.I))
+        public_top_command = str(body or "").strip().casefold() in {
+            "توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top"
+        }
         if (not _is_master_name(sender)
+                and not public_top_command
                 and not (verification_manager_command and _is_mvip_master(sender))
                 and not (points_transfer_command and _is_verified_user(sender))
                 and not (is_publish and _is_verified_user(sender))
@@ -8143,7 +8159,7 @@ class TalkinBot:
                 and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
                 and not (re.fullmatch(r"sb@([^@]+)@(\d+)", body.strip(), re.I) and _is_verified_user(frm))
                 and not (is_publish_command and _is_verified_user(frm))
-                and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}):
+                and body.strip().casefold() not in {"توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top"}):
             if not _is_verified_user(frm):
                 self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
@@ -8233,7 +8249,7 @@ class TalkinBot:
         if (not is_verified
                 and _looks_like_bot_command(body)
                 and not re.match(r"^دخول@.+$", body.strip(), re.I)
-                and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}):
+                and body.strip().casefold() not in {"توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top"}):
             self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
         # Music/gifts require verification; masters are always allowed.
@@ -8393,7 +8409,7 @@ class TalkinBot:
                             and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
                             and not (re.fullmatch(r"sb@([^@]+)@(\d+)", body.strip(), re.I) and _is_verified_user(frm))
                             and not (is_publish_command and _is_verified_user(frm))
-                            and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}
+                            and body.strip().casefold() not in {"توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top"}
                             and not re.match(r"^دخول@.+$", body, re.I)):
                         if not _is_verified_user(frm):
                             self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
@@ -8402,7 +8418,7 @@ class TalkinBot:
                             and not _is_verified_user(frm)
                             and _looks_like_bot_command(body)
                             and not re.match(r"^دخول@.+$", body.strip(), re.I)
-                            and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}):
+                            and body.strip().casefold() not in {"توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top"}):
                         self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
                     if body and body.casefold() in ("نقاطي", "points"):
