@@ -271,8 +271,6 @@ def _select_persistent_data_dir():
     candidates = []
     if configured:
         candidates.append(Path(configured).expanduser())
-    # Railway volume mount /data is the recommended permanent location.
-    candidates.append(Path("/data/talkin1"))
     candidates.append(BASE_DIR / "data")
     for candidate in candidates:
         try:
@@ -1092,14 +1090,15 @@ def _save_local_json(path, data):
                 pass
     _github_sync_after_local_save(path, data)
 
-# GitHub-backed persistent state. Set GITHUB_TOKEN and GITHUB_REPO in the
-# hosting environment to make every JSON state file live in the GitHub repo.
+# GitHub-backed persistent state. Runtime stays in Talkin1; durable state is
+# backed up to Talkin4 asynchronously so message handling is not blocked by
+# GitHub network requests. Set GITHUB_TOKEN in the hosting environment.
 # Never hard-code the token in bot.py. For public repositories, remember that
 # committed member/verification/points data becomes publicly readable.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 # State backups are intentionally restricted to Talkin4. Do not allow a
 # deployment variable to redirect the bot into the main Talkin1 source repo.
-GITHUB_REPO = "zidaan11223344-coder/Talkin4"
+GITHUB_REPO = "zidaan11223344-coder/Talkin4"  # durable data repository
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
 GITHUB_DATA_DIR = os.getenv("GITHUB_DATA_DIR", "bot_data").strip().strip("/")
 GITHUB_SYNC_ENABLED = bool(GITHUB_TOKEN and GITHUB_REPO and os.getenv("GITHUB_SYNC", "1").strip().lower() not in {"0", "false", "no", "off"})
@@ -4886,19 +4885,11 @@ class TalkinBot:
         return self.send_query(encode_query("gifts", type_=GIFT_PROTOCOL, **kwargs))
 
     def gift_help(self, room):
-        # قائمة الهدايا: نفس الأسماء والترتيب في GIFT_CATALOG، مع الأسعار الحالية.
-        lines = [
-            "🎁 الهدايا المتاحة",
-            "━━━━━━━━━━━━",
-        ]
+        lines = ["🎁 الهدايا | الأسعار"]
         for k, (emoji, name) in GIFT_CATALOG.items():
             cost = GIFT_COSTS.get(str(k), 0)
-            lines.append(f"{k}️⃣ {emoji} {name} — 💰 {cost}")
-        lines.extend([
-            "━━━━━━━━━━━━",
-            "📌 للإرسال:",
-            "sa@رقم_الهدية@اسم_المستخدم",
-        ])
+            lines.append(f"{k} {emoji} {name} — 💰 {cost}")
+        lines.append("📌 للإرسال: sa@رقم_الهدية@اسم_المستخدم")
         self.send_room_text(room, "\n".join(lines))
 
     def _verify_public_media_url(self, url: str, media_kind: str = "image"):
