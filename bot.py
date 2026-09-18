@@ -6440,7 +6440,7 @@ class TalkinBot:
         return True
 
     def _million_bank_game(self, room, sender_name):
-        if not self._game_cooldown_notice(room, sender_name, 40.0, "بنك مليون"):
+        if not self._game_cooldown_notice(room, sender_name, 120.0, "بنك مليون"):
             return True
         self.send_room_text(room, f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n✅ @{sender_name}\n🔎 جاري البحث عن الجائزة...\n━━━━━━━━━━━━━━")
         time.sleep(1.0)
@@ -6451,8 +6451,6 @@ class TalkinBot:
             loss_text = (
                 "🏦 بنك مليون\n━━━━━━━━━━━━━━\n"
                 f"❌ @{sender_name} لم يحالفه الحظ هذه المرة.\n"
-                "💰 مبلغ الفوز: 0 نقطة\n"
-                "💸 مبلغ الخسارة: 0 نقطة\n"
                 "🍀 حظاً أوفر في المحاولة القادمة!\n"
                 "━━━━━━━━━━━━━━"
             )
@@ -6682,7 +6680,7 @@ class TalkinBot:
         if game_low in ("بنك مليون", "بنك"):
             return self._million_bank_game(room, sender_name)
         if low in ("مليار","billion"):
-            if not self._game_cooldown_notice(room, sender_name, 40.0, "مليار"):
+            if not self._game_cooldown_notice(room, sender_name, 600.0, "مليار"):
                 return True
 
             self.send_room_text(
@@ -6739,8 +6737,6 @@ class TalkinBot:
                 loss_text = (
                     f"🎰🍀 لعبة المليار\n━━━━━━━━━━━━━━\n"
                     f"❌ @{sender_name} لم يحصل على المليار هذه المرة.\n"
-                    f"💰 مبلغ الفوز: 0 نقطة\n"
-                    f"💸 مبلغ الخسارة: 0 نقطة\n"
                     f"🍀 حظاً أوفر في المحاولة القادمة!\n"
                     f"━━━━━━━━━━━━━━"
                 )
