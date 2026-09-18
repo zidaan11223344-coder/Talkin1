@@ -1890,7 +1890,7 @@ DEFAULT_REPLY_MESSAGES = {
     "game_insufficient": "❌ رصيدك غير كافٍ. رصيدك الحالي: {balance} نقطة.",
     "wager_open": "🎯 {game_label} جديد\n━━━━━━━━━━━━\n👤 {verb}: @{username} 𝃛\n💰 المبلغ: {amount}\n🤝 للمشاركة ارسل: {command}@المبلغ\n━━━━━━━━━━━━",
     "wager_result": "🏆 انتهى {game}\n━━━━━━━━━━━━\n🥊 @{p1} × @{p2}\n\n👑 الفائز: @{winner}\n💰 مبلغ الجولة: {amount} نقطة\n🎁 مكسب الفائز: +{amount} نقطة\n📉 الخاسر: @{loser} (-{amount} نقطة)\n━━━━━━━━━━━━",
-    "luck_result": "🍀✨ حظ\n━━━━━━━━━━━━\n👤 اللاعب: @{username}\n🎯 النتيجة: {result}\n💰 الرهان: {amount} نقطة\n💵 التغير: {delta} نقطة\n💳 الرصيد: {balance} نقطة",
+    "luck_result": "🍀✨ حظ\n━━━━━━━━━━━━\n👤 اللاعب: @{username}\n🎯 النتيجة: {result}\n💰 الرهان: {amount} نقطة\n💸 مبلغ الخسارة: -{amount} نقطة\n💵 التغير: {delta} نقطة\n💳 الرصيد: {balance} نقطة",
 }
 
 
@@ -5342,8 +5342,9 @@ class TalkinBot:
         text = (
             f"🏆 انتهت لعبة {game_name}\n"
             f"👑 الفائز: @{winner_name}\n"
-            f"💰 ربح: +{_fmt_points(winner_profit)} نقطة\n"
-            f"❌ خسارة @{loser_name}: -{_fmt_points(loser_loss)} نقطة"
+            f"💰 مبلغ الفوز: +{_fmt_points(winner_profit)} نقطة\n"
+            f"❌ الخاسر: @{loser_name}\n"
+            f"💸 مبلغ الخسارة: -{_fmt_points(loser_loss)} نقطة"
         )
 
         # IMPORTANT: the queue is global across rooms, but the result is local
@@ -5490,7 +5491,15 @@ class TalkinBot:
         _record_game(loser.get("user"), game_key, -prize, prize)
         _record_game(winner.get("user"), game_key, prize, prize)
 
-        text=f"🏆 انتهت لعبة {game_name}\n👑 الفائز: @{winner.get('user', '')}"
+        winner_name = str(winner.get("user", ""))
+        loser_name = str(loser.get("user", ""))
+        text=(
+            f"🏆 انتهت لعبة {game_name}\n"
+            f"👑 الفائز: @{winner_name}\n"
+            f"💰 مبلغ الفوز: +{_fmt_points(prize * 2)} نقطة\n"
+            f"❌ الخاسر: @{loser_name}\n"
+            f"💸 مبلغ الخسارة: -{_fmt_points(prize)} نقطة"
+        )
 
         result_rooms=[]
         seen=set()
@@ -5561,11 +5570,11 @@ class TalkinBot:
             self.send_room_text(room, "❌ اختر فاكهة من القائمة: " + " ".join(fruits)); return True
         bot_fruit=random.choice(fruits)
         if emoji == bot_fruit:
-            self._send_game_result(room, f"🍉 فيس @{sender}\n✅ تمت المطابقة! البوت أرسل {bot_fruit}\n🏆 فزت بـ 20 نقطة.", "")
+            self._send_game_result(room, f"🍉 فيس @{sender}\n✅ تمت المطابقة! البوت أرسل {bot_fruit}\n🏆 فزت بـ 20 نقطة.\n💰 مبلغ الفوز: +20 نقطة\n💸 مبلغ الخسارة: 0 نقطة", "")
             self._game_award(sender,20)
             _record_game(sender, "fruit", 20, 0)
         else:
-            self.send_room_text(room, f"🍉 فيس @{sender}\n🤖 البوت أرسل {bot_fruit}\n❌ لم تتم المطابقة، حظاً موفقاً.")
+            self.send_room_text(room, f"🍉 فيس @{sender}\n🤖 البوت أرسل {bot_fruit}\n❌ لم تتم المطابقة، حظاً موفقاً.\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة")
         return True
 
     def _save_crop_plots(self):
@@ -5597,15 +5606,20 @@ class TalkinBot:
                 for key, username, crop, minutes, reward in ready:
                     balance=self._game_award(username, reward)
                     _record_game(username, "farm", reward, 0)
-                    self.send_private_text(
-                        username,
+                    result_text = (
                         f"🌾✨ حصادك جاهز!\n━━━━━━━━━━━━\n"
+                        f"👤 اللاعب: @{username}\n"
                         f"🌱 المحصول: {crop}\n"
                         f"⏱️ مدة الزراعة: {minutes} دقيقة\n"
-                        f"🎁 المكافأة: +{_fmt_points(reward)} نقطة\n"
-                        f"💰 رصيدك الآن: {_fmt_points(balance)}\n"
+                        f"💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n"
+                        f"💸 مبلغ الخسارة: 0 نقطة\n"
+                        f"💳 رصيدك الآن: {_fmt_points(balance)}\n"
                         f"🌟 زرع جديد عندما تريد!"
                     )
+                    origin_room = str(plot.get("room") or "").strip() if isinstance(plot, dict) else ""
+                    if origin_room:
+                        self.send_room_text(origin_room, result_text)
+                    self.send_private_text(username, result_text)
             self.stop_event.wait(2.0)
 
     def _crop_command(self, room, sender, raw):
@@ -5738,10 +5752,10 @@ class TalkinBot:
                 reward = secrets.choice((10, 20, 30, 50, 100))
             if reward:
                 balance = self._game_award(sender, reward)
-                result = f"🎉 ربحت: +{_fmt_points(reward)} نقطة"
+                result = f"🎉 ربحت: +{_fmt_points(reward)} نقطة\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة"
             else:
                 balance = _get_points(sender)
-                result = "🍀 هذه الجولة لم تكن رابحة."
+                result = "🍀 هذه الجولة لم تكن رابحة.\n💰 مبلغ الفوز: 0 نقطة"
             delta = reward - amount if amount else reward
             _record_game(sender, "luck_free" if not amount else "luck", delta, amount)
         text = _reply_template(
@@ -6196,7 +6210,7 @@ class TalkinBot:
             self.send_room_text(
                 room,
                 f"🐎🛡️ @{victim} محصّن حالياً.\n"
-                f"❌ فشلت السرقة، الحصانة تحميه من السرقة لمدة دقيقة."
+                f"❌ فشلت السرقة، الحصانة تحميه من السرقة لمدة دقيقة.\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
             )
             _record_game(sender, "steal", 0, 500)
             self._send_game_winner_card("اسرق_فشل", sender, [room])
@@ -6206,7 +6220,7 @@ class TalkinBot:
                 room,
                 f"🕵️ @{sender} حاول سرقة @{victim}...\n"
                 f"❌ فشلت السرقة، المسروق @{victim} مفلس.\n"
-                f"💰 رصيده: {_fmt_points(victim_balance)}"
+                f"💰 رصيده: {_fmt_points(victim_balance)}\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
             )
             _record_game(sender, "steal", 0, 500)
             self._send_game_winner_card("اسرق_فشل", sender, [room])
@@ -6218,7 +6232,7 @@ class TalkinBot:
                 room,
                 f"🚨 @{sender} حاول سرقة @{victim}...\n"
                 f"🚔 السرقة حرام، تم إبلاغ الشرطة! 😁\n"
-                f"❌ لم تتم السرقة."
+                f"❌ لم تتم السرقة.\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
             )
             _record_game(sender, "steal", 0, 500)
             return True
@@ -6254,13 +6268,13 @@ class TalkinBot:
         if player > bot:
             reward = self._bot_win_reward()
             self._game_award(sender, reward)
-            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🏆 فزت بـ {reward} نقطة!"
+            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🏆 فزت بـ {reward} نقطة!\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n💸 مبلغ الخسارة: 0 نقطة"
         elif player < bot:
             reward = 0
-            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤖 البوت فاز!"
+            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤖 البوت فاز!\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
         else:
             reward = 0
-            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤝 تعادل!"
+            result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🤝 تعادل!\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
         _record_game(sender, "طاولة", reward, reward)
         self.send_room_text(room, result)
         return True
@@ -6275,13 +6289,13 @@ class TalkinBot:
         if p_num > b_num:
             reward = self._bot_win_reward()
             self._game_award(sender, reward)
-            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🏆 فزت بـ {reward} نقطة!"
+            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🏆 فزت بـ {reward} نقطة!\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n💸 مبلغ الخسارة: 0 نقطة"
         elif p_num < b_num:
             reward = 0
-            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤖 البوت فاز!"
+            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤖 البوت فاز!\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
         else:
             reward = 0
-            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤝 تعادل!"
+            result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🤝 تعادل!\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
         _record_game(sender, "اونو", reward, reward)
         self.send_room_text(room, result)
         return True
@@ -6295,8 +6309,9 @@ class TalkinBot:
         self.send_room_text(
             room,
             f"{title}\n━━━━━━━━━━━━━━\n{body}\n"
-            f"🎁 المكافأة: +{_fmt_points(reward)} نقطة\n"
-            f"💰 رصيدك: {_fmt_points(balance)}\n━━━━━━━━━━━━━━"
+            f"💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n"
+            f"💸 مبلغ الخسارة: 0 نقطة\n"
+            f"💳 رصيدك: {_fmt_points(balance)}\n━━━━━━━━━━━━━━"
         )
         return True
 
@@ -6327,8 +6342,9 @@ class TalkinBot:
             room,
             f"🎡 عجلة الحظ\n━━━━━━━━━━━━━━\n@{sender}\n"
             f"🎯 دارت العجلة وتوقفت على: {_fmt_points(reward)} نقطة\n"
-            f"🎁 المكافأة: +{_fmt_points(reward)} نقطة\n"
-            f"💰 رصيدك: {_fmt_points(balance)}\n━━━━━━━━━━━━━━"
+            f"💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n"
+            f"💸 مبلغ الخسارة: 0 نقطة\n"
+            f"💳 رصيدك: {_fmt_points(balance)}\n━━━━━━━━━━━━━━"
         )
         return True
 
@@ -6436,8 +6452,8 @@ class TalkinBot:
             return True
         self._game_award(sender_name, reward)
         winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
-        winner_text = f"🏆✨ مبروك! فاز بنك مليون ✨🏆\n━━━━━━━━━━━━━━━━\n👑 الفائز: @{sender_name}\n💰 الجائزة: {_fmt_points(reward)} نقطة\n━━━━━━━━━━━━━━━━"
-        target_rooms = self._active_rooms() or [room]
+        winner_text = f"🏆✨ مبروك! فاز بنك مليون ✨🏆\n━━━━━━━━━━━━━━━━\n👑 الفائز: @{sender_name}\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n💸 مبلغ الخسارة: 0 نقطة\n━━━━━━━━━━━━━━━━"
+        target_rooms = [room]
         for target_room in target_rooms:
             self.send_room_text(target_room, winner_text)
         self._send_game_winner_card("بنك مليون", sender_name, target_rooms)
@@ -6687,7 +6703,8 @@ class TalkinBot:
                     f"🏆✨ مبروك! تم الحصول على المليار ✨🏆\n"
                     f"━━━━━━━━━━━━━━━━\n"
                     f"✅ @{sender_name}\n"
-                    f"💰 لقد حصلت علي مليار\n"
+                    f"💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n"
+                    f"💸 مبلغ الخسارة: 0 نقطة\n"
                     f"🔢 رقم المليار: 1k,000,000\n"
                     f"🎉 مبروك يا بطل!\n"
                     f"{zeros}\n"
@@ -6702,7 +6719,7 @@ class TalkinBot:
                     url = f"{base}/billion/{card.name}"
                     self._verify_public_media_url(url, "image")
                     # Publish the same generated winner card to every active room.
-                    target_rooms = self._active_rooms() or [room]
+                    target_rooms = [room]
                     for target_room in target_rooms:
                         self.send_room_media(target_room, url, "image")
                     self.log("[GAME] billion winner card sent", sender_name, len(target_rooms))
@@ -6713,6 +6730,8 @@ class TalkinBot:
                     room,
                     f"🎰🍀 لعبة المليار\n━━━━━━━━━━━━━━\n"
                     f"❌ @{sender_name} لم يحصل على المليار هذه المرة.\n"
+                    f"💰 مبلغ الفوز: 0 نقطة\n"
+                    f"💸 مبلغ الخسارة: 0 نقطة\n"
                     f"🍀 حظاً أوفر في المحاولة القادمة!\n"
                     f"━━━━━━━━━━━━━━"
                 )
@@ -6729,7 +6748,7 @@ class TalkinBot:
             else: result="❌ خسرت"; reward=0
             balance=self._game_award(sender_name,reward)
             _record_game(sender_name,"rps",reward,0)
-            self.send_room_text(room, f"✂️ @{sender_name}: {low} | 🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 {_fmt_points(balance)}")
+            self.send_room_text(room, f"✂️ @{sender_name}: {low} | 🤖 البوت: {bot_choice}\n{result}\n🎁 +{reward} نقطة\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n💸 مبلغ الخسارة: 0 نقطة\n💳 الرصيد: {_fmt_points(balance)}")
             return True
         # Steal: random victim with `اسرق`, or a named room member with `اسرق@username` / `اسرق username`.
         m=re.fullmatch(r"اسرق(?:@|\s+@?)([^@\s]+)", raw, re.I)
@@ -6745,7 +6764,7 @@ class TalkinBot:
             reward = secrets.randbelow(101) + 100 if won else 0
             balance = self._game_award(sender_name, reward)
             _record_game(sender_name, "misc", reward, 0)
-            self.send_room_text(room, f"{label} @{sender_name}\n" + (f"🏆 نجحت وربحت {reward} نقطة." if won else "❌ لم تنجح هذه المرة.") + f"\n💰 {_fmt_points(balance)}")
+            self.send_room_text(room, f"{label} @{sender_name}\n" + (f"🏆 نجحت وربحت {reward} نقطة." if won else "❌ لم تنجح هذه المرة.") + f"\n💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n💸 مبلغ الخسارة: 0 نقطة\n💳 الرصيد: {_fmt_points(balance)}")
             return True
         return False
 
