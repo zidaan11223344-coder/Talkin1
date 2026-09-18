@@ -1756,7 +1756,7 @@ def _game_top10_message():
     lines = []
     for position, (_level, _label, plays, username) in enumerate(rows, 1):
         rank = {1: "🥇 1", 2: "🥈 2", 3: "🥉 3"}.get(position, str(position))
-        lines.append(f"{rank} {username} لعب {plays}")
+        lines.append(f"{rank} {str(username).replace(chr(64), "")} لعب {plays}")
     return "🏆 توب الألعاب\n" + "\n".join(lines)
 
 
@@ -7224,7 +7224,7 @@ class TalkinBot:
                 rows=_game_top(game_map[game_label])
                 def _top_medal(i):
                     return {1:"🥇",2:"🥈",3:"🥉"}.get(i, f"{i}️⃣")
-                msg=f"🏆 توب {game_label}\n━━━━━━━━━━━━\n" + ("\n".join(f"{_top_medal(i)} {str(u).lstrip('@')} — {_fmt_points(p)} نقطة | {pl} لعب" for i,(p,st,pl,u) in enumerate(rows,1)) if rows else "لا توجد نتائج بعد.")
+                msg=f"🏆 توب {game_label}\n━━━━━━━━━━━━\n" + ("\n".join(f"{_top_medal(i)} {str(u).replace(chr(64), "")} — {_fmt_points(p)} نقطة | {pl} لعب" for i,(p,st,pl,u) in enumerate(rows,1)) if rows else "لا توجد نتائج بعد.")
             else:
                 data=_points_data(); rows=[]
                 for v in data.values():
@@ -7233,7 +7233,7 @@ class TalkinBot:
                 rows.sort(reverse=True)
                 def _top_medal(i):
                     return {1:"🥇",2:"🥈",3:"🥉"}.get(i, f"{i}️⃣")
-                msg="🏆 توب النقاط\n━━━━━━━━━━━━\n"+"\n".join(f"{_top_medal(i)} @{u} — {_fmt_points(p)}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
+                msg="🏆 توب النقاط\n━━━━━━━━━━━━\n"+"\n".join(f"{_top_medal(i)} {str(u).replace(chr(64), "")} — {_fmt_points(p)}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
