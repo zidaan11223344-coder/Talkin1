@@ -263,7 +263,7 @@ def _stop_master_process():
 
 # Persistent bot data. Runtime code is replaceable; these JSON files are not.
 # The data directory can be set once with BOT_DATA_DIR/PERSISTENT_DATA_DIR.
-# On Railway, /data/chatbuz_bot is preferred so a mounted volume can keep all
+# On Railway, /data/talkin1 is preferred so a mounted volume can keep all
 # bot state across deployments. When no volume is mounted, the code falls back
 # to a local data/ directory beside bot.py and migrates any old JSON files there.
 def _select_persistent_data_dir():
@@ -1068,12 +1068,28 @@ def _load_local_json(path, default):
         pass
     return default
 
+_LOCAL_JSON_WRITE_LOCK = threading.RLock()
+
 def _save_local_json(path, data):
+    """Atomically save local JSON without sharing one fixed .tmp file.
+
+    A fixed ``file.json.tmp`` is unsafe when two game events save at the same
+    time: one writer can replace/delete the temporary file while another is
+    still using it.  Use a per-write temporary file plus a process lock.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(str(path) + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    with _LOCAL_JSON_WRITE_LOCK:
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(path)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
     _github_sync_after_local_save(path, data)
 
 # GitHub-backed persistent state. Set GITHUB_TOKEN and GITHUB_REPO in the
@@ -5227,7 +5243,7 @@ class TalkinBot:
             if waiting.get("reserved") and not _is_primary_master(user):
                 _add_points(user, int(waiting.get("stake", 0) or 0))
             if room:
-                self.send_room_text(room, f"⌛ انتهى وقت البحث عن منافس في لعبة {game}.\n❌ تم إلغاء اللعبة تلقائياً بعد دقيقتين لعدم وجود منافس.")
+                self.send_room_text(room, f"✅ انتهت لعبة {game}")
             self.log("[GAME] expired wager", game, user)
 
     def _cleanup_expired_fixed_games(self):
@@ -5245,7 +5261,7 @@ class TalkinBot:
             if waiting.get("reserved") and not _is_primary_master(waiting.get("user")):
                 _add_points(waiting.get("user"), int(waiting.get("prize", 0) or 0))
             if room:
-                self.send_room_text(room, f"⌛ انتهى وقت البحث عن منافس في لعبة {game_name}.\n❌ تم إلغاء اللعبة تلقائياً بعد دقيقتين لعدم وجود منافس.")
+                self.send_room_text(room, f"✅ انتهت لعبة {game_name}")
             self.log("[GAME] expired fixed game", game_name, waiting.get("user"))
 
     def _wager_result(self, first, second, game_name):
@@ -5258,7 +5274,7 @@ class TalkinBot:
         # opponent's stake; the winner's own stake is returned implicitly.
         # Both stakes were reserved atomically when players joined. Do not
         # debit again here; return the winner's stake and add the loser's stake.
-        if not _is_master_name(winner.get("user")):
+        if not _is_primary_master(winner.get("user")):
             _add_points(winner.get("user"), winner_stake + loser_stake)
 
         game_key = {
@@ -5268,14 +5284,7 @@ class TalkinBot:
         _record_game(loser.get("user"), game_key, -loser_stake, loser_stake)
         _record_game(winner.get("user"), game_key, loser_stake, loser_stake)
 
-        text = _reply_template(
-            "wager_result",
-            DEFAULT_REPLY_MESSAGES["wager_result"],
-            game=game_name,
-            p1=first["user"], p2=second["user"],
-            winner=winner["user"], loser=loser["user"],
-            amount=_fmt_points(loser_stake),
-        )
+        text = f"🏆 انتهت لعبة {game_name}\n👑 الفائز: @{winner.get('user', '')}"
 
         # IMPORTANT: the queue is global across rooms, but the result is local
         # to exactly the two rooms where the two players entered the game.
@@ -5394,12 +5403,10 @@ class TalkinBot:
         }
         game_label, verb, command = game_labels.get(game_name, (game_name, "لاعب", game_name))
         opening = (
-            f"🎯 {game_label} جديد\n"
-            "━━━━━━━━━━━━\n"
-            f"👤 {verb}: @{sender} 𝃛\n"
-            f"💰 المبلغ: {_fmt_points(amount)}\n"
-            f"🤝 للمشاركة ارسل: {command}@المبلغ\n"
-            "━━━━━━━━━━━━"
+            f"🎮 بدأت لعبة {game_label}\n"
+            f"👤 @{sender}\n"
+            f"💰 المبلغ: {_fmt_points(amount)} نقطة\n"
+            f"🎯 اكتب {command}@المبلغ لبدء الرهان"
         )
         # GLOBAL challenge announcement: every tracked bot room sees the same
         # open challenge, regardless of where the first player started it.
@@ -5423,16 +5430,7 @@ class TalkinBot:
         _record_game(loser.get("user"), game_key, -prize, prize)
         _record_game(winner.get("user"), game_key, prize, prize)
 
-        text=(
-            f"🏆 انتهت لعبة {game_name}\n"
-            f"━━━━━━━━━━━━\n"
-            f"👤 اللاعب الأول: @{first['user']}\n"
-            f"👤 اللاعب الثاني: @{second['user']}\n\n"
-            f"👑 الفائز: @{winner['user']}\n"
-            f"🎁 المكافأة: +{_fmt_points(prize)} نقطة\n"
-            f"📉 الخاسر: @{loser['user']} (-{_fmt_points(prize)} نقطة)\n"
-            f"━━━━━━━━━━━━"
-        )
+        text=f"🏆 انتهت لعبة {game_name}\n👑 الفائز: @{winner.get('user', '')}"
 
         result_rooms=[]
         seen=set()
@@ -5479,12 +5477,10 @@ class TalkinBot:
             return True
 
         challenge=(
-            f"🎮🔥 لعبة {game_name} جديدة!\n"
-            f"━━━━━━━━━━━━\n"
-            f"👤 اللاعب: @{sender}\n"
-            f"🎁 جائزة الجولة: {_fmt_points(prize)} نقطة\n"
-            f"🌍 الجولة عالمية بين جميع غرف البوت\n\n"
-            f"🤝 للمشاركة اكتب: {game_name}"
+            f"🎮 بدأت لعبة {game_name}\n"
+            f"👤 @{sender}\n"
+            f"💰 مبلغ الفوز: {_fmt_points(prize * 2)} نقطة\n"
+            f"🎯 اكتب {game_name} للمنافسة"
         )
         with self.game_lock:
             # Re-check in case another event created the queue while we prepared.
@@ -6185,6 +6181,10 @@ class TalkinBot:
 
 
     # --------------------- 10 Text-Only Bot Games ---------------------
+    def _bot_win_reward(self):
+        """Random winning reward for normal bot-vs-player games."""
+        return secrets.randbelow(4001) + 1000  # 1,000..5,000
+
     def _table_bot_game(self, room, sender):
         import random
         if not self._game_cooldown_notice(room, sender, 40.0, "طاولة"):
@@ -6192,7 +6192,7 @@ class TalkinBot:
         player = random.randint(1, 6) + random.randint(1, 6)
         bot = random.randint(1, 6) + random.randint(1, 6)
         if player > bot:
-            reward = 200
+            reward = self._bot_win_reward()
             self._game_award(sender, reward)
             result = f"🎲 طاولة\n👤 أنت: {player}\n🤖 البوت: {bot}\n🏆 فزت بـ {reward} نقطة!"
         elif player < bot:
@@ -6213,7 +6213,7 @@ class TalkinBot:
         p_color, p_num = random.choice(colors), random.randint(0, 9)
         b_color, b_num = random.choice(colors), random.randint(0, 9)
         if p_num > b_num:
-            reward = 200
+            reward = self._bot_win_reward()
             self._game_award(sender, reward)
             result = f"🃏 أونو\n👤 أنت: {p_color} {p_num}\n🤖 البوت: {b_color} {b_num}\n🏆 فزت بـ {reward} نقطة!"
         elif p_num < b_num:
@@ -6248,7 +6248,7 @@ class TalkinBot:
         if choice in ("وجه", "كتابة"):
             result = secrets.choice(("وجه", "كتابة"))
             won = choice == result
-            reward = 200 if won else 0
+            reward = self._bot_win_reward() if won else 0
             balance = self._game_award(sender, reward)
             _record_game(sender, "coin", reward, 0)
             self.send_room_text(room, f"🪙 لعبة العملة\n━━━━━━━━━━━━━━\n@{sender}\n🎯 اختيارك: {choice}\n🪙 النتيجة: {result}\n{('🏆 فزت!' if won else '❌ لم تفز هذه المرة.')}\n🎁 +{_fmt_points(reward)} نقطة\n💰 رصيدك: {_fmt_points(balance)}")
@@ -6260,8 +6260,7 @@ class TalkinBot:
     def _wheel_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "عجلة"):
             return True
-        rewards = [0, 20, 40, 60, 80, 100, 150, 200]
-        reward = secrets.choice(rewards)
+        reward = 0 if secrets.randbelow(5) == 0 else self._bot_win_reward()
         balance = self._game_award(sender, reward)
         _record_game(sender, "wheel", reward, 0)
         self.send_room_text(
@@ -6284,12 +6283,12 @@ class TalkinBot:
             self.pending_bot_choices[key] = {
                 "game": "box", "created": time.time(),
                 "prize_box": secrets.randbelow(3) + 1,
-                "reward": secrets.choice([0, 20, 50, 100, 200]),
+                "reward": self._bot_win_reward(),
             }
             self.send_room_text(room, f"📦 لعبة الصناديق\n━━━━━━━━━━━━━━\n@{sender}\n\u20661.\u2069 صندوق 1\n\u20662.\u2069 صندوق 2\n\u20663.\u2069 صندوق 3\n\n📌 أرسل الرقم فقط")
             return True
         prize_box = secrets.randbelow(3) + 1
-        reward = secrets.choice([0, 20, 50, 100, 200]) if chosen == prize_box else 0
+        reward = self._bot_win_reward() if chosen == prize_box else 0
         body = (f"📦 اخترت الصندوق {chosen}\n🏆 الصندوق الرابح: {prize_box}\n✅ ربحت!" if reward else f"📦 اخترت الصندوق {chosen}\n🎲 الصندوق الرابح كان: {prize_box}\n❌ لم تربح.")
         balance = self._game_award(sender, reward)
         _record_game(sender, "box", reward, 0)
@@ -6302,7 +6301,7 @@ class TalkinBot:
             return True
         chosen = int(m.group(1)) if m else None
         hidden = secrets.randbelow(3) + 1
-        reward = secrets.choice([50, 80, 120, 200]) if chosen == hidden else 0
+        reward = self._bot_win_reward() if chosen == hidden else 0
         if chosen is None:
             body = "🥤 اختر الكوب: كوب@1 أو كوب@2 أو كوب@3"
         elif reward:
@@ -6320,7 +6319,7 @@ class TalkinBot:
         player = secrets.randbelow(6) + 1
         monster = secrets.randbelow(6) + 1
         if player > monster:
-            reward = 200
+            reward = self._bot_win_reward()
             result = "⚔️ هزمت الوحش!"
         elif player < monster:
             reward = 0
@@ -6337,8 +6336,7 @@ class TalkinBot:
         if not self._game_cooldown_notice(room, sender, 40.0, "بركان"):
             return True
         result = secrets.randbelow(5)
-        reward_map = {0: 0, 1: 30, 2: 60, 3: 120, 4: 200}
-        reward = reward_map[result]
+        reward = 0 if result == 0 else self._bot_win_reward()
         outcome = "🌋 خرجت الجائزة من البركان!" if reward else "🌋 انفجر البركان ولم تجد جائزة."
         balance = self._game_award(sender, reward)
         _record_game(sender, "volcano", reward, 0)
@@ -6348,7 +6346,7 @@ class TalkinBot:
     def _bird_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "طائر"):
             return True
-        birds = [("🐦 عصفور", 30), ("🦅 نسر", 100), ("🦉 بومة", 60), ("🦜 ببغاء", 200), ("🌫️ لم يظهر طائر", 0)]
+        birds = [("🐦 عصفور", self._bot_win_reward()), ("🦅 نسر", self._bot_win_reward()), ("🦉 بومة", self._bot_win_reward()), ("🦜 ببغاء", self._bot_win_reward()), ("🌫️ لم يظهر طائر", 0)]
         bird, reward = secrets.choice(birds)
         balance = self._game_award(sender, reward)
         _record_game(sender, "bird", reward, 0)
@@ -6358,7 +6356,7 @@ class TalkinBot:
     def _star_bot_game(self, room, sender):
         if not self._game_cooldown_notice(room, sender, 40.0, "نجم"):
             return True
-        stars = [("⭐ عادية", 20), ("🌟 لامعة", 50), ("💫 نادرة", 100), ("✨ أسطورية", 200), ("🌑 لم تلتقط نجماً", 0)]
+        stars = [("⭐ عادية", self._bot_win_reward()), ("🌟 لامعة", self._bot_win_reward()), ("💫 نادرة", self._bot_win_reward()), ("✨ أسطورية", self._bot_win_reward()), ("🌑 لم تلتقط نجماً", 0)]
         star, reward = secrets.choice(stars)
         balance = self._game_award(sender, reward)
         _record_game(sender, "star", reward, 0)
@@ -6416,7 +6414,7 @@ class TalkinBot:
             result = pending.get("result") or secrets.choice(("وجه", "كتابة"))
             selected = "وجه" if choice == 1 else "كتابة"
             won = selected == result
-            reward = 200 if won else 0
+            reward = self._bot_win_reward() if won else 0
             self.pending_bot_choices.pop(key, None)
             balance = self._game_award(sender_name, reward)
             _record_game(sender_name, "coin", reward, 0)
@@ -6758,6 +6756,7 @@ class TalkinBot:
         _m_public_help = re.fullmatch(r"a([1-6])", _body_low)
         if _m_public_help:
             _page = int(_m_public_help.group(1))
+            # a2..a6 are public help menus. a1 remains private/master-only.
             if _page == 1 and not (_is_primary_master(sender) and is_private):
                 return True
             _key = (str(room), _norm_user(sender))
@@ -6846,7 +6845,12 @@ class TalkinBot:
         self._master_reply_local.command_room = room
         try:
             handled = self._handle_management_command_impl(room, body, sender, is_private=is_private)
-            if handled and _is_master_name(sender):
+            # Help/category commands are intentionally silent after displaying
+            # the requested menu; never add a redundant "تم تنفيذ الأمر" line.
+            help_command = bool(re.fullmatch(r"a[1-6]", str(body or '').strip(), re.I)
+                                or str(body or '').strip().casefold() in
+                                {"اوامر", "الاوامر", "help", "مساعدة", "ns", "n", "التالي", "القائمة التالية", "next"})
+            if handled and _is_master_name(sender) and not help_command:
                 if is_private and not self._master_reply_local.private_replied:
                     self.send_private_text(sender, f"✅ تم تنفيذ الأمر: {str(body or '').strip()}")
                 elif not is_private and not self._master_reply_local.replied:
@@ -7045,6 +7049,7 @@ class TalkinBot:
         m_help = re.fullmatch(r"a([1-6])", low)
         if m_help:
             page=int(m_help.group(1))
+            # Everyone may display a2..a6. Only a1 is restricted.
             if page == 1 and (not _is_primary_master(sender) or not is_private):
                 return True
             key=(str(room), _norm_user(sender))
@@ -8146,7 +8151,10 @@ class TalkinBot:
         # restricted to masters. Unverified command attempts receive one clear
         # notice instead of being silently ignored.
         is_verified = _is_verified_user(frm)
-        if not is_verified and _looks_like_bot_command(body) and not re.match(r"^دخول@.+$", body.strip(), re.I):
+        if (not is_verified
+                and _looks_like_bot_command(body)
+                and not re.match(r"^دخول@.+$", body.strip(), re.I)
+                and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}):
             self.send_room_text(room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
             return
         # Music/gifts require verification; masters are always allowed.
@@ -8311,7 +8319,11 @@ class TalkinBot:
                         if not _is_verified_user(frm):
                             self.send_private_text(frm, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
-                    if body and not _is_verified_user(frm) and _looks_like_bot_command(body) and not re.match(r"^دخول@.+$", body.strip(), re.I):
+                    if (body
+                            and not _is_verified_user(frm)
+                            and _looks_like_bot_command(body)
+                            and not re.match(r"^دخول@.+$", body.strip(), re.I)
+                            and body.strip().casefold() not in {"توب الألعاب", "توب الالعاب", "top games", "games top"}):
                         self.send_room_text(self.room, f"🔒 @{frm} طلب توثيق لاستخدام أوامر البوت.\n{_verification_notice()}")
                         return
                     if body and body.casefold() in ("نقاطي", "points"):
