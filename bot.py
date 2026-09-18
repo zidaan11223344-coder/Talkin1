@@ -1756,7 +1756,7 @@ def _game_top10_message():
     lines = []
     for position, (_level, _label, plays, username) in enumerate(rows, 1):
         rank = {1: "🥇 1", 2: "🥈 2", 3: "🥉 3"}.get(position, str(position))
-        lines.append(f"{rank} {str(username).strip().lstrip('@')} لعب {plays}")
+        lines.append(f"{rank} {username} لعب {plays}")
     return "🏆 توب الألعاب\n" + "\n".join(lines)
 
 
@@ -6456,7 +6456,7 @@ class TalkinBot:
         return True
 
     def _million_bank_game(self, room, sender_name):
-        if not self._game_cooldown_notice(room, sender_name, 120.0, "بنك مليون"):
+        if not self._game_cooldown_notice(room, sender_name, 60.0, "بنك مليون"):
             return True
         self.send_room_text(room, f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n✅ @{sender_name}\n🔎 جاري البحث عن الجائزة...\n━━━━━━━━━━━━━━")
         time.sleep(1.0)
@@ -6470,8 +6470,8 @@ class TalkinBot:
                 "🍀 حظاً أوفر في المحاولة القادمة!\n"
                 "━━━━━━━━━━━━━━"
             )
-            for target_room in (self._active_rooms() or [room]):
-                self.send_room_text(target_room, loss_text)
+            # الخسارة تُرسل في الغرفة التي لعب فيها المستخدم فقط.
+            self.send_room_text(room, loss_text)
             return True
         self._game_award(sender_name, reward)
         winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
@@ -6756,9 +6756,8 @@ class TalkinBot:
                     f"🍀 حظاً أوفر في المحاولة القادمة!\n"
                     f"━━━━━━━━━━━━━━"
                 )
-                target_rooms = self._active_rooms() or [room]
-                for target_room in target_rooms:
-                    self.send_room_text(target_room, loss_text)
+                # الخسارة تُرسل في الغرفة التي لعب فيها المستخدم فقط.
+                self.send_room_text(room, loss_text)
             return True
         if game_low in ("حظ","الحظ","luck"):
             return self._lottery_game(room, sender_name, 0)
@@ -7233,7 +7232,7 @@ class TalkinBot:
                 rows.sort(reverse=True)
                 def _top_medal(i):
                     return {1:"🥇",2:"🥈",3:"🥉"}.get(i, f"{i}️⃣")
-                msg="🏆 توب النقاط\n━━━━━━━━━━━━\n"+"\n".join(f"{_top_medal(i)} {str(u).strip().lstrip('@')} — {_fmt_points(p)}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
+                msg="🏆 توب النقاط\n━━━━━━━━━━━━\n"+"\n".join(f"{_top_medal(i)} @{u} — {_fmt_points(p)}" for i,(p,u) in enumerate(rows[:10],1)) if rows else "🏆 لا توجد نقاط بعد."
             if is_private: self.send_private_text(sender,msg)
             else: self.send_room_text(room,msg)
             return True
