@@ -1,4 +1,5 @@
 import base64
+import copy
 import json
 import os
 import random
@@ -1067,6 +1068,9 @@ def _load_local_json(path, default):
     return default
 
 _LOCAL_JSON_WRITE_LOCK = threading.RLock()
+_LOCAL_BG_CONDITION = threading.Condition()
+_LOCAL_BG_PENDING = {}
+_LOCAL_BG_WORKER_STARTED = False
 
 def _save_local_json(path, data):
     """Atomically save local JSON without sharing one fixed .tmp file.
@@ -1109,6 +1113,39 @@ _GITHUB_PENDING = {}
 _GITHUB_PENDING_CONDITION = threading.Condition()
 _GITHUB_WORKER_STARTED = False
 _GITHUB_BACKUP_REQUESTS = []
+
+def _queue_local_json_save(path, data):
+    """Queue a local JSON snapshot for background persistence.
+
+    Game/message handlers use this instead of waiting for disk I/O.  Repeated
+    updates to the same file are coalesced so a burst of games produces only
+    the newest snapshot.
+    """
+    path = Path(path)
+    try:
+        snapshot = copy.deepcopy(data)
+    except Exception:
+        snapshot = data
+    with _LOCAL_BG_CONDITION:
+        _LOCAL_BG_PENDING[str(path)] = snapshot
+        _LOCAL_BG_CONDITION.notify()
+
+
+def _local_persistence_worker():
+    while True:
+        with _LOCAL_BG_CONDITION:
+            while not _LOCAL_BG_PENDING:
+                _LOCAL_BG_CONDITION.wait()
+            # Coalesce rapid game events before touching disk.
+            _LOCAL_BG_CONDITION.wait(timeout=0.15)
+            pending = dict(_LOCAL_BG_PENDING)
+            _LOCAL_BG_PENDING.clear()
+        for path, data in pending.items():
+            try:
+                _save_local_json(path, data)
+            except Exception as exc:
+                print(f"[LOCAL] background save failed for {Path(path).name}: {exc}", flush=True)
+
 
 def _github_url(path):
     from urllib.parse import quote
@@ -1339,6 +1376,10 @@ def _github_sync_worker():
             except Exception as exc:
                 print(f"[GITHUB] backup completion notice failed: {exc}", flush=True)
 
+
+if not _LOCAL_BG_WORKER_STARTED:
+    threading.Thread(target=_local_persistence_worker, name="local-persistence", daemon=True).start()
+    _LOCAL_BG_WORKER_STARTED = True
 
 if GITHUB_SYNC_ENABLED and not _GITHUB_WORKER_STARTED:
     threading.Thread(target=_github_sync_worker, name="github-sync", daemon=True).start()
@@ -1625,9 +1666,18 @@ def _is_vip_user(name):
     return bool(key and (key in _vip_data() or _is_master_name(name)))
 
 
+_GAME_STATE_LOCK = threading.RLock()
+_GAME_STATS_CACHE = None
+_POINTS_CACHE = None
+
 def _game_stats_data():
-    data = _load_local_json(GAME_STATS_FILE, {})
-    return data if isinstance(data, dict) else {}
+    """Return the in-memory game statistics cache; disk is loaded once."""
+    global _GAME_STATS_CACHE
+    with _GAME_STATE_LOCK:
+        if _GAME_STATS_CACHE is None:
+            data = _load_local_json(GAME_STATS_FILE, {})
+            _GAME_STATS_CACHE = data if isinstance(data, dict) else {}
+        return _GAME_STATS_CACHE
 
 
 # العتبات السابقة محفوظة حتى لا تتغير مستويات اللاعبين الحاليين.
@@ -1644,7 +1694,6 @@ GAME_LEVELS = (
     (20000, "أسطورة الأساطير"),
 )
 
-
 def _game_name_key(name):
     """Compare decorated usernames without changing their displayed form."""
     raw = unicodedata.normalize("NFKC", str(name or "")).strip().lstrip("@")
@@ -1654,7 +1703,6 @@ def _game_name_key(name):
 
 
 def _game_level_info(username):
-    """Return (level number, label, total plays) from all game statistics."""
     data = _game_stats_data()
     item = data.get(_norm_user(username), {})
     if not isinstance(item, dict):
@@ -1673,7 +1721,6 @@ def _game_level_info(username):
 
 
 def _game_star_rank(username):
-    """Top-ten rank: first place has ten gold stars, tenth has one."""
     rows = []
     for key, item in _game_stats_data().items():
         if not isinstance(item, dict):
@@ -1690,7 +1737,6 @@ def _game_star_rank(username):
 
 
 def _game_top10():
-    """Return the ten strongest players ordered by level, then play count."""
     rows = []
     for key, item in _game_stats_data().items():
         if not isinstance(item, dict):
@@ -1704,7 +1750,6 @@ def _game_top10():
 
 
 def _game_top10_message():
-    """Compact top-games message: rank, username, and total plays only."""
     rows = _game_top10()
     if not rows:
         return "🏆 توب الألعاب\nلا توجد نتائج بعد."
@@ -1716,7 +1761,6 @@ def _game_top10_message():
 
 
 def _save_game_levels_snapshot():
-    """Persist derived levels/ranks as a separately backed-up JSON record."""
     players = {}
     for key, item in _game_stats_data().items():
         if not isinstance(item, dict):
@@ -1731,14 +1775,11 @@ def _save_game_levels_snapshot():
                 "plays": plays,
                 "star_rank": _game_star_rank(username),
             }
-    _save_local_json(GAME_LEVELS_FILE, {"version": 1, "players": players})
+    _queue_local_json_save(GAME_LEVELS_FILE, {"version": 1, "players": players})
 
 
 def _game_welcome(username, room):
-    """Build the level-aware welcome shown whenever a player enters a room."""
     level, label, plays = _game_level_info(username)
-    # Stars represent the player's game level directly: level 4 = four stars,
-    # while the highest level 10 receives ten stars.
     star_line = f"\n⭐ ترتيب النجوم\n       {'⭐' * level}"
     return (f"🎮 دخل @{username}\n"
             f"{label}\n"
@@ -1751,18 +1792,20 @@ def _record_game(username, game_key, points_delta=0, stake=0):
     key = _norm_user(username)
     if not key or _is_primary_master(username):
         return
-    data = _game_stats_data()
-    item = data.get(key, {"username": str(username).strip().lstrip("@"), "games": {}})
-    item["username"] = str(username).strip().lstrip("@")
-    games = item.get("games") if isinstance(item.get("games"), dict) else {}
-    g = games.get(game_key, {"plays": 0, "points": 0, "staked": 0})
-    g["plays"] = int(g.get("plays", 0) or 0) + 1
-    g["points"] = int(g.get("points", 0) or 0) + int(points_delta or 0)
-    g["staked"] = int(g.get("staked", 0) or 0) + int(stake or 0)
-    games[game_key] = g
-    item["games"] = games
-    data[key] = item
-    _save_local_json(GAME_STATS_FILE, data)
+    with _GAME_STATE_LOCK:
+        data = _game_stats_data()
+        item = data.get(key, {"username": str(username).strip().lstrip("@"), "games": {}})
+        item["username"] = str(username).strip().lstrip("@")
+        games = item.get("games") if isinstance(item.get("games"), dict) else {}
+        g = games.get(game_key, {"plays": 0, "points": 0, "staked": 0})
+        g["plays"] = int(g.get("plays", 0) or 0) + 1
+        g["points"] = int(g.get("points", 0) or 0) + int(points_delta or 0)
+        g["staked"] = int(g.get("staked", 0) or 0) + int(stake or 0)
+        games[game_key] = g
+        item["games"] = games
+        data[key] = item
+        snapshot = copy.deepcopy(data)
+    _queue_local_json_save(GAME_STATS_FILE, snapshot)
     _save_game_levels_snapshot()
 
 
@@ -1792,25 +1835,33 @@ def _game_top(game_key, limit=10):
     return rows[:limit]
 
 def _points_data():
-    data=_load_local_json(POINTS_FILE,{})
-    return data if isinstance(data,dict) else {}
+    global _POINTS_CACHE
+    with _GAME_STATE_LOCK:
+        if _POINTS_CACHE is None:
+            data = _load_local_json(POINTS_FILE, {})
+            _POINTS_CACHE = data if isinstance(data, dict) else {}
+        return _POINTS_CACHE
 
 def _add_points(username, amount):
-    amount=int(amount)
-    data=_points_data(); key=_norm_user(username)
-    item=data.get(key,{"username":str(username).strip().lstrip("@"),"points":0})
-    item["username"]=str(username).strip().lstrip("@")
-    item["points"]=int(item.get("points",0) or 0)+amount
-    data[key]=item; _save_local_json(POINTS_FILE,data)
+    amount = int(amount)
+    key = _norm_user(username)
+    if not key:
+        return 0
+    with _GAME_STATE_LOCK:
+        data = _points_data()
+        item = data.get(key, {"username": str(username).strip().lstrip("@"), "points": 0})
+        item["username"] = str(username).strip().lstrip("@")
+        item["points"] = int(item.get("points", 0) or 0) + amount
+        data[key] = item
+        snapshot = copy.deepcopy(data)
+    _queue_local_json_save(POINTS_FILE, snapshot)
     return item["points"]
 
+
 def _get_points(username):
-    # الماستر لديه صلاحية نقاط غير محدودة داخل الألعاب، لكن رصيد "نقاطي"
-    # يعرض فقط الرصيد المخزن فعلياً مثل بقية المستخدمين. لا نُظهر علامة
-    # اللانهاية للمستخدم، بينما تبقى صلاحية اللعب غير المحدودة مطبقة عبر
-    # _is_primary_master() في عمليات الخصم والتحقق.
-    item=_points_data().get(_norm_user(username),{})
-    return int(item.get("points",0) or 0)
+    item = _points_data().get(_norm_user(username), {})
+    return int(item.get("points", 0) or 0)
+
 
 def _fmt_points(value):
     """Compact point balances for chat: 1k -> 1k and 1k,000,000 -> 1m."""
