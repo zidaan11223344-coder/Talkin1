@@ -5180,12 +5180,14 @@ class TalkinBot:
         return _add_points(username, int(amount))
 
     def _game_ready(self, username, room, cooldown=40.0, game_name=""):
-        # 40 ثانية لنفس اللعبة فقط ولكل مستخدم.
-        # مثال: حظ ثم حظ = ينتظر 40 ثانية، بينما حظ ثم استثمار
-        # أو حظ ثم صندوق = مسموح فوراً. الفاصل مستقل عن الغرفة.
-        # كل الألعاب تستخدم نفس مدة الفاصل، لكن لكل لعبة مفتاح مستقل.
+        # الفاصل مستقل لكل لعبة ولكل مستخدم. لا نفرض 40 ثانية هنا،
+        # بل نستخدم المدة التي يحددها مستدعي اللعبة.
+        # المليون = 60 ثانية، المليار = 600 ثانية (10 دقائق).
         game_key = _norm_user(str(game_name or "general").replace("ة", "ه")) or "general"
-        cooldown = 40.0
+        try:
+            cooldown = max(0.0, float(cooldown))
+        except (TypeError, ValueError):
+            cooldown = 40.0
         # الماستر الأساسي مستثنى من فاصل الـ40 ثانية في جميع الألعاب.
         if _is_primary_master(username):
             return True, 0
@@ -5199,13 +5201,23 @@ class TalkinBot:
         return True, 0
 
     def _game_cooldown_notice(self, room, username, cooldown=40.0, game_name=""):
-        ok, left = self._game_ready(username, room, 40.0, game_name)
+        # مرر مدة اللعبة كما هي؛ لا تستبدلها افتراضياً بـ40 ثانية.
+        try:
+            cooldown = max(0.0, float(cooldown))
+        except (TypeError, ValueError):
+            cooldown = 40.0
+        ok, left = self._game_ready(username, room, cooldown, game_name)
         if not ok:
             label = str(game_name or "اللعبة").strip() or "اللعبة"
+            if cooldown >= 60 and cooldown % 60 == 0:
+                minutes = int(cooldown // 60)
+                interval = f"{minutes} دقائق" if minutes != 1 else "دقيقة واحدة"
+            else:
+                interval = f"{int(cooldown)} ثانية"
             self.send_room_text(
                 room,
                 f"⏳ @{username} انتظر {left} ثانية قبل إعادة لعبة {label}.\n"
-                f"🎮 الفاصل 40 ثانية لنفس اللعبة فقط، ويمكنك لعب لعبة أخرى الآن."
+                f"🎮 الفاصل {interval} لنفس اللعبة فقط، ويمكنك لعب لعبة أخرى الآن."
             )
         return ok
 
@@ -6715,7 +6727,7 @@ class TalkinBot:
                     f"✅ @{sender_name}\n"
                     f"💰 مبلغ الفوز: +{_fmt_points(reward)} نقطة\n"
                     f"💸 مبلغ الخسارة: 0 نقطة\n"
-                    f"🔢 رقم المليار: 1k,000,000\n"
+                    f"🔢 قيمة المليار: 1b\n"
                     f"🎉 مبروك يا بطل!\n"
                     f"{zeros}\n"
                     f"━━━━━━━━━━━━━━━━"
@@ -7212,7 +7224,7 @@ class TalkinBot:
                 rows=_game_top(game_map[game_label])
                 def _top_medal(i):
                     return {1:"🥇",2:"🥈",3:"🥉"}.get(i, f"{i}️⃣")
-                msg=f"🏆 توب {game_label}\n━━━━━━━━━━━━\n" + ("\n".join(f"{_top_medal(i)} @{u} — {_fmt_points(p)} نقطة | {pl} لعب" for i,(p,st,pl,u) in enumerate(rows,1)) if rows else "لا توجد نتائج بعد.")
+                msg=f"🏆 توب {game_label}\n━━━━━━━━━━━━\n" + ("\n".join(f"{_top_medal(i)} {str(u).lstrip('@')} — {_fmt_points(p)} نقطة | {pl} لعب" for i,(p,st,pl,u) in enumerate(rows,1)) if rows else "لا توجد نتائج بعد.")
             else:
                 data=_points_data(); rows=[]
                 for v in data.values():
