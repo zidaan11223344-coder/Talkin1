@@ -1873,6 +1873,10 @@ def _fmt_points(value):
         return str(value)
     sign = "-" if number < 0 else ""
     number = abs(number)
+    if number >= 1_000_000_000:
+        amount = number / 1_000_000_000
+        text = f"{amount:.1f}".rstrip("0").rstrip(".")
+        return f"{sign}{text}b"
     if number >= 1_000_000:
         amount = number / 1_000_000
         text = f"{amount:.1f}".rstrip("0").rstrip(".")
