@@ -6725,7 +6725,7 @@ class TalkinBot:
     def _render_snake_board(self, state, winner_name=""):
         if not PIL_AVAILABLE: return None
         from PIL import Image, ImageDraw, ImageFont
-        W=1000; H=1080; cell=92; left=40; top=130
+        W=1000; H=1160; cell=92; left=40; top=130
         img=Image.new("RGB",(W,H),(8,15,25)); d=ImageDraw.Draw(img)
         font=_gift_font("1",24); small=_gift_font("1",18); title_font=_gift_font("1",34)
         d.rounded_rectangle((20,18,W-20,110), radius=22, fill=(20,35,52), outline=(245,198,70), width=3)
@@ -6806,9 +6806,44 @@ class TalkinBot:
             else:
                 d.rounded_rectangle((cx-27,cy-27,cx+27,cy+27),radius=12,fill=colors[i%len(colors)],outline=(255,255,255),width=2)
                 d.text((cx,cy),str(i+1),fill=(10,10,10),font=small,anchor="mm")
-            # player name below the piece when space allows
-            short=str(u)[:12]
-            d.text((cx,cy+31),short,fill=(255,255,255),font=_gift_font("1",14),anchor="ma")
+            # Keep the piece clean; player names are rendered in the
+            # dedicated legend below the board so long Arabic/Latin names
+            # remain readable and are never clipped by a board cell.
+
+        # Clear player-name panel below the board.  The old 14px text was
+        # too small and was often hidden/overlapped by pieces.
+        panel_y0 = top + 10*cell + 10
+        panel_y1 = H - 12
+        d.rounded_rectangle((20, panel_y0, W-20, panel_y1), radius=18,
+                            fill=(16,30,45), outline=(245,198,70), width=3)
+        players = list(state.get("positions", {}).items())
+        if players:
+            d.text((W//2, panel_y0 + 18), "👤 اللاعبون",
+                   fill=(245,205,80), font=_gift_font("1",22), anchor="ma")
+            col_w = (W-50) / max(1, len(players))
+            for i,(u,_pos) in enumerate(players[:4]):
+                center_x = int(25 + col_w*i + col_w/2)
+                avatar = None
+                try:
+                    photo = self.user_photos.get(str(u).casefold(), "") or self._lookup_profile_photo(u)
+                    avatar = _load_sender_avatar(photo, 42) if photo else None
+                except Exception:
+                    avatar = None
+                if avatar is not None:
+                    img.paste(avatar, (center_x-21, panel_y0+42), avatar)
+                else:
+                    d.ellipse((center_x-21, panel_y0+42, center_x+21, panel_y0+84),
+                              fill=colors[i%len(colors)], outline=(255,255,255), width=2)
+                    d.text((center_x, panel_y0+63), str(i+1), fill=(10,10,10),
+                           font=_gift_font("1",16), anchor="mm")
+                # Actual mixed-font measurement keeps Arabic names centered and
+                # automatically reduces the font size for long usernames.
+                max_name_w = max(70, int(col_w-16))
+                _draw_name_centered(
+                    d, (center_x, panel_y0+91),
+                    "@" + str(u).lstrip("@"),
+                    22, (255,255,255), max_name_w
+                )
 
         out=BASE_DIR/"generated_games"/f"snake_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
         img.save(out,"JPEG",quality=84,optimize=True); return out
@@ -8715,20 +8750,13 @@ class TalkinBot:
         if not hasattr(self, "_incoming_seen_lock"):
             self._incoming_seen_lock = threading.Lock()
         event_id = str(event_id or "").strip()
-        # Some Talkin builds reuse field 41 for more than one incoming
-        # message. Never deduplicate by that field alone: a new command with
-        # the same transport id must still reach the command handler. Pair the
-        # id with the actual message signature. A content-only replay is kept
-        # for a very short window so a server retransmission is ignored without
-        # making a user repeat a command several times.
-        raw = "\x1f".join(str(v or "") for v in values)
-        signature = hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()
         if event_id:
-            key = (str(kind), "id+sig", event_id, signature)
-            ttl = 3.0
+            key = (str(kind), "id", event_id)
+            ttl = 300.0
         else:
-            key = (str(kind), "sig", signature)
-            ttl = 0.75
+            raw = "\x1f".join(str(v or "") for v in values)
+            key = (str(kind), "sig", hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest())
+            ttl = 8.0
         with self._incoming_seen_lock:
             previous = self._incoming_seen.get(key, 0.0)
             self._incoming_seen[key] = now
@@ -9186,22 +9214,7 @@ class TalkinBot:
                     "uid": result.get("uid", ""),
                 })
             if "room_event" in result:
-                room_event = result.get("room_event") or {}
-                # Keep the raw WebSocket receive loop free. Music downloads,
-                # image work, database calls and management commands can take
-                # seconds; running them inline makes the socket stop reading
-                # newer commands, which is why users sometimes need to send
-                # the same command 3-4 times.
-                event_type = str(room_event.get(1, "") or "").strip()
-                if event_type == "text":
-                    threading.Thread(
-                        target=self.handle_room_event,
-                        args=(result,),
-                        name="room-event-handler",
-                        daemon=True,
-                    ).start()
-                else:
-                    self.handle_room_event(result)
+                self.handle_room_event(result)
             if result.get("rooms"):
                 self._process_room_list(result.get("rooms"))
             if result.get("users") or result.get("room_admin"):
