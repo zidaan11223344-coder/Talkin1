@@ -8942,11 +8942,12 @@ class TalkinBot:
                 notice=f"{reason_text}: {room}\n💡 {advice}"
                 requested_by = str((pending_join or {}).get("requested_by", "") or "").strip()
                 recipient = requested_by or (username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER)
+                # The blocked-room notice belongs to the person who sent
+                # دخول@اسم_الغرفة. Do not send this notification privately
+                # to BOT_MASTER as an extra message.
                 if recipient and blocked_room not in self._blocked_room_notices:
                     self.send_private_text(recipient, notice)
                     self._blocked_room_notices.add(blocked_room)
-                if BOT_MASTER and _norm_user(recipient) != _norm_user(BOT_MASTER):
-                    self.send_private_text(BOT_MASTER, f"⚠️ رد الخادم برفض دخول البوت إلى الغرفة: {room}\n{reason_text}\nلم تُحفظ الغرفة في قائمة الاستثناءات؛ أعد المحاولة بعد تعديل صلاحيات البوت.")
 
         if ACK_ROOM_EVENTS and result.get("uid"):
             try:
