@@ -1664,9 +1664,9 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "دخول الكل", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
     normalized_low = low.replace("ة", "ه")
@@ -8023,6 +8023,115 @@ class TalkinBot:
             self._master_reply_local.command_sender = old_command_sender
             self._master_reply_local.command_room = old_command_room
 
+    def _room_language_pending_key(self, sender):
+        return _norm_user(sender)
+
+    def _begin_join_rooms_language(self, sender, rooms):
+        """Ask once for language, then join all requested rooms."""
+        cleaned=[]
+        seen=set()
+        for value in rooms or []:
+            room_name=str(value or "").strip()
+            if not room_name:
+                continue
+            key=_norm_room(room_name).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(room_name)
+        if not cleaned:
+            return False
+        if not hasattr(self,"_pending_room_language"):
+            self._pending_room_language={}
+        self._pending_room_language[self._room_language_pending_key(sender)]={
+            "rooms": cleaned,
+            "created": time.time(),
+        }
+        preview=" ".join(cleaned[:20])
+        extra=" ..." if len(cleaned)>20 else ""
+        self.send_private_text(
+            sender,
+            "🌐 اختر لغة البوت للغرف المحددة\n"
+            f"🏠 الغرف: {preview}{extra}\n\n"
+            "1️⃣ العربية\n2️⃣ English\n\n"
+            "أرسل 1 أو 2."
+        )
+        return True
+
+    def _complete_join_rooms_language(self, sender, choice):
+        pending=getattr(self,"_pending_room_language",{}).get(self._room_language_pending_key(sender))
+        if not isinstance(pending,dict):
+            return False
+        created=float(pending.get("created",0) or 0)
+        if created and time.time()-created > 180:
+            self._pending_room_language.pop(self._room_language_pending_key(sender),None)
+            self.send_private_text(sender,"⌛ انتهت مهلة اختيار اللغة. أرسل أمر دخول الغرف من جديد.")
+            return True
+        choice=str(choice or "").strip().casefold()
+        if choice not in ("1","2"):
+            return False
+        lang="ar" if choice=="1" else "en"
+        rooms=list(pending.get("rooms") or [])
+        self._pending_room_language.pop(self._room_language_pending_key(sender),None)
+        if not hasattr(self,"room_languages"):
+            self.room_languages={}
+        sent=0
+        skipped=0
+        for target in rooms:
+            self.room_languages[_norm_room(target)]=lang
+            try:
+                if self.join_room(target,force=True,requested_by=sender):
+                    sent+=1
+                else:
+                    skipped+=1
+            except Exception as exc:
+                skipped+=1
+                self.log("[ROOM] multi join failed:", target, repr(exc))
+        label="العربية" if lang=="ar" else "English"
+        self.send_private_text(
+            sender,
+            f"✅ تم اختيار اللغة: {label}\n"
+            f"🏠 عدد الغرف: {len(rooms)}\n"
+            f"📨 أُرسلت طلبات الدخول: {sent}\n"
+            f"⚠️ تخطّي/فشل: {skipped}\n"
+            "⏳ انتظر تأكيد الخادم لكل غرفة."
+        )
+        return True
+
+    def _add_rooms_to_saved_file(self, sender, raw_rooms):
+        rooms=[]
+        seen=set()
+        for value in str(raw_rooms or "").split():
+            room_name=value.strip()
+            if not room_name:
+                continue
+            key=_norm_room(room_name).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            rooms.append(room_name)
+        if not rooms:
+            self.send_private_text(sender,"❌ أرسل أسماء الغرف مفصولة بمسافة.\nمثال: مشاعر ادم نبض قلوب سوالف")
+            return True
+        existing=_persistent_rooms()
+        existing_keys={_norm_room(x).casefold() for x in existing}
+        added=[]
+        for room_name in rooms:
+            if _norm_room(room_name).casefold() not in existing_keys:
+                existing.append(room_name)
+                existing_keys.add(_norm_room(room_name).casefold())
+                added.append(room_name)
+        _save_persistent_rooms(existing)
+        self.known_rooms.update(existing)
+        self.send_private_text(
+            sender,
+            "✅ تم تحديث ملف الغرف المحفوظة.\n"
+            f"➕ تمت إضافة: {len(added)}\n"
+            f"📋 الجديد: {' '.join(added) if added else 'لا توجد غرف جديدة'}\n"
+            f"🏠 إجمالي الغرف المحفوظة: {len(_persistent_rooms())}"
+        )
+        return True
+
     def _handle_management_command_impl(self, room, body, sender, is_private=False):
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
@@ -8489,16 +8598,36 @@ class TalkinBot:
                 self._send_filter_list_page(room, sender, is_private, 1)
                 return True
 
-        # Joining a room: ask the master for bot language first.
-        pending_lang=getattr(self,"_pending_room_language",{}).get(_norm_user(sender))
-        if pending_lang and low in ("1","2"):
-            target=pending_lang.get("room",""); lang="ar" if low=="1" else "en"
-            self._pending_room_language.pop(_norm_user(sender),None)
-            if not hasattr(self,"room_languages"): self.room_languages={}
-            self.room_languages[_norm_room(target)]=lang
-            joined=self.join_room(target,force=True,requested_by=sender)
-            self.send_private_text(sender,("⏳ تم اختيار العربية، جاري دخول الغرفة: " if lang=="ar" else "⏳ English selected, joining room: ")+target)
+        # Pending multi-room language choice: one choice applies to all requested rooms.
+        if low in ("1","2") and self._complete_join_rooms_language(sender, low):
             return True
+
+        # Add one or more room names to tracked_rooms.json without joining them yet.
+        if low in ("اضف لملف الغرف", "أضف لملف الغرف", "اضف للملف الغرف", "أضف للملف الغرف"):
+            if not _is_primary_master(sender):
+                return True
+            if not hasattr(self,"_pending_add_rooms"):
+                self._pending_add_rooms={}
+            self._pending_add_rooms[_norm_user(sender)]={"created":time.time()}
+            self.send_private_text(
+                sender,
+                "📁 أضف الغرف إلى ملف الغرف\n"
+                "📨 أرسل أسماء الغرف مفصولة بمسافة.\n"
+                "مثال: مشاعر ادم نبض قلوب سوالف"
+            )
+            return True
+
+        # Consume the next plain message after "اضف لملف الغرف" as room names.
+        pending_add=getattr(self,"_pending_add_rooms",{}).get(_norm_user(sender))
+        if isinstance(pending_add,dict) and low not in ("1","2"):
+            if time.time()-float(pending_add.get("created",0) or 0) <= 180:
+                # Do not steal another explicit bot command.
+                if not _looks_like_bot_command(text):
+                    self._pending_add_rooms.pop(_norm_user(sender),None)
+                    return self._add_rooms_to_saved_file(sender, text)
+            else:
+                self._pending_add_rooms.pop(_norm_user(sender),None)
+
         # Bulk room join: enter every room currently saved in tracked_rooms.json.
         if low in ("دخول الكل", "دخولكل", "join all"):
             if not _is_primary_master(sender):
@@ -8527,28 +8656,27 @@ class TalkinBot:
             )
             return True
 
-        # Joining a room: ONLY the master command دخول@اسم_الغرفة is accepted.
-        m_join = re.fullmatch(r"دخول@(.+)", text, re.I)
+        # Joining one or multiple rooms: دخول@مشاعر ادم نبض ...
+        m_join = re.fullmatch(r"دخول@(.+)", text, re.I | re.S)
         if m_join:
-            target = m_join.group(1).strip()
-            if not target:
-                self.send_private_text(sender, "❌ الصيغة: دخول@اسم_الغرفة"); return True
-            blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
-            if blocked:
-                # A blocked marker is only the last server response. An
-                # explicit دخول@ command is a request to retry after the
-                # owner grants moderator/owner permission.
-                self.blocked_rooms.discard(_norm_room(target))
-                self._blocked_room_reasons.pop(_norm_room(target), None)
-                self._blocked_room_notices.discard(_norm_room(target))
-                self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != _norm_room(target)}
-                self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != _norm_room(target)}
-                self._save_blocked_rooms()
-                _save_persistent_rooms(self.known_rooms)
-            if not hasattr(self,"_pending_room_language"): self._pending_room_language={}
-            self._pending_room_language[_norm_user(sender)]={"room":target,"created":time.time()}
-            self.send_private_text(sender,"🌐 اختر لغة البوت للغرفة\n1️⃣ عربي\n2️⃣ English\n\nأرسل 1 أو 2.")
-            return True
+            raw_rooms=m_join.group(1).strip()
+            rooms=[x.strip() for x in raw_rooms.split() if x.strip()]
+            if not rooms:
+                self.send_private_text(sender, "❌ الصيغة: دخول@اسم_الغرفة أو دخول@غرفة1 غرفة2 غرفة3")
+                return True
+            # Explicit join retries are allowed even for rooms the server
+            # previously marked as blocked.
+            for target in rooms:
+                blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
+                if blocked:
+                    self.blocked_rooms.discard(_norm_room(target))
+                    self._blocked_room_reasons.pop(_norm_room(target), None)
+                    self._blocked_room_notices.discard(_norm_room(target))
+                    self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != _norm_room(target)}
+                    self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != _norm_room(target)}
+            self._save_blocked_rooms()
+            _save_persistent_rooms(self.known_rooms)
+            return self._begin_join_rooms_language(sender, rooms)
         m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
         if m_transfer and _is_verified_user(sender):
             target, amount = m_transfer.group(1).strip().lstrip("@"), int(m_transfer.group(2))
@@ -9900,7 +10028,21 @@ class TalkinBot:
                         parts = body.split(None, 1)
                         cmd = parts[0].lower() if parts else ""
                         arg = parts[1].strip() if len(parts) == 2 else ""
-                        if body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
+                        pending_add = getattr(self, "_pending_add_rooms", {}).get(_norm_user(frm))
+                        if isinstance(pending_add, dict) and body.strip().casefold() not in ("1", "2") and not _looks_like_bot_command(body.strip()):
+                            if time.time() - float(pending_add.get("created", 0) or 0) <= 180:
+                                self._pending_add_rooms.pop(_norm_user(frm), None)
+                                self._add_rooms_to_saved_file(frm, body.strip())
+                                return
+                            self._pending_add_rooms.pop(_norm_user(frm), None)
+                        if body.strip().casefold() in ("اضف لملف الغرف", "أضف لملف الغرف", "اضف للملف الغرف", "أضف للملف الغرف") and _is_primary_master(frm):
+                            if not hasattr(self, "_pending_add_rooms"):
+                                self._pending_add_rooms = {}
+                            self._pending_add_rooms[_norm_user(frm)] = {"created": time.time()}
+                            self.send_private_text(frm, "📁 أضف الغرف إلى ملف الغرف\n📨 أرسل أسماء الغرف مفصولة بمسافة.\nمثال: مشاعر ادم نبض قلوب سوالف")
+                        elif body.strip().casefold() in ("1", "2") and self._complete_join_rooms_language(frm, body.strip()):
+                            return
+                        elif body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
                             if body.strip().casefold() == "تشغيل الدعوات":
                                 self.invites_enabled = True
                                 self.send_private_text(frm, "✅ تم تشغيل الدعوات.")
@@ -9937,21 +10079,20 @@ class TalkinBot:
                                     self.send_private_text(frm, "⏳ جاري التحقق من رتبة البوت...")
                                 else:
                                     self.request_occupants(ctx_room, silent_master=False, response_room=ctx_room)
-                        elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I):
-                            target_room = re.fullmatch(r"دخول@(.+)", body.strip(), re.I).group(1).strip()
-                            blocked_room = _norm_room(target_room)
-                            if blocked_room in self.blocked_rooms:
-                                self.blocked_rooms.discard(blocked_room)
-                                self._blocked_room_reasons.pop(blocked_room, None)
-                                self._blocked_room_notices.discard(blocked_room)
+                        elif re.fullmatch(r"دخول@(.+)", body.strip(), re.I | re.S):
+                            raw_rooms = re.fullmatch(r"دخول@(.+)", body.strip(), re.I | re.S).group(1).strip()
+                            rooms = [x.strip() for x in raw_rooms.split() if x.strip()]
+                            if rooms:
+                                for target_room in rooms:
+                                    blocked_room = _norm_room(target_room)
+                                    if blocked_room in self.blocked_rooms:
+                                        self.blocked_rooms.discard(blocked_room)
+                                        self._blocked_room_reasons.pop(blocked_room, None)
+                                        self._blocked_room_notices.discard(blocked_room)
                                 self._save_blocked_rooms()
-                            joined = self.join_room(target_room, force=True, requested_by=frm)
-                            self.send_private_text(
-                                frm,
-                                f"⏳ تمت إعادة محاولة دخول الغرفة: {target_room}. انتظر تأكيد الخادم."
-                                if joined else
-                                f"⚠️ تعذر إرسال طلب دخول الغرفة: {target_room}. تحقق من الاسم والصلاحية.",
-                            )
+                                self._begin_join_rooms_language(frm, rooms)
+                            else:
+                                self.send_private_text(frm, "❌ الصيغة: دخول@اسم_الغرفة أو دخول@غرفة1 غرفة2 غرفة3")
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
                                 ok = self.leave_room(arg)
