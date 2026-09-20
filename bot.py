@@ -1974,13 +1974,54 @@ def _ensure_replies_file():
     messages = data.get("messages") if isinstance(data.get("messages"), dict) else {}
     changed = False
     auto_replies = data.get("auto_replies") if isinstance(data.get("auto_replies"), dict) else {}
+    # Merge the bundled replies into existing data instead of only adding a
+    # trigger when it is completely missing.  This is important when a bot is
+    # upgraded: new replies for أنا/لقبي/البوت (and future defaults) must be
+    # inserted ABOVE the old replies, while all old/custom replies stay intact.
+    existing_keys = {str(k).casefold(): k for k in auto_replies}
     for trigger, variants in DEFAULT_AUTO_REPLY_VARIANTS.items():
-        if trigger.casefold() not in {str(k).casefold() for k in auto_replies}:
-            auto_replies[trigger] = {"trigger": trigger, "reply": variants}
+        folded = trigger.casefold()
+        existing_key = existing_keys.get(folded)
+        if existing_key is None:
+            auto_replies[trigger] = {"trigger": trigger, "reply": list(variants)}
+            existing_keys[folded] = trigger
             changed = True
+            continue
+
+        entry = auto_replies.get(existing_key)
+        if isinstance(entry, dict):
+            old_reply = entry.get("reply", "")
         else:
-            # Keep existing custom replies untouched.
-            pass
+            old_reply = entry
+
+        if isinstance(old_reply, list):
+            old_variants = [str(x) for x in old_reply]
+        elif old_reply in (None, ""):
+            old_variants = []
+        else:
+            old_variants = [str(old_reply)]
+
+        # New bundled replies first; preserve every old reply and avoid
+        # duplicating a reply if this migration runs more than once.
+        seen = set()
+        merged = []
+        for item in list(variants) + old_variants:
+            key = str(item)
+            if key not in seen:
+                seen.add(key)
+                merged.append(key)
+
+        if not isinstance(entry, dict):
+            entry = {"trigger": trigger}
+            auto_replies[existing_key] = entry
+            changed = True
+        if entry.get("trigger") != trigger:
+            entry["trigger"] = trigger
+            changed = True
+        if entry.get("reply") != merged:
+            entry["reply"] = merged
+            changed = True
+
     data["auto_replies"] = auto_replies
     for key, value in DEFAULT_REPLY_MESSAGES.items():
         if key not in messages:
