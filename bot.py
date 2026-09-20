@@ -1730,7 +1730,7 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         ".u", "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
@@ -4340,6 +4340,7 @@ class TalkinBot:
             self._verify_public_media_url(media_url, "audio")
         payload = encode_query(
             "chat_message", type_=media_type, to=username, url=media_url,
+            body="",
             length=str(max(0, int(duration or 0))) if media_type == "audio" else None
         )
         last_error = None
@@ -10175,11 +10176,12 @@ class TalkinBot:
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
-        if body.strip().startswith(".تشغيل "):
+        if body.strip().startswith((".تشغيل ", "بث ")):
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لتشغيل الأغاني.\n{_verification_notice()}")
                 return
-            if self.handle_music_command(room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False, with_reactions=False):
+            command = body.replace(".تشغيل ", ".sa ", 1) if body.strip().startswith(".تشغيل ") else body.replace("بث ", ".sa ", 1)
+            if self.handle_music_command(room, command, frm, broadcast_all=False, with_reactions=False):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
@@ -10384,8 +10386,9 @@ class TalkinBot:
                     if m_share:
                         self.share_last_music(frm, m_share.group(1))
                         return
-                    if body.strip().startswith(".تشغيل "):
-                        if self.handle_music_command(self.room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False, with_reactions=False):
+                    if body.strip().startswith((".تشغيل ", "بث ")):
+                        command = body.replace(".تشغيل ", ".sa ", 1) if body.strip().startswith(".تشغيل ") else body.replace("بث ", ".sa ", 1)
+                        if self.handle_music_command(self.room, command, frm, broadcast_all=False, with_reactions=False):
                             return
                     if body.strip().lower().startswith(".sa "):
                         if self.handle_music_command(self.room, body, frm):
