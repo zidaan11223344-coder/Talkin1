@@ -5427,11 +5427,8 @@ class TalkinBot:
             self.send_room_text(room, "⚠️ لا توجد أغنية شغّلها المستخدم بعد لمشاركتها.") if room else self.send_private_text(sender, "⚠️ لا توجد أغنية شغّلتها بعد لمشاركتها.")
             return True
         title = str(info.get("title") or "أغنية")
-        self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
-        # Talkin can drop a private media packet when it immediately follows
-        # the text packet on the same socket. Give the text frame a short
-        # head start so the recipient receives both messages.
-        time.sleep(0.25)
+        # Send the media packet first. Some Talkin gateway versions accept the
+        # caption but drop an audio packet that immediately follows it.
         try:
             self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
         except Exception as exc:
@@ -5442,6 +5439,8 @@ class TalkinBot:
             else:
                 self.send_private_text(sender, notice)
             return True
+        time.sleep(0.45)
+        self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
