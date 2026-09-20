@@ -1425,6 +1425,20 @@ def _is_ns_command(text):
     }
 
 
+def _is_publish_command(text):
+    """Recognize both publish spellings: نشر / نشر@الوصف / انشر / انشر@الوصف."""
+    value = str(text or "").strip()
+    return bool(re.fullmatch(r"(?:انشر|نشر)(?:@.*)?", value, re.I | re.S))
+
+
+def _publish_description(text):
+    """Return the description part of a publish command without losing @/newlines."""
+    value = str(text or "").strip()
+    if "@" not in value:
+        return ""
+    return value.split("@", 1)[1].strip()
+
+
 def _norm_user(name):
     return str(name or "").strip().lstrip("@").casefold()
 
@@ -1651,8 +1665,8 @@ def _looks_like_bot_command(text):
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "دخول الكل", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
     normalized_low = low.replace("ة", "ه")
@@ -1672,8 +1686,8 @@ def _looks_like_admin_command(text):
     prefixes = (
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
-        "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
-        "swc", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "توثيق الكل", "وثق الكل", "verify",
+        "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "نشر", "+sr@", "sr@",
+        "swc", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "دخول الكل", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
 
@@ -3464,16 +3478,38 @@ class TalkinBot:
         return text.replace("@@", "@")
 
     def _choose_auto_reply(self, trigger, username, room):
+        """Return exactly ONE saved reply per trigger event.
+
+        Replies are consumed from a shuffled cycle so the bot does not dump the
+        whole reply list and does not immediately repeat one response. A new
+        cycle is generated only after every saved response has been used.
+        """
         variants = self._auto_reply_variants(trigger)
         if not variants:
             return ""
-        state = getattr(self, "_auto_reply_last", {})
         key = str(trigger or "").strip().casefold()
-        last = state.get(key)
-        choices = [v for v in variants if v != last] or variants
-        reply = random.choice(choices)
-        state[key] = reply
-        self._auto_reply_last = state
+        state = getattr(self, "_auto_reply_cycle", {})
+        signature = tuple(variants)
+        entry = state.get(key) if isinstance(state, dict) else None
+
+        if not isinstance(entry, dict) or tuple(entry.get("signature", ())) != signature:
+            order = list(range(len(variants)))
+            random.shuffle(order)
+            entry = {"signature": signature, "order": order, "index": 0}
+
+        order = entry.get("order") or []
+        index = int(entry.get("index", 0) or 0)
+        if len(order) != len(variants) or index >= len(order):
+            order = list(range(len(variants)))
+            random.shuffle(order)
+            index = 0
+
+        reply = variants[order[index]]
+        entry["signature"] = signature
+        entry["order"] = order
+        entry["index"] = index + 1
+        state[key] = entry
+        self._auto_reply_cycle = state
         return self._render_auto_reply(reply, username, room)
 
     def log(self, *args):
@@ -6704,9 +6740,18 @@ class TalkinBot:
         return True
 
     def _million_bank_game(self, room, sender_name):
+        # The cooldown check itself emits the exact remaining wait time.
+        # For a fresh play, send the acknowledgement immediately from the
+        # worker thread before doing any reveal delay.
         if not self._game_cooldown_notice(room, sender_name, 120.0, "بنك مليون"):
             return True
-        self.send_room_text(room, f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n✅ @{sender_name}\n🔎 جاري البحث عن الجائزة...\n━━━━━━━━━━━━━━")
+        self.send_room_text(
+            room,
+            f"🏦✨ بنك مليون ✨🏦\n━━━━━━━━━━━━━━\n"
+            f"✅ @{sender_name}\n"
+            "🔎 جاري البحث عن الجائزة...\n"
+            "━━━━━━━━━━━━━━"
+        )
         time.sleep(1.0)
         won = secrets.randbelow(100) == 0
         reward = 1_000_000 if won else 0
@@ -7909,7 +7954,7 @@ class TalkinBot:
                     self.send_room_text(room, msg)
             return True
 
-        is_publish = str(body or "").strip().casefold() == "انشر" or str(body or "").strip().casefold().startswith("انشر@")
+        is_publish = _is_publish_command(body)
         security_command = bool(
             re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I)
             or re.match(r"^mr@\d+$", str(body or "").strip(), re.I)
@@ -7919,6 +7964,7 @@ class TalkinBot:
             or re.match(r"^mr@\d+$", str(body or "").strip(), re.I)
         )
         join_command = bool(re.match(r"^دخول@.+$", str(body or "").strip(), re.I))
+        join_all_command = str(body or "").strip().casefold() in {"دخول الكل", "دخولكل", "join all"}
         verification_manager_command = _is_verification_manager_command(body)
         points_transfer_command = bool(re.fullmatch(r"sb@([^@]+)@(\d+)", str(body or "").strip(), re.I))
         public_top_command = str(body or "").strip().casefold() in {
@@ -7930,6 +7976,7 @@ class TalkinBot:
                 and not (points_transfer_command and _is_verified_user(sender))
                 and not (is_publish and _is_verified_user(sender))
                 and not join_command
+                and not join_all_command
                 and not (security_command and room and _room_manager(self, room, sender))):
             return False
         # A private command can be replayed by the Talkin transport with a new
@@ -8452,6 +8499,34 @@ class TalkinBot:
             joined=self.join_room(target,force=True,requested_by=sender)
             self.send_private_text(sender,("⏳ تم اختيار العربية، جاري دخول الغرفة: " if lang=="ar" else "⏳ English selected, joining room: ")+target)
             return True
+        # Bulk room join: enter every room currently saved in tracked_rooms.json.
+        if low in ("دخول الكل", "دخولكل", "join all"):
+            if not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 أمر دخول الكل مخصص للماستر الأساسي فقط.")
+                return True
+            saved_rooms = _persistent_rooms()
+            if not saved_rooms:
+                self.send_private_text(sender, "📭 ملف الغرف المحفوظة فارغ حالياً.\n📌 أضف غرفة أولاً عبر دخول@اسم_الغرفة.")
+                return True
+            sent = 0
+            skipped = 0
+            for target_room in saved_rooms:
+                try:
+                    if self.join_room(target_room, force=True, requested_by=sender):
+                        sent += 1
+                    else:
+                        skipped += 1
+                except Exception as exc:
+                    skipped += 1
+                    self.log("[ROOM] دخول الكل failed:", target_room, repr(exc))
+            self.send_private_text(
+                sender,
+                f"🏠 دخول الكل\n━━━━━━━━━━━━\n📋 الغرف المحفوظة: {len(saved_rooms)}\n"
+                f"📨 أُرسلت طلبات الدخول: {sent}\n⚠️ تخطّي/فشل: {skipped}\n"
+                "⏳ انتظر تأكيد الخادم للغرف التي تم إرسال طلبها."
+            )
+            return True
+
         # Joining a room: ONLY the master command دخول@اسم_الغرفة is accepted.
         m_join = re.fullmatch(r"دخول@(.+)", text, re.I)
         if m_join:
@@ -8493,8 +8568,16 @@ class TalkinBot:
             return True
 
         # VIP users may publish images; the actual image is handled by _handle_publish_media.
-        if (low == "انشر" or low.startswith("انشر@")) and _is_vip_user(sender):
-            desc=text[5:].strip() if low.startswith("انشر@") else ""
+        if _is_publish_command(text) and _is_vip_user(sender):
+            desc = _publish_description(text)
+            hit = self._find_publish_filter_hit(desc)
+            if hit:
+                self.send_private_text(sender,
+                    f"🚫 تم منع أمر النشر: الوصف يحتوي كلمة محظورة ({hit}).\n"
+                    "⛔ تم منع حسابك من النشر حتى فك المنع.")
+                _record_filter_ban(sender, room, "محاولة نشر كلمة مسيئة في الوصف", hit)
+                _record_publish_ban(sender, room, hit)
+                return True
             self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":_is_master_name(sender)}
             self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
             return True
@@ -8822,6 +8905,33 @@ class TalkinBot:
                 self.send_private_text(sender,"❌ لا توجد غرفة لتعيين المالك فيها."); return True
             self.request_admin_action(room,target,"owner",sender)
             return True
+        if low in ("دخول الكل", "دخولكل", "join all"):
+            if not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 أمر دخول الكل مخصص للماستر الأساسي فقط.")
+                return True
+            saved_rooms = _persistent_rooms()
+            if not saved_rooms:
+                self.send_private_text(sender, "📭 ملف الغرف المحفوظة فارغ حالياً.\n📌 أضف غرفة أولاً عبر دخول@اسم_الغرفة.")
+                return True
+            sent = 0
+            skipped = 0
+            for target_room in saved_rooms:
+                try:
+                    if self.join_room(target_room, force=True, requested_by=sender):
+                        sent += 1
+                    else:
+                        skipped += 1
+                except Exception as exc:
+                    skipped += 1
+                    self.log("[ROOM] دخول الكل failed:", target_room, repr(exc))
+            self.send_private_text(
+                sender,
+                f"🏠 دخول الكل\n━━━━━━━━━━━━\n📋 الغرف المحفوظة: {len(saved_rooms)}\n"
+                f"📨 أُرسلت طلبات الدخول: {sent}\n⚠️ تخطّي/فشل: {skipped}\n"
+                "⏳ انتظر تأكيد الخادم للغرف التي تم إرسال طلبها."
+            )
+            return True
+
         m_join = re.fullmatch(r"دخول@(.+)", text, re.I)
         if m_join:
             target=m_join.group(1).strip()
@@ -9005,11 +9115,20 @@ class TalkinBot:
             self.send_private_text(sender, f"✅ تم فك منع النشر عن {target}." if was else "ℹ️ المستخدم غير موجود في قائمة منع النشر.")
             return True
 
-        # Publishing: master or verified user says `انشر` or `انشر@description`, then sends an image.
-        if low == "انشر" or low.startswith("انشر@"):
-            desc=text[5:].strip() if low.startswith("انشر@") else ""
+        # Publishing: master or verified user says نشر / انشر (optionally @description), then sends an image.
+        if _is_publish_command(text):
+            desc = _publish_description(text)
             if _is_publish_banned(sender):
                 self.send_private_text(sender,"🚫 حسابك ممنوع من النشر حالياً.\n📌 لفك المنع راجع الماستر.")
+                return True
+            hit = self._find_publish_filter_hit(desc)
+            if hit:
+                self.send_private_text(sender,
+                    f"🚫 تم منع أمر النشر: الوصف يحتوي كلمة محظورة ({hit}).\n"
+                    "⛔ تم منع حسابك من النشر حتى فك المنع.")
+                self.publish_pending.pop(_norm_user(sender), None)
+                _record_filter_ban(sender, room, "محاولة نشر كلمة مسيئة في الوصف", hit)
+                _record_publish_ban(sender, room, hit)
                 return True
             # The image may be sent later in a room or in private chat.
             # Key the pending publish by sender, not by the command room, so
@@ -9165,7 +9284,10 @@ class TalkinBot:
         else:
             raw = "\x1f".join(str(v or "") for v in values)
             key = (str(kind), "sig", hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest())
-            ttl = 8.0
+            # Without a server event id, the signature can only protect against
+            # the same frame being replayed immediately. A long content TTL
+            # incorrectly swallowed legitimate repeated commands such as roll/بنك.
+            ttl = 0.45
         with self._incoming_seen_lock:
             previous = self._incoming_seen.get(key, 0.0)
             self._incoming_seen[key] = now
@@ -9205,10 +9327,15 @@ class TalkinBot:
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
         # Do not log room message contents, usernames, room names, or media events.
-        if (not is_ns_navigation) and self._is_duplicate_incoming(
-            "room",
-            (event_type, room, frm, to, body, str(event.get(7, "") or "")),
-            event_id,
+        _skip_room_text_signature_dedup = (not event_id and event_type == "text")
+        if (
+            not is_ns_navigation
+            and not _skip_room_text_signature_dedup
+            and self._is_duplicate_incoming(
+                "room",
+                (event_type, room, frm, to, body, str(event.get(7, "") or "")),
+                event_id,
+            )
         ):
             self.log("[DEDUP] ignored repeated room event")
             return
@@ -9426,7 +9553,7 @@ class TalkinBot:
         # Administrative commands are private to the configured master. Do
         # not send an authorization message to other users and do not allow
         # verified/VIP users to reach the management handlers accidentally.
-        is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
+        is_publish_command = _is_publish_command(body)
         if (_looks_like_admin_command(body)
                 and not _is_master_name(frm)
                 and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
@@ -9574,18 +9701,22 @@ class TalkinBot:
         self.last_messages[room].append((frm, body, event_id))
         self.last_messages[room] = self.last_messages[room][-50:]
 
-        # Exact-match automatic replies.
-        if self.auto_replies_enabled:
-            reply=self._choose_auto_reply(body.strip().casefold(),frm,room)
-            if reply:
-                self.send_room_text(room,reply)
-                return
-
         if self._handle_management_command(room, body, frm):
             return
 
         if self._run_game_command_async(room, body, frm):
             return
+
+        # Exact-match automatic replies are intentionally evaluated LAST so
+        # they never steal a real bot command such as بنك/roll/نشر. One normal
+        # text message produces one response from the saved reply cycle.
+        if (self.auto_replies_enabled
+                and not _looks_like_bot_command(body)
+                and not _looks_like_admin_command(body)):
+            reply=self._choose_auto_reply(body.strip().casefold(),frm,room)
+            if reply:
+                self.send_room_text(room,reply)
+                return
 
         if body.lower().strip() in ("!help", "مساعدة") and AUTO_HELP:
             self.send_room_text(room, "أوامر البوت: k@ اسم، b@ اسم، a@ اسم، o@ اسم، دخول@اسم_الغرفة، خروج [اسم_الغرفة]، inv، invmsg نص الدعوة لدعوة مستخدمي الغرفة")
@@ -9686,10 +9817,19 @@ class TalkinBot:
                                 self.log("[DIRECT-MESSAGE] failed", target, repr(exc))
                             return
 
-                    if (not _is_ns_command(body)) and self._is_duplicate_incoming(
-                        "private",
-                        (frm, body, media_url),
-                        str(cm.get(41, "") or result.get("uid", "") or ""),
+                    _private_event_id = str(cm.get(41, "") or result.get("uid", "") or "")
+                    # A missing ChatMessage event id means content-signature
+                    # de-duplication is not safe for legitimate repeated text.
+                    # Keep signature de-duplication only for media messages.
+                    _skip_text_signature_dedup = (not _private_event_id and not media_url)
+                    if (
+                        not _is_ns_command(body)
+                        and not _skip_text_signature_dedup
+                        and self._is_duplicate_incoming(
+                            "private",
+                            (frm, body, media_url),
+                            _private_event_id,
+                        )
                     ):
                         self.log("[DEDUP] ignored repeated private message")
                         return
@@ -9714,7 +9854,7 @@ class TalkinBot:
                         if self._handle_publish_media(self.room, frm, media_url):
                             return
                     # Silently ignore master-only commands from everyone else.
-                    is_publish_command = body.strip().casefold() == "انشر" or body.strip().casefold().startswith("انشر@")
+                    is_publish_command = _is_publish_command(body)
                     if (body and _looks_like_admin_command(body)
                             and not _is_master_name(frm)
                             and not (_is_mvip_master(frm) and _is_verification_manager_command(body))
