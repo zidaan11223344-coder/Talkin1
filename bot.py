@@ -1731,7 +1731,7 @@ def _looks_like_bot_command(text):
         ".u", "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
+        "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
     prefixes = prefixes + ("bl@",)
@@ -5375,7 +5375,7 @@ class TalkinBot:
         detail=" | ".join(errors[-10:])
         raise RuntimeError("تعذر تنزيل ملف صوت من SoundCloud أو YouTube."+(f" تفاصيل: {detail[:1200]}" if detail else ""))
 
-    def handle_music_command(self,room,text,requester,private_to="",broadcast_all=True):
+    def handle_music_command(self,room,text,requester,private_to="",broadcast_all=True,with_reactions=True):
         raw=text.strip()
         if not raw.lower().startswith(".sa "): return False
         query=raw[4:].strip()
@@ -5396,19 +5396,20 @@ class TalkinBot:
                     "requester": requester, "title": title, "artist": artist,
                     "url": url, "duration": duration, "created_at": time.time(),
                 }
-                # Music posts use the user's messages.json template.  The
-                # reaction code is intentionally limited to 4 characters.
-                code=uuid.uuid4().hex[:4]
-                caption=_message_template(
-                    "music", "broadcast",
-                    "🎶✨ تم تشغيل الأغنية بنجاح ✨🎶\n━━━━━━━━━━━━\n🎵 العنوان: {title}\n🎤 الطلب: @{requester_name}\n📡 المصدر: {source_label}\n🏠 الغرفة: {room}\n━━━━━━━━━━━━\n👍 lk@{code}   ❤️ lv@{code}\n💬 cm@{code} msg   🚨 report@{code} msg",
-                    requester_name=requester, title=title, artist=artist,
-                    source_label=artist or "Music", room=room, code=code,
-                    url=url, duration=duration
-                )
-                # Music is broadcast to every room currently joined by the bot.
-                # Do not send a duplicate private song message to the requester.
-                self.reaction_targets[code] = {"publisher": requester, "kind": "music", "title": title, "description": title, "created_at": time.time()}
+                if with_reactions:
+                    code=uuid.uuid4().hex[:4]
+                    caption=_message_template(
+                        "music", "broadcast",
+                        "🎶✨ تم تشغيل الأغنية بنجاح ✨🎶\n━━━━━━━━━━━━\n🎵 العنوان: {title}\n🎤 الطلب: @{requester_name}\n📡 المصدر: {source_label}\n🏠 الغرفة: {room}\n━━━━━━━━━━━━\n👍 lk@{code}   ❤️ lv@{code}\n💬 cm@{code} msg   🚨 report@{code} msg",
+                        requester_name=requester, title=title, artist=artist,
+                        source_label=artist or "Music", room=room, code=code,
+                        url=url, duration=duration
+                    )
+                    self.reaction_targets[code] = {"publisher": requester, "kind": "music", "title": title, "description": title, "created_at": time.time()}
+                else:
+                    caption=(f"🎶 تم تشغيل الأغنية\n━━━━━━━━━━━━\n"
+                             f"🎵 العنوان: {title}\n🎤 الطلب: @{requester}\n"
+                             f"📡 المصدر: {artist or 'Music'}")
                 target_rooms=self._active_rooms() if broadcast_all else [room]
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
@@ -7781,6 +7782,47 @@ class TalkinBot:
             return True
         return False
 
+    def _fun_room_members(self, room, sender):
+        """Return live room members suitable for light social games."""
+        users = getattr(self, "room_users", {}).get(room, {}) or {}
+        names = list(users.keys()) if isinstance(users, dict) else list(users or [])
+        out=[]
+        for name in names:
+            clean=str(name or "").strip().lstrip("@")
+            if (clean and _norm_user(clean) not in {_norm_user(sender), _norm_user(BOT_ID)}
+                    and _norm_user(clean) not in {_norm_user("🤖 البوت")}):
+                out.append(clean)
+        return out
+
+    def _marriage_game(self, room, sender):
+        candidates=self._fun_room_members(room, sender)
+        if not candidates:
+            self.send_room_text(room, f"💍 @{sender} لم أجد عضواً آخر متاحاً للزواج حالياً.")
+            return True
+        partner=secrets.choice(candidates)
+        sentence=(f"زوجتك هي @{partner}" if secrets.randbelow(2) == 0
+                  else f"زوجك هو @{partner}")
+        self.send_room_text(room, f"💍 مبروك @{sender}! {sentence} ❤️\n"
+                                 "نتمنى لكما حياة سعيدة مليئة بالفرح.")
+        return True
+
+    def _fun_game(self, room, sender, command):
+        options={
+            "تحدي": ["أرسل كلمة طيبة لعضو في الغرفة.", "اكتب أول شيء تحبه اليوم.", "امدح شخصاً لم تتحدث معه كثيراً.", "اكتب نكتة قصيرة للجميع."],
+            "لغز": [("شيء له أسنان ولا يعض، ما هو؟", "المشط"), ("ما الشيء الذي يمشي بلا أرجل؟", "الوقت"), ("ما الذي كلما أخذت منه كبر؟", "الحفرة")],
+            "حظي": ["حظك اليوم ممتاز، جرّب شيئاً جديداً!", "الحظ يبتسم لك، لا تتردد.", "يوم هادئ وجميل بانتظارك.", "مفاجأة لطيفة قد تصلك قريباً."],
+            "مزاج": ["مزاجك اليوم: فرح وطاقة إيجابية 😄", "مزاجك اليوم: هدوء وراحة 🌿", "مزاجك اليوم: مغامرة وحماس 🔥", "مزاجك اليوم: ضحك وسوالف 😂"],
+        }
+        value=secrets.choice(options[command])
+        if command == "لغز":
+            question, answer=value
+            self.send_room_text(room, f"🧩 لغز @{sender}\n{question}\n✅ الإجابة: {answer}")
+        elif command == "تحدي":
+            self.send_room_text(room, f"🎯 تحدي @{sender}: {value}")
+        else:
+            self.send_room_text(room, f"✨ {command} @{sender}: {value}")
+        return True
+
     def handle_game_command(self, room, text, sender_name):
         raw=str(text or "").strip()
         if not raw or not sender_name: return False
@@ -7858,6 +7900,13 @@ class TalkinBot:
             self.game_help(room); return True
         if not _games_enabled_for_room(room):
             self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
+            return True
+        if game_low in ("زواج", "زوجه"):
+            return self._marriage_game(room, sender_name)
+        if game_low in ("تحدي", "لغز", "حظي", "مزاج"):
+            return self._fun_game(room, sender_name, game_low)
+        if game_low == "تسليه":
+            self.send_room_text(room, "🎉 ألعاب التسلية: زواج، تحدي، لغز، حظي، مزاج")
             return True
         if game_low in ("حصانه", "حصانه!"):
             return self._horse_game(room, sender_name)
@@ -10131,7 +10180,7 @@ class TalkinBot:
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لتشغيل الأغاني.\n{_verification_notice()}")
                 return
-            if self.handle_music_command(room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False):
+            if self.handle_music_command(room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False, with_reactions=False):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
@@ -10337,7 +10386,7 @@ class TalkinBot:
                         self.share_last_music(frm, m_share.group(1))
                         return
                     if body.strip().startswith(".تشغيل "):
-                        if self.handle_music_command(self.room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False):
+                        if self.handle_music_command(self.room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False, with_reactions=False):
                             return
                     if body.strip().lower().startswith(".sa "):
                         if self.handle_music_command(self.room, body, frm):
