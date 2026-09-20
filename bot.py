@@ -1672,7 +1672,7 @@ def _looks_like_admin_command(text):
         "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "+sr@", "sr@",
-        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "توثيق الكل", "وثق الكل", "verify",
+        "swc", "mf@", "+mf@", "-mf@", "l@mf", "clear@mf", "amf@", "l@mfb", "mr@", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "توثيق الكل", "وثق الكل", "verify",
     )
     return low.startswith(prefixes)
 
@@ -3255,6 +3255,7 @@ class TalkinBot:
         # was accepted by the room server.
         self.pending_admin_actions = {}
         self.pending_admin_lock = threading.Lock()
+        self.last_admin_actions = {}
         # Reaction/publish state must exist before any background music or
         # image-publish worker can write to it.
         self.reaction_targets = {}
@@ -3691,11 +3692,69 @@ class TalkinBot:
         return [text] if text else [""]
 
     def _send_text_packets(self, packet_type: str, text: str, **kwargs):
-        # Normal replies remain one complete message. Only help menus use the
-        # explicit line-based batching in _send_help_chunks below.
+        """Send every textual result in safe ordered chunks, like A3.
+
+        Talkin can close the WebSocket when a large result is sent as one
+        protobuf packet.  All text responses therefore use the same line-based
+        batching rule as the A3 command: short packets, preserved order, and
+        no loss of lines.
+        """
+        text = str(text or "")
+        if not text:
+            return True
+        limit = 185
+        max_lines = 10
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if not lines:
+            lines = [text[:limit]]
+        chunks = []
+        current = ""
+        count = 0
+        for line in lines:
+            # A single unusually long line is split too, so no result can
+            # produce an oversized packet.
+            while len(line) > limit:
+                piece = line[:limit]
+                if current:
+                    chunks.append(current)
+                    current = ""
+                    count = 0
+                chunks.append(piece)
+                line = line[limit:]
+            if not line:
+                continue
+            candidate = line if not current else current + "\n" + line
+            if current and (len(candidate) > limit or count >= max_lines):
+                chunks.append(current)
+                current = line
+                count = 1
+            else:
+                current = candidate
+                count += 1
+        if current:
+            chunks.append(current)
+        # Long results are paginated.  Only the first page is sent now; the
+        # user can type Ns to receive the next page.  This prevents a large
+        # result from flooding the room or closing the websocket.
+        if len(chunks) > 1:
+            if not hasattr(self, "_result_pages"):
+                self._result_pages = {}
+            room_key = str(kwargs.get("room") or "")
+            user_key = str(kwargs.get("to") or "")
+            key = (str(packet_type), room_key, user_key)
+            self._result_pages[key] = {
+                "pages": chunks,
+                "part": 1,
+                "created": time.time(),
+                "kwargs": dict(kwargs),
+            }
+            chunk = chunks[0] + "\n\n📌 للقائمة التالية اكتب Ns"
+        else:
+            chunk = chunks[0]
+
         payload = dict(kwargs)
         payload["type_"] = "text"
-        payload["body"] = str(text or "")
+        payload["body"] = chunk
         self.send_query(encode_query(packet_type, **payload))
         return True
 
@@ -3836,6 +3895,7 @@ class TalkinBot:
                 "room": room, "target": target, "role": expected_role,
                 "requester": requester, "created_at": time.time(), "announced": False,
                 "announce_room": bool(announce_room),
+                "previous_role": self.room_users.get(room, {}).get(target),
             }
         labels = {
             "kicked": "طرد",
@@ -5687,10 +5747,8 @@ class TalkinBot:
                 self.fixed_game_waiting[game_name]={"user":sender,"room":room,"created":time.time(),"reserved":True,"prize":prize}
             else:
                 return True
-        # The opening/challenge message belongs only to the room where the
-        # player started the game. Do not spam the other rooms. The final
-        # winner/loser result is still handled by _fixed_game_result() and
-        # is sent only to the rooms of the two participants.
+        # إعلان بداية الألعاب الخمس يكون في الغرفة التي بدأت منها اللعبة فقط.
+        # لا نرسل رسالة البحث عن منافس إلى جميع الغرف.
         self.send_room_text(room, challenge)
         return True
 
@@ -7527,6 +7585,55 @@ class TalkinBot:
             return True
         return False
 
+    def _filter_list_key(self, room, sender):
+        return (str(room or ""), _norm_user(sender))
+
+    def _build_filter_list_pages(self, words):
+        """Build short filter-word pages like A3, keeping every packet under 200 chars."""
+        clean=[]
+        seen=set()
+        for word in words or []:
+            w=str(word or "").strip()
+            k=_norm_filter_text(w)
+            if w and k and k not in seen:
+                seen.add(k); clean.append(w)
+        pages=[]; current=[]
+        for w in clean:
+            # Keep the visible list compact enough for Talkin's room/private packet limit.
+            if len(current) >= 7:
+                pages.append(current); current=[]
+            candidate=current + [w]
+            body="\n".join(f"{i}. {x}" for i,x in enumerate(candidate,1))
+            header="🚫 كلمات الفلتر\n━━━━━━━━━━━━\n"
+            if len(header)+len(body)+len("\n\n📌 للقائمة التالية اكتب Ns") > 185 and current:
+                pages.append(current); current=[w]
+            else:
+                current=candidate
+        if current: pages.append(current)
+        return pages
+
+    def _send_filter_list_page(self, room, sender, is_private, part=1):
+        state=getattr(self, "_filter_list_state", {}).get(self._filter_list_key(room,sender))
+        if not state:
+            return False
+        pages=state.get("pages") or []
+        if not pages:
+            text="🚫 كلمات الفلتر\n━━━━━━━━━━━━\n📭 قائمة الفلتر فارغة حالياً."
+        else:
+            idx=max(1,min(int(part),len(pages)))-1
+            lines=["🚫 كلمات الفلتر", "━━━━━━━━━━━━"]
+            lines.extend(f"{i}. {w}" for i,w in enumerate(pages[idx],1))
+            if idx < len(pages)-1:
+                lines.append("\n📌 للقائمة التالية اكتب Ns")
+            else:
+                lines.append("\n✅ انتهت قوائم كلمات الفلتر.")
+            text="\n".join(lines)
+        if is_private:
+            return self._send_text_packets("chat_message", text, to=sender)
+        if room:
+            return self._send_text_packets("room_message", text, room=room)
+        return False
+
     def _send_help_section(self, room=None, private_to=None, page=1, part=1):
         sections = _help_sections_from_messages()
         page_sections = sections.get(int(page), [])
@@ -7605,6 +7712,53 @@ class TalkinBot:
             return True
         if _body_low in ("ns", "n", "التالي", "القائمة التالية", "next"):
             key = (str(room), _norm_user(sender))
+            # Filter-word navigation has priority over A1..A6 navigation.
+            filter_state = getattr(self, "_filter_list_state", {}).get(self._filter_list_key(room, sender))
+            if filter_state:
+                pages = filter_state.get("pages") or []
+                part = int(filter_state.get("part", 1) or 1)
+                if part < len(pages):
+                    part += 1
+                    filter_state["part"] = part
+                    self._send_filter_list_page(room, sender, is_private, part)
+                else:
+                    if is_private:
+                        self.send_private_text(sender, "✅ انتهت قوائم كلمات الفلتر.\n📌 أرسل l@mf لعرضها من البداية.")
+                    elif room:
+                        self.send_room_text(room, "✅ انتهت قوائم كلمات الفلتر.\n📌 أرسل l@mf لعرضها من البداية.")
+                return True
+
+            # Generic long-result navigation. Any command that produced more
+            # than one safe text page is continued with Ns.
+            result_pages = getattr(self, "_result_pages", {})
+            result_key_room = str(room or "")
+            result_key_user = str(sender or "") if is_private else ""
+            result_key = ("chat_message" if is_private else "room_message", result_key_room, result_key_user)
+            result_state = result_pages.get(result_key)
+            if result_state:
+                pages = result_state.get("pages") or []
+                part = int(result_state.get("part", 1) or 1)
+                if part < len(pages):
+                    part += 1
+                    result_state["part"] = part
+                    chunk = pages[part - 1]
+                    if part < len(pages):
+                        chunk += "\n\n📌 للقائمة التالية اكتب Ns"
+                    else:
+                        chunk += "\n\n✅ انتهت القوائم."
+                    payload = dict(result_state.get("kwargs") or {})
+                    payload["type_"] = "text"
+                    payload["body"] = chunk
+                    self.send_query(encode_query("chat_message" if is_private else "room_message", **payload))
+                else:
+                    result_pages.pop(result_key, None)
+                    msg = "✅ انتهت القوائم.\n📌 أرسل الأمر من جديد لعرض النتائج من البداية."
+                    if is_private:
+                        self.send_private_text(sender, msg)
+                    elif room:
+                        self.send_room_text(room, msg)
+                return True
+
             # ns only works after the user explicitly opened a category with a1..a6.
             # Never default to a1, otherwise a bare ns in a room would expose admin help.
             if key not in self.help_pages:
@@ -7650,8 +7804,10 @@ class TalkinBot:
         security_command = bool(
             re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I)
             or re.match(r"^mr@\d+$", str(body or "").strip(), re.I)
-            or str(body or "").strip().casefold() in {"حماية", "l@mfb"}
+            or str(body or "").strip().casefold() in {"حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "l@mfb"}
             or re.match(r"^amf@.+$", str(body or "").strip(), re.I)
+            or re.match(r"^l@mfb$", str(body or "").strip(), re.I)
+            or re.match(r"^mr@\d+$", str(body or "").strip(), re.I)
         )
         join_command = bool(re.match(r"^دخول@.+$", str(body or "").strip(), re.I))
         verification_manager_command = _is_verification_manager_command(body)
@@ -7816,9 +7972,15 @@ class TalkinBot:
             return True
 
         # New master protection menu.
-        if low == "حماية":
-            if not _is_master_name(sender): return True
-            self._pending_protection_number[_norm_user(sender)] = {"room":room,"created":time.time()}
+        if low in ("حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه"):
+            if not _is_master_name(sender):
+                self.send_private_text(sender, "🚫 أمر الحماية مخصص للماستر.")
+                return True
+            target_room = str(room or self.room or "").strip()
+            if not target_room:
+                self.send_private_text(sender, "⚠️ أرسل أمر حماية داخل الغرفة التي تريد حمايتها.")
+                return True
+            self._pending_protection_number[_norm_user(sender)] = {"room":target_room,"created":time.time()}
             self.send_private_text(sender,
                 "🛡️ حماية الغرفة\n"
                 "1️⃣ تشغيل حماية الغرفة من السب\n"
@@ -7828,33 +7990,46 @@ class TalkinBot:
                 "5️⃣ تشغيل حماية الغرفة من الدخول والخروج\n"
                 "6️⃣ إيقاف حماية الغرفة من الدخول والخروج\n"
                 "7️⃣ تعيين عدد الرسائل للحماية من الفلود\n\n"
-                "أرسل رقم الخيار الآن.")
+                "📌 أرسل رقم الخيار الآن.")
             return True
-        if _norm_user(sender) in self._pending_protection_number and low.isdigit():
-            st=self._pending_protection_number.get(_norm_user(sender),{})
+
+        # Option 7 has priority over numeric menu choices: otherwise a limit
+        # such as 3 would accidentally be interpreted as option 3.
+        protection_key = _norm_user(sender)
+        st=self._pending_protection_number.get(protection_key,{})
+        if st.get("awaiting_number") and re.fullmatch(r"\d+",low):
+            try:
+                limit=int(low)
+            except Exception:
+                limit=0
+            if not 2 <= limit <= 50:
+                self.send_private_text(sender,"⚠️ أرسل رقماً من 2 إلى 50 فقط.")
+                return True
+            target_room=str(st.get("room") or room or self.room or "").strip()
+            _save_room_protection(target_room,repeat_limit=limit)
+            _save_room_moderation(target_room,repeat_limit=limit)
+            self._pending_protection_number.pop(protection_key,None)
+            self.send_private_text(sender,f"✅ تم اعتماد حد الفلود: {limit} رسائل متكررة في الغرفة: {target_room}")
+            return True
+
+        if protection_key in self._pending_protection_number and low.isdigit():
+            st=self._pending_protection_number.get(protection_key,{})
             if time.time()-float(st.get("created",0))>180:
-                self._pending_protection_number.pop(_norm_user(sender),None)
+                self._pending_protection_number.pop(protection_key,None)
             else:
-                n=int(low); target_room=str(st.get("room") or room or "").strip()
+                n=int(low); target_room=str(st.get("room") or room or self.room or "").strip()
                 if n in range(1,7):
-                    cfg=_room_protection_cfg(target_room)
-                    names={1:("swear",True,"🛡️ تم تشغيل حماية الغرفة من السب."),2:("swear",False,"⛔ تم إيقاف حماية الغرفة من السب."),3:("flood",True,"🛡️ تم تشغيل حماية الغرفة من الفلود."),4:("flood",False,"⛔ تم إيقاف حماية الغرفة من الفلود."),5:("joinleave",True,"🛡️ تم تشغيل حماية الدخول والخروج."),6:("joinleave",False,"⛔ تم إيقاف حماية الدخول والخروج.")}[n]
+                    names={1:("swear",True,"🛡️ تم تشغيل حماية الغرفة من السب."),2:("swear",False,"⛔ تم إيقاف حماية الغرفة من السب."),3:("flood",True,"🛡️ تم تشغيل حماية الغرفة من الفلود."),4:("flood",False,"⛔ تم إيقاف حماية الغرفة من الفلود."),5:("joinleave",True,"🛡️ تم تشغيل حماية الغرفة من الدخول والخروج."),6:("joinleave",False,"⛔ تم إيقاف حماية الغرفة من الدخول والخروج.")}[n]
                     _save_room_protection(target_room, **{names[0]:names[1]})
-                    self._pending_protection_number.pop(_norm_user(sender),None)
+                    self._pending_protection_number.pop(protection_key,None)
                     self.send_private_text(sender,names[2]+f"\n🏠 الغرفة: {target_room}")
                     return True
                 if n==7:
-                    self._pending_protection_number[_norm_user(sender)]={"room":target_room,"created":time.time(),"awaiting_number":True}
+                    self._pending_protection_number[protection_key]={"room":target_room,"created":time.time(),"awaiting_number":True}
                     self.send_private_text(sender,"🔢 أرسل عدد الرسائل المتكررة المسموح بها قبل الحظر (من 2 إلى 50).")
                     return True
-        st=self._pending_protection_number.get(_norm_user(sender),{})
-        if st.get("awaiting_number") and re.fullmatch(r"\d+",low):
-            limit=max(2,min(50,int(low))); target_room=str(st.get("room") or room or "")
-            _save_room_protection(target_room,repeat_limit=limit)
-            _save_room_moderation(target_room,repeat_limit=limit)
-            self._pending_protection_number.pop(_norm_user(sender),None)
-            self.send_private_text(sender,f"✅ تم اعتماد حد الفلود: {limit} رسائل متكررة في الغرفة {target_room}.")
-            return True
+                self.send_private_text(sender,"⚠️ اختر رقماً من 1 إلى 7.")
+                return True
         # Filter exception: amf@username
         m_amf=re.fullmatch(r"amf@(.+)",text,re.I)
         if m_amf:
@@ -8150,10 +8325,12 @@ class TalkinBot:
                 return True
             if low == "l@mf":
                 words = sorted(self.banned_words, key=lambda x: _norm_filter_text(x))
-                if words:
-                    self.send_private_text(sender, "🚫 كلمات الفلتر:\n" + "\n".join(f"• {w}" for w in words))
-                else:
-                    self.send_private_text(sender, "🚫 قائمة الفلتر فارغة حالياً.")
+                if not hasattr(self, "_filter_list_state"):
+                    self._filter_list_state = {}
+                key = self._filter_list_key(room, sender)
+                pages = self._build_filter_list_pages(words)
+                self._filter_list_state[key] = {"pages": pages, "part": 1, "created": time.time()}
+                self._send_filter_list_page(room, sender, is_private, 1)
                 return True
 
         # Joining a room: ask the master for bot language first.
@@ -8498,6 +8675,23 @@ class TalkinBot:
                 self.send_room_text(active_room, f"🚫 @{target} تم حظره بسبب الإساءة.")
                 self.request_admin_action(active_room, target, "ban", sender)
             return True
+        if low == ".u":
+            if not _is_master_name(sender):
+                return True
+            undo = self.last_admin_actions.get(_norm_user(sender))
+            if not undo:
+                self.send_private_text(sender, "📭 لا يوجد إجراء إداري مؤكد يمكن التراجع عنه.")
+                return True
+            target_room = str(undo.get("room") or room or "").strip()
+            target_user = str(undo.get("target") or "").strip().lstrip("@")
+            inverse = str(undo.get("inverse") or "member").strip().lower()
+            if not target_room or not target_user:
+                self.send_private_text(sender, "❌ تعذر تحديد آخر إجراء للتراجع عنه.")
+                return True
+            if self.request_admin_action(target_room, target_user, inverse, sender):
+                self.send_private_text(sender, f"↩️ جاري التراجع عن آخر إجراء: @{target_user}")
+            return True
+
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
             target=m.group(2).lstrip("@").strip()
@@ -8879,6 +9073,23 @@ class TalkinBot:
                 with self.pending_admin_lock:
                     pending = self.pending_admin_actions.pop(key, None)
                 if pending:
+                    requester = str(pending.get("requester") or "").strip()
+                    inverse = {
+                        "kicked": "member",
+                        "outcast": "member",
+                        "member": pending.get("previous_role") or "outcast",
+                        "admin": pending.get("previous_role") or "member",
+                        "owner": pending.get("previous_role") or "member",
+                    }.get(changed_role, "member")
+                    if requester and _is_master_name(requester):
+                        self.last_admin_actions[_norm_user(requester)] = {
+                            "room": pending.get("room") or room,
+                            "target": pending.get("target") or changed_user,
+                            "operation": pending.get("role"),
+                            "confirmed_role": changed_role,
+                            "inverse": inverse,
+                            "created_at": time.time(),
+                        }
                     labels = {
                         "kicked": f"✅ أكد الخادم طرد @{changed_user} من الغرفة {room}.",
                         "outcast": f"✅ أكد الخادم حظر @{changed_user} في الغرفة {room}.",
@@ -8946,11 +9157,10 @@ class TalkinBot:
                     advice = "الغرفة تطلب تحققاً لا يستطيع البوت إكماله آلياً."
                 notice=f"{reason_text}: {room}\n💡 {advice}"
                 requested_by = str((pending_join or {}).get("requested_by", "") or "").strip()
-                # Automatic room restoration has no requester. Do not send
-                # a blocked-room message on every Railway restart. Only an
-                # explicit دخول@اسم_الغرفة request may receive the notice,
-                # and it must go to the requester.
-                recipient = requested_by
+                recipient = requested_by or (username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER)
+                # The blocked-room notice belongs to the person who sent
+                # دخول@اسم_الغرفة. Do not send this notification privately
+                # to BOT_MASTER as an extra message.
                 if recipient and blocked_room not in self._blocked_room_notices:
                     self.send_private_text(recipient, notice)
                     self._blocked_room_notices.add(blocked_room)
@@ -9342,22 +9552,7 @@ class TalkinBot:
                         parts = body.split(None, 1)
                         cmd = parts[0].lower() if parts else ""
                         arg = parts[1].strip() if len(parts) == 2 else ""
-                        # Room-issued دخول@ commands use the same language
-                        # selection flow as private commands.
-                        pending_room_lang = getattr(self, "_pending_room_language", {}).get(_norm_user(frm))
-                        if pending_room_lang and cmd in ("1", "2"):
-                            target = str(pending_room_lang.get("room") or "").strip()
-                            lang = "ar" if cmd == "1" else "en"
-                            self._pending_room_language.pop(_norm_user(frm), None)
-                            if not hasattr(self, "room_languages"):
-                                self.room_languages = {}
-                            self.room_languages[_norm_room(target)] = lang
-                            self.join_room(target, force=True, requested_by=frm)
-                            self.send_private_text(
-                                frm,
-                                ("⏳ تم اختيار العربية، جاري دخول الغرفة: " if lang == "ar" else "⏳ English selected, joining room: ") + target,
-                            )
-                        elif body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
+                        if body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
                             if body.strip().casefold() == "تشغيل الدعوات":
                                 self.invites_enabled = True
                                 self.send_private_text(frm, "✅ تم تشغيل الدعوات.")
@@ -9402,15 +9597,12 @@ class TalkinBot:
                                 self._blocked_room_reasons.pop(blocked_room, None)
                                 self._blocked_room_notices.discard(blocked_room)
                                 self._save_blocked_rooms()
-                            if not hasattr(self, "_pending_room_language"):
-                                self._pending_room_language = {}
-                            self._pending_room_language[_norm_user(frm)] = {
-                                "room": target_room,
-                                "created": time.time(),
-                            }
+                            joined = self.join_room(target_room, force=True, requested_by=frm)
                             self.send_private_text(
                                 frm,
-                                "🌐 اختر لغة البوت للغرفة\n1️⃣ عربي\n2️⃣ English\n\nأرسل 1 أو 2.",
+                                f"⏳ تمت إعادة محاولة دخول الغرفة: {target_room}. انتظر تأكيد الخادم."
+                                if joined else
+                                f"⚠️ تعذر إرسال طلب دخول الغرفة: {target_room}. تحقق من الاسم والصلاحية.",
                             )
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
