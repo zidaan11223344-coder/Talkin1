@@ -8942,10 +8942,11 @@ class TalkinBot:
                     advice = "الغرفة تطلب تحققاً لا يستطيع البوت إكماله آلياً."
                 notice=f"{reason_text}: {room}\n💡 {advice}"
                 requested_by = str((pending_join or {}).get("requested_by", "") or "").strip()
-                recipient = requested_by or (username if username and _norm_user(username) != _norm_user(BOT_ID) else BOT_MASTER)
-                # The blocked-room notice belongs to the person who sent
-                # دخول@اسم_الغرفة. Do not send this notification privately
-                # to BOT_MASTER as an extra message.
+                # Automatic room restoration has no requester. Do not send
+                # a blocked-room message on every Railway restart. Only an
+                # explicit دخول@اسم_الغرفة request may receive the notice,
+                # and it must go to the requester.
+                recipient = requested_by
                 if recipient and blocked_room not in self._blocked_room_notices:
                     self.send_private_text(recipient, notice)
                     self._blocked_room_notices.add(blocked_room)
@@ -9337,7 +9338,22 @@ class TalkinBot:
                         parts = body.split(None, 1)
                         cmd = parts[0].lower() if parts else ""
                         arg = parts[1].strip() if len(parts) == 2 else ""
-                        if body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
+                        # Room-issued دخول@ commands use the same language
+                        # selection flow as private commands.
+                        pending_room_lang = getattr(self, "_pending_room_language", {}).get(_norm_user(frm))
+                        if pending_room_lang and cmd in ("1", "2"):
+                            target = str(pending_room_lang.get("room") or "").strip()
+                            lang = "ar" if cmd == "1" else "en"
+                            self._pending_room_language.pop(_norm_user(frm), None)
+                            if not hasattr(self, "room_languages"):
+                                self.room_languages = {}
+                            self.room_languages[_norm_room(target)] = lang
+                            self.join_room(target, force=True, requested_by=frm)
+                            self.send_private_text(
+                                frm,
+                                ("⏳ تم اختيار العربية، جاري دخول الغرفة: " if lang == "ar" else "⏳ English selected, joining room: ") + target,
+                            )
+                        elif body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
                             if body.strip().casefold() == "تشغيل الدعوات":
                                 self.invites_enabled = True
                                 self.send_private_text(frm, "✅ تم تشغيل الدعوات.")
@@ -9382,12 +9398,15 @@ class TalkinBot:
                                 self._blocked_room_reasons.pop(blocked_room, None)
                                 self._blocked_room_notices.discard(blocked_room)
                                 self._save_blocked_rooms()
-                            joined = self.join_room(target_room, force=True, requested_by=frm)
+                            if not hasattr(self, "_pending_room_language"):
+                                self._pending_room_language = {}
+                            self._pending_room_language[_norm_user(frm)] = {
+                                "room": target_room,
+                                "created": time.time(),
+                            }
                             self.send_private_text(
                                 frm,
-                                f"⏳ تمت إعادة محاولة دخول الغرفة: {target_room}. انتظر تأكيد الخادم."
-                                if joined else
-                                f"⚠️ تعذر إرسال طلب دخول الغرفة: {target_room}. تحقق من الاسم والصلاحية.",
+                                "🌐 اختر لغة البوت للغرفة\n1️⃣ عربي\n2️⃣ English\n\nأرسل 1 أو 2.",
                             )
                         elif cmd in ("خروج", "leave", "exit"):
                             if arg:
