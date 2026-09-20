@@ -3521,7 +3521,22 @@ class TalkinBot:
             data = _ensure_replies_file()
             self.auto_replies_enabled = bool(data.get("auto_replies_enabled", True))
             raw = data.get("auto_replies", {})
-            self.auto_replies = raw if isinstance(raw, dict) else {}
+            fixed = {}
+            if isinstance(raw, dict):
+                for k,v in raw.items():
+                    key=str(k).strip().casefold()
+                    if isinstance(v, dict):
+                        replies=v.get("replies")
+                        if replies is None and "reply" in v:
+                            replies=v.get("reply")
+                        if isinstance(replies, str):
+                            replies=[replies]
+                        fixed[key]={"trigger":str(v.get("trigger") or k),"replies":[str(x).strip() for x in (replies or []) if str(x).strip()]}
+                    elif isinstance(v, str):
+                        fixed[key]={"trigger":str(k),"replies":[v]}
+                self.auto_replies = fixed
+            else:
+                self.auto_replies = {}
         except Exception:
             self.auto_replies_enabled, self.auto_replies = True, {}
         try:
