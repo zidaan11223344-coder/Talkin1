@@ -6582,8 +6582,8 @@ class TalkinBot:
                 "🍀 حظاً أوفر في المحاولة القادمة!\n"
                 "━━━━━━━━━━━━━━"
             )
-            for target_room in (self._active_rooms() or [room]):
-                self.send_room_text(target_room, loss_text)
+            # محاولة الحصول على المليون تبقى داخل الغرفة التي أُرسلت منها.
+            self.send_room_text(room, loss_text)
             return True
         self._game_award(sender_name, reward)
         winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
