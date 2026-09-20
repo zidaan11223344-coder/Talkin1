@@ -3786,7 +3786,9 @@ class TalkinBot:
             lines.append("➡️ اكتب ns لعرض القائمة التالية")
         else:
             lines.append("✅ هذه آخر قائمة")
-        self.send_private_text(sender, "\n".join(lines))
+        page_text = "\n".join(lines)
+        payload = {"type_": "text", "body": page_text}
+        self.send_query(encode_query("chat_message", to=sender, **payload))
         return True
 
     def _send_sr_reply_page(self, sender: str, page: int = 1):
@@ -3826,8 +3828,10 @@ class TalkinBot:
             lines.append("━━━━━━━━━━━━")
             lines.append("✅ هذه آخر قائمة")
 
-        # القائمة الواحدة رسالة واحدة؛ الحد العام للرسائل الطويلة يبقى فعالاً لباقي البوت.
-        self.send_private_text(sender, "\n".join(lines))
+        # القائمة الواحدة هي رسالة واحدة فعلية؛ لا تمر عبر المقسّم العام.
+        page_text = "\n".join(lines)
+        payload = {"type_": "text", "body": page_text}
+        self.send_query(encode_query("chat_message", to=sender, **payload))
         return True
 
     def _send_text_packets(self, packet_type: str, text: str, **kwargs):
@@ -8598,7 +8602,8 @@ class TalkinBot:
         count = str(event.get(23, "") or "").strip()
         reconnected = str(event.get(24, "") or "").strip()
         # Do not log room message contents, usernames, room names, or media events.
-        if (not is_ns_navigation) and self._is_duplicate_incoming(
+        master_no_id = _is_master_name(frm) and not event_id
+        if (not is_ns_navigation) and (not master_no_id) and self._is_duplicate_incoming(
             "room",
             (event_type, room, frm, to, body, str(event.get(7, "") or "")),
             event_id,
@@ -8941,6 +8946,12 @@ class TalkinBot:
         self.last_messages[room].append((frm, body, event_id))
         self.last_messages[room] = self.last_messages[room][-50:]
 
+        # Management commands always have priority over automatic replies.
+        # This prevents a reply trigger such as "بوت"/"أنا" from swallowing
+        # l@sr, l@mf, ns, and other bot commands.
+        if self._handle_management_command(room, body, frm):
+            return
+
         # Exact-match automatic replies.
         if self.auto_replies_enabled:
             ar = self.auto_replies.get(body.strip().casefold())
@@ -8951,11 +8962,19 @@ class TalkinBot:
                 else:
                     reply = str(raw_reply)
                 reply = reply.replace("{username}", frm).replace("{room}", room)
-                self.send_room_text(room, reply)
+                # Always identify the person who triggered the reply. If the
+                # custom reply already starts with their name/@name, do not
+                # duplicate it.
+                clean_reply = reply.strip()
+                shown_name = str(frm or "").strip().lstrip("@")
+                if shown_name and clean_reply.casefold().lstrip().startswith((
+                    shown_name.casefold(), "@" + shown_name.casefold()
+                )):
+                    final_reply = clean_reply
+                else:
+                    final_reply = f"@{shown_name}، {clean_reply}" if shown_name else clean_reply
+                self.send_room_text(room, final_reply)
                 return
-
-        if self._handle_management_command(room, body, frm):
-            return
 
         if self._run_game_command_async(room, body, frm):
             return
@@ -9044,10 +9063,12 @@ class TalkinBot:
                                 self.log("[DIRECT-MESSAGE] failed", target, repr(exc))
                             return
 
-                    if (not _is_ns_command(body)) and self._is_duplicate_incoming(
+                    private_event_id = str(cm.get(41, "") or result.get("uid", "") or "")
+                    master_private_no_id = _is_master_name(frm) and not private_event_id
+                    if (not _is_ns_command(body)) and (not master_private_no_id) and self._is_duplicate_incoming(
                         "private",
                         (frm, body, media_url),
-                        str(cm.get(41, "") or result.get("uid", "") or ""),
+                        private_event_id,
                     ):
                         self.log("[DEDUP] ignored repeated private message")
                         return
