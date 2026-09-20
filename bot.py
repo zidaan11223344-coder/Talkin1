@@ -1268,6 +1268,20 @@ def _github_get_arbitrary_file(path):
         print(f"[GITHUB] read failed for {path}: {exc}", flush=True)
         return None
 
+def _has_auto_reply_entries(data):
+    """Return True only when a replies record contains actual reply entries."""
+    if not isinstance(data, dict):
+        return False
+    raw = data.get("auto_replies")
+    if not isinstance(raw, (dict, list)) or not raw:
+        raw = data.get("replies")
+    if isinstance(raw, dict):
+        return any(bool(value) for value in raw.values())
+    if isinstance(raw, list):
+        return bool(raw)
+    reserved = {"messages", "auto_replies", "auto_replies_enabled", "enabled", "version"}
+    return any(key not in reserved and bool(value) for key, value in data.items())
+
 def _github_put_file(local_path, data, sha=None):
     """Create or update a JSON file in GitHub reliably.
 
@@ -1345,7 +1359,7 @@ def _github_restore_or_seed_state():
                     # configured/canonical path and fall back to any match.
                     for candidate_path in _github_find_json_paths("replies.json"):
                         candidate = _github_get_arbitrary_file(candidate_path)
-                        if candidate not in (None, {}, []):
+                        if _has_auto_reply_entries(candidate):
                             remote = candidate
                             print(f"[GITHUB] replies source: {candidate_path}", flush=True)
                             break
@@ -2014,6 +2028,22 @@ def _ensure_replies_file():
         data = {}
     messages = data.get("messages") if isinstance(data.get("messages"), dict) else {}
     changed = False
+    if not _has_auto_reply_entries(data):
+        candidates = (
+            BASE_DIR / "bot_data" / "replies.json",
+            BASE_DIR / "data" / "replies.json",
+            BASE_DIR / "replies.json",
+            BASE_DIR / "auto_replies.json",
+        )
+        for candidate_path in candidates:
+            if candidate_path.resolve() == REPLIES_FILE.resolve():
+                continue
+            candidate = _load_local_json(candidate_path, {})
+            if _has_auto_reply_entries(candidate):
+                data = candidate
+                messages = data.get("messages") if isinstance(data.get("messages"), dict) else {}
+                changed = True
+                break
     for key, value in DEFAULT_REPLY_MESSAGES.items():
         if key not in messages:
             messages[key] = value
@@ -3576,10 +3606,14 @@ class TalkinBot:
         # as "@{username}".
         clean_name = str(username or "").strip().lstrip("@")
         text = str(template or "")
+        has_username_placeholder = "{username}" in text
         text = text.replace("@{username}", "{username}")
         text = text.replace("{username}", clean_name)
         text = text.replace("{room}", str(room or ""))
-        return text.replace("@@", "@")
+        text = text.replace("@@", "@").strip()
+        if clean_name and text and not has_username_placeholder:
+            text = f"{clean_name} {text}"
+        return text
 
     def _choose_auto_reply(self, trigger, username, room):
         """Return exactly ONE saved reply per trigger event.
@@ -9514,8 +9548,6 @@ class TalkinBot:
             return ""
 
     def _find_publish_filter_hit(self, text):
-        if not getattr(self, "moderation_enabled", True):
-            return None
         normalized = _norm_filter_text(text)
         if not normalized:
             return None
