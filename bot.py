@@ -1730,7 +1730,7 @@ def _looks_like_bot_command(text):
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
         ".u", "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
     )
@@ -5375,7 +5375,7 @@ class TalkinBot:
         detail=" | ".join(errors[-10:])
         raise RuntimeError("تعذر تنزيل ملف صوت من SoundCloud أو YouTube."+(f" تفاصيل: {detail[:1200]}" if detail else ""))
 
-    def handle_music_command(self,room,text,requester,private_to=""):
+    def handle_music_command(self,room,text,requester,private_to="",broadcast_all=True):
         raw=text.strip()
         if not raw.lower().startswith(".sa "): return False
         query=raw[4:].strip()
@@ -5409,7 +5409,7 @@ class TalkinBot:
                 # Music is broadcast to every room currently joined by the bot.
                 # Do not send a duplicate private song message to the requester.
                 self.reaction_targets[code] = {"publisher": requester, "kind": "music", "title": title, "description": title, "created_at": time.time()}
-                target_rooms=self._active_rooms()
+                target_rooms=self._active_rooms() if broadcast_all else [room]
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
                     self.send_room_media(target_room,url,"audio",duration)
@@ -9932,11 +9932,13 @@ class TalkinBot:
         # public URL in field 7 (url). If a master previously used `انشر`,
         # publish that image even when it was sent from a different room.
         if event_type == "image":
-            media_url = str(event.get(7, "") or "").strip()
+            media_url = str(event.get(7, "") or event.get(6, "") or event.get("url", "") or "").strip()
             if frm and frm != BOT_ID and media_url:
-                # Ignore ordinary room images silently. Only a pending publish
-                # request may consume an image, avoiding verification notices.
-                if _is_verified_user(frm) and self._handle_publish_media(room, frm, media_url):
+                # The pending publish record is the authorization. Do not add
+                # a second verification gate here: some servers identify the
+                # sender differently on media events, which used to make the
+                # image silently disappear after a valid انشر command.
+                if self._handle_publish_media(room, frm, media_url):
                     return
             return
 
@@ -10113,12 +10115,26 @@ class TalkinBot:
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
+        m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)\s+@?([^\s@]+)", body.strip(), re.I)
+        if m_share_ar:
+            self.share_last_music(frm, m_share_ar.group(1), room)
+            if not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, frm, is_private=False)
+            return
         m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
         if m_share:
             self.share_last_music(frm, m_share.group(1), room)
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
+        if body.strip().startswith(".تشغيل "):
+            if not is_verified:
+                self.send_room_text(room, f"🔒 @{frm} غير موثّق لتشغيل الأغاني.\n{_verification_notice()}")
+                return
+            if self.handle_music_command(room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False):
+                if not getattr(self, "_replaying_bot_action", False):
+                    self._remember_bot_action(room, body, frm, is_private=False)
+                return
         if body.strip().lower().startswith(".sa "):
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.\n{_verification_notice()}")
@@ -10280,10 +10296,11 @@ class TalkinBot:
                     # The primary bot does not show the master-service menu.
                     # That menu belongs exclusively to the standalone master
                     # account when MASTER_SERVICE_ENABLED is active.
-                    if body and media_url:
-                        if not _is_verified_user(frm):
-                            self.send_room_text(self.room, f"🔒 @{frm} يحتاج توثيقاً لاستخدام النشر.\n{_verification_notice()}")
-                            return
+                    if media_url:
+                        # A pending publish request is the authorization for
+                        # the image; let the media handler validate it rather
+                        # than rejecting it on a second private-message role
+                        # check.
                         if self._handle_publish_media(self.room, frm, media_url):
                             return
                     # Silently ignore master-only commands from everyone else.
@@ -10311,10 +10328,17 @@ class TalkinBot:
                     if body:
                         if self._handle_management_command(self.room, body, frm, is_private=True):
                             return
+                    m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)\s+@?([^\s@]+)", body.strip(), re.I)
+                    if m_share_ar:
+                        self.share_last_music(frm, m_share_ar.group(1))
+                        return
                     m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
                     if m_share:
                         self.share_last_music(frm, m_share.group(1))
                         return
+                    if body.strip().startswith(".تشغيل "):
+                        if self.handle_music_command(self.room, body.replace(".تشغيل ", ".sa ", 1), frm, broadcast_all=False):
+                            return
                     if body.strip().lower().startswith(".sa "):
                         if self.handle_music_command(self.room, body, frm):
                             return
