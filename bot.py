@@ -213,7 +213,7 @@ def _start_master_process():
         return False, "❌ ملف master_bot.py غير موجود بجانب البوت."
     with MASTER_PROCESS_LOCK:
         if MASTER_PROCESS is not None and MASTER_PROCESS.poll() is None:
-            return True, "ℹ️ الماستر يعمل بالفعل."
+            return True, "ℹ️ الخدمة مشغلة مسبقاً."
         env = os.environ.copy()
         env["MASTER_ID"] = master_id
         env["MASTER_PWD"] = master_pwd
@@ -244,7 +244,7 @@ def _start_master_process():
         code = MASTER_PROCESS.returncode
         MASTER_PROCESS = None
         return False, f"❌ توقفت خدمة الماستر مباشرة (رمز الخروج: {code}). راجع سجل الاستضافة."
-    return True, "✅ تم تشغيل الماستر."
+    return True, "✅ تم تشغيل الخدمة."
 
 def _stop_master_process():
     """Stop only the master_bot.py process started by this primary bot."""
@@ -253,7 +253,7 @@ def _stop_master_process():
         proc = MASTER_PROCESS
         MASTER_PROCESS = None
     if proc is None or proc.poll() is not None:
-        return True, "ℹ️ الماستر متوقف بالفعل."
+        return True, "ℹ️ الخدمة متوقفة مسبقاً."
     try:
         proc.terminate()
         try:
@@ -261,7 +261,7 @@ def _stop_master_process():
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=3)
-        return True, "✅ تم إيقاف الماستر."
+        return True, "✅ تم إيقاف الخدمة."
     except Exception as exc:
         return False, f"❌ تعذر إيقاف الماستر: {exc}"
 
@@ -1226,6 +1226,48 @@ def _github_list_state_files():
         print(f"[GITHUB] state listing failed: {exc}", flush=True)
         return []
 
+def _github_find_json_paths(filename):
+    """Find a JSON file anywhere in the backup repo (legacy-layout fallback)."""
+    if not GITHUB_SYNC_ENABLED:
+        return []
+    wanted = str(filename or "").strip().casefold()
+    if not wanted:
+        return []
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/git/trees/{GITHUB_BRANCH}"
+        response = requests.get(url, headers=_github_headers(), params={"recursive": "1"}, timeout=20)
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        tree = response.json().get("tree", [])
+        paths = []
+        for item in tree:
+            path = str(item.get("path") or "").strip()
+            if str(item.get("type") or "") == "blob" and path.casefold().rsplit("/", 1)[-1] == wanted:
+                paths.append(path)
+        configured = f"{GITHUB_DATA_DIR}/{wanted}".strip("/").casefold()
+        return sorted(set(paths), key=lambda x: (0 if x.casefold() == configured else 1 if x.casefold() == wanted else 2, x.casefold()))
+    except Exception as exc:
+        print(f"[GITHUB] json path discovery failed for {filename}: {exc}", flush=True)
+        return []
+
+def _github_get_arbitrary_file(path):
+    """Read one JSON file from an arbitrary path in the backup repository."""
+    if not GITHUB_SYNC_ENABLED:
+        return None
+    try:
+        response = requests.get(_github_url(str(path).lstrip("/")), headers=_github_headers(),
+                                params={"ref": GITHUB_BRANCH}, timeout=15)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        content = base64.b64decode(payload.get("content", "").replace("\n", "")).decode("utf-8")
+        return json.loads(content)
+    except Exception as exc:
+        print(f"[GITHUB] read failed for {path}: {exc}", flush=True)
+        return None
+
 def _github_put_file(local_path, data, sha=None):
     """Create or update a JSON file in GitHub reliably.
 
@@ -1297,6 +1339,16 @@ def _github_restore_or_seed_state():
             local = DATA_DIR / name
             try:
                 remote = _github_get_file(local)
+                if name == "replies.json":
+                    # Replies may live at bot_data/replies.json, replies.json,
+                    # or another legacy folder in Talkin4. Prefer the exact
+                    # configured/canonical path and fall back to any match.
+                    for candidate_path in _github_find_json_paths("replies.json"):
+                        candidate = _github_get_arbitrary_file(candidate_path)
+                        if candidate not in (None, {}, []):
+                            remote = candidate
+                            print(f"[GITHUB] replies source: {candidate_path}", flush=True)
+                            break
                 if remote is not None:
                     # GitHub is the durable source. Always restore a non-empty
                     # remote record when the local copy is empty or differs;
@@ -1967,15 +2019,46 @@ def _ensure_replies_file():
             messages[key] = value
             changed = True
     data["messages"] = messages
-    if not isinstance(data.get("auto_replies"), dict):
-        # Migrate the older auto_replies.json format once.
+
+    auto_replies = data.get("auto_replies")
+    if not isinstance(auto_replies, dict) or not auto_replies:
+        candidate = data.get("replies")
+        if isinstance(candidate, dict):
+            auto_replies = candidate
+            changed = True
+        elif isinstance(candidate, list):
+            converted = {}
+            for item in candidate:
+                if not isinstance(item, dict):
+                    continue
+                trigger = str(item.get("trigger") or item.get("word") or item.get("name") or "").strip()
+                replies = item.get("replies")
+                reply = str(item.get("reply") or "").strip()
+                if trigger and isinstance(replies, list):
+                    converted[trigger.casefold()] = {"trigger": trigger, "replies": replies}
+                elif trigger and reply:
+                    converted[trigger.casefold()] = {"trigger": trigger, "replies": [reply]}
+            if converted:
+                auto_replies = converted
+                changed = True
+        else:
+            reserved = {"messages", "auto_replies", "auto_replies_enabled", "enabled", "version"}
+            direct = {k: v for k, v in data.items() if k not in reserved and isinstance(v, (str, list, dict))}
+            if direct:
+                auto_replies = direct
+                changed = True
+
+    if not isinstance(auto_replies, dict):
+        # Migrate the older local auto_replies.json format once.
         legacy = _load_local_json(BASE_DIR / "auto_replies.json", {})
         legacy_replies = legacy.get("replies", {}) if isinstance(legacy, dict) else {}
-        data["auto_replies"] = legacy_replies if isinstance(legacy_replies, dict) else {}
-        data["auto_replies_enabled"] = bool(legacy.get("enabled", True)) if isinstance(legacy, dict) else True
+        auto_replies = legacy_replies if isinstance(legacy_replies, dict) else {}
+        if "auto_replies_enabled" not in data:
+            data["auto_replies_enabled"] = bool(legacy.get("enabled", True)) if isinstance(legacy, dict) else True
         changed = True
+    data["auto_replies"] = auto_replies
     if "auto_replies_enabled" not in data:
-        data["auto_replies_enabled"] = True
+        data["auto_replies_enabled"] = bool(data.get("enabled", True))
         changed = True
     if changed or not REPLIES_FILE.is_file():
         _save_local_json(REPLIES_FILE, data)
@@ -3684,6 +3767,9 @@ class TalkinBot:
             return
         room = str(pending.get("room") or room_norm).strip()
         requester = str(pending.get("requested_by") or "").strip()
+        self.known_rooms = {r for r in self.known_rooms if _norm_room(r) != _norm_room(room)}
+        self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != _norm_room(room)}
+        _save_persistent_rooms(self.known_rooms)
         self.log("[ROOM] join confirmation timeout:", room)
         if requester:
             self.send_private_text(
@@ -3703,9 +3789,20 @@ class TalkinBot:
         room = str(room or "").strip()
         if not room:
             return False
-        if _norm_room(room) in getattr(self, "blocked_rooms", set()) and not force:
-            self.log("[ROOM] join suppressed (bot is blocked):", room)
-            return False
+        room_norm = _norm_room(room)
+        # An explicit/forced join is always a fresh TalkinChat request. Clear
+        # only runtime failure markers so lifting a room ban or changing the
+        # bot role allows a new join packet to be sent immediately.
+        if force or requested_by:
+            stale = self._pending_room_joins.pop(room_norm, None)
+            if stale and stale.get("timer"):
+                try:
+                    stale["timer"].cancel()
+                except Exception:
+                    pass
+            self.blocked_rooms.discard(room_norm)
+            self._blocked_room_reasons.pop(room_norm, None)
+            self._blocked_room_notices.discard(room_norm)
         known_norm = {_norm_room(r) for r in getattr(self, "known_rooms", set())}
         connected_norm = {_norm_room(r) for r in getattr(self, "connected_rooms", set())}
         already_known = _norm_room(room) in known_norm
@@ -3722,11 +3819,16 @@ class TalkinBot:
                 return False
             self._last_join_sent[room] = now
         self.log("[ROOM] joining", room)
-        self._pending_room_joins[_norm_room(room)] = {
+        self._pending_room_joins[room_norm] = {
             "room": room,
             "started": time.time(),
             "requested_by": str(requested_by or "").strip(),
+            "fresh": bool(force or requested_by),
         }
+        # Send the join packet first and wait for TalkinChat's result. Never
+        # query occupants before confirmation; that can surface a stale
+        # unauthorized state and make the bot say "محظور" after permissions
+        # have already been fixed.
         self.send_query(encode_query("room_join", room=room, int_value=0, force_int_value=True))
         timer = threading.Timer(
             max(10.0, float(os.getenv("JOIN_CONFIRM_TIMEOUT_SECONDS", "20"))),
@@ -3736,9 +3838,9 @@ class TalkinBot:
         timer.daemon = True
         self._pending_room_joins[_norm_room(room)]["timer"] = timer
         timer.start()
-        self.known_rooms.add(room)
-        _save_persistent_rooms(self.known_rooms)
-        self.request_room_occupants(room)
+        # A room is persisted only after TalkinChat confirms you_joined or
+        # you_rejoined. A failed/blocked join therefore never becomes a saved
+        # exception or an automatic rejoin target.
         return True
 
     def request_room_occupants(self, room: str):
@@ -3984,8 +4086,11 @@ class TalkinBot:
         old_flag = getattr(self, "_replaying_bot_action", False)
         self._replaying_bot_action = True
         try:
-            # Use the same command pipeline used by normal incoming messages.
-            # The replay flag prevents .u from replacing the saved action with itself.
+            # Use the same TalkinChat command pipelines used by normal incoming
+            # messages. Service on/off lives one layer above management, so it
+            # must also be replayable by .u.
+            if self._handle_master_process_command(original_sender, command, is_private=is_private):
+                return True
             if self._handle_management_command(target_room, command, original_sender, is_private=is_private):
                 return True
             low = command.casefold()
@@ -4221,16 +4326,24 @@ class TalkinBot:
         if not is_private or not _is_master_name(sender):
             return False
         low = str(body or "").strip().casefold()
-        if low in ("تشغيل الماستر", "تشغيل الماستر@", "start master", "master on"):
+        if low in ("تشغيل الماستر", "تشغيل الماستر@", "تشغيل الخدمة", "تشغيل الخدمه", "تشغيل", "start master", "master on"):
+            before = _master_process_running()
             ok, msg = _start_master_process()
             self.send_private_text(sender, msg)
+            # Record only a real state change. A repeated تشغيل while already
+            # running is reported as already running and does not replace .u.
+            if ok and not before and not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(self.room, body, sender, is_private=True)
             return True
-        if low in ("ايقاف الماستر", "إيقاف الماستر", "ايقاف الماستر@", "إيقاف الماستر@", "stop master", "master off"):
+        if low in ("ايقاف الماستر", "إيقاف الماستر", "ايقاف الماستر@", "إيقاف الماستر@", "إيقاف الخدمة", "ايقاف الخدمة", "إيقاف الخدمه", "ايقاف الخدمه", "إيقاف", "ايقاف", "stop master", "master off"):
+            before = _master_process_running()
             ok, msg = _stop_master_process()
             self.send_private_text(sender, msg)
+            if ok and before and not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(self.room, body, sender, is_private=True)
             return True
-        if low in ("حالة الماستر", "حاله الماستر", "master status"):
-            self.send_private_text(sender, "🟢 الماستر يعمل." if _master_process_running() else "🔴 الماستر متوقف.")
+        if low in ("حالة الماستر", "حاله الماستر", "حالة الخدمة", "حاله الخدمة", "حالة الخدمه", "حاله الخدمه", "master status"):
+            self.send_private_text(sender, "🟢 الخدمة مشغلة." if _master_process_running() else "🔴 الخدمة متوقفة.")
             return True
         return False
 
@@ -9667,6 +9780,13 @@ class TalkinBot:
                 pending_join["timer"].cancel()
             self._blocked_room_reasons.pop(rnorm, None)
             self._blocked_room_notices.discard(rnorm)
+            if room:
+                self.known_rooms.add(room)
+                _save_persistent_rooms(self.known_rooms)
+                try:
+                    self.request_room_occupants(room)
+                except Exception as exc:
+                    self.log("[ROOM] occupants refresh after join failed:", repr(exc))
             requester = str((pending_join or {}).get("requested_by", "") or "").strip()
             if requester:
                 self.send_private_text(requester, f"✅ أكد الخادم دخول البوت إلى الغرفة: {room}")
