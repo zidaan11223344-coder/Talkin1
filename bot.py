@@ -8110,6 +8110,22 @@ class TalkinBot:
                 self.send_private_text(sender,"\n".join(lines))
             return True
 
+        m_unpublish_ban = re.match(r"^mpb@(.+)$", text.strip(), re.I)
+        if m_unpublish_ban:
+            if not _is_master_name(sender): return True
+            target = _norm_user(m_unpublish_ban.group(1).strip())
+            if not target:
+                self.send_private_text(sender, "❌ اكتب اسم المستخدم بعد mpb@.")
+                return True
+            current = set(getattr(self, "publish_banned_users", set()))
+            if target not in current:
+                self.send_private_text(sender, f"📭 @{target} غير موجود في قائمة الممنوعين من النشر.")
+                return True
+            current.discard(target)
+            self.publish_banned_users = _save_publish_banned_users(current)
+            self.send_private_text(sender, f"✅ تم فك منع النشر عن @{target}.\n📌 تم السماح له باستخدام انشر و انشر@الوصف من جديد.")
+            return True
+
         if low in ("تشغيل الحماية", "تشغيل الحمايه", "الحماية تشغيل", "الحمايه تشغيل"):
             if not room or not _room_manager(self, room, sender):
                 return True
