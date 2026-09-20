@@ -1985,14 +1985,21 @@ def _load_moderation_config():
     if not isinstance(moderation_data, dict):
         moderation_data = {}
 
-    words = mf_data.get("words")
-    if not isinstance(words, list):
-        words = moderation_data.get("words")
-        if isinstance(words, dict):
-            words = list(words.keys())
-        if not isinstance(words, list):
-            words = sorted(BANNED_WORDS)
-
+    # Merge ALL known filter sources instead of preferring the persistent
+    # mf.json blindly.  A mounted/persistent mf.json may contain an older
+    # list from a previous deployment, which otherwise hides newer words
+    # shipped in bot.py or moderation.json.
+    mf_words = mf_data.get("words", [])
+    if isinstance(mf_words, dict):
+        mf_words = list(mf_words.keys())
+    if not isinstance(mf_words, list):
+        mf_words = []
+    moderation_words = moderation_data.get("words", [])
+    if isinstance(moderation_words, dict):
+        moderation_words = list(moderation_words.keys())
+    if not isinstance(moderation_words, list):
+        moderation_words = []
+    words = list(BANNED_WORDS) + list(mf_words) + list(moderation_words)
     words = [str(w).strip() for w in words if str(w).strip() and _arabic_filter_word(w)]
     raw_enabled = mf_data.get("enabled", moderation_data.get("enabled", AUTO_BAN_WORDS))
     enabled = bool(raw_enabled) if isinstance(raw_enabled, (bool, int)) else AUTO_BAN_WORDS
@@ -9304,7 +9311,9 @@ class TalkinBot:
         # never activate filtering by itself. This keeps the filter completely
         # inactive until the master explicitly enables protection option 1.
         filter_enabled = bool(protection_cfg.get("swear", False))
-        filter_words = room_cfg["words"] or sorted(self.banned_words)
+        # Room-specific words are additive, not a replacement for the global
+        # filter. This prevents an old room list from hiding newly added words.
+        filter_words = list(room_cfg.get("words") or []) + list(self.banned_words)
         normalized_body = _norm_filter_text(body)
         hit = (
             next((w for w in filter_words
