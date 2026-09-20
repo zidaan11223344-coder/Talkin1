@@ -10,6 +10,8 @@ auto = replies["auto_replies"]
 assert len(auto) == 31
 for trigger in ("من انا", "من أنا", "اسمي", "لقبي"):
     assert trigger in auto and auto[trigger]["replies"]
+assert bot._auto_reply_key("من أنا؟") == bot._auto_reply_key("من انا")
+assert bot._auto_reply_key("لقبي؟") == bot._auto_reply_key("لقبي")
 
 with open(bot.MODERATION_FILE, encoding="utf-8") as handle:
     moderation = json.load(handle)
@@ -19,6 +21,9 @@ assert len(moderation["words"]) == 322
 obj = object.__new__(bot.TalkinBot)
 assert obj._render_auto_reply("الرد هنا", "@محمد", "غرفة") == "محمد الرد هنا"
 assert obj._render_auto_reply("@{username} الرد هنا", "@محمد", "غرفة") == "محمد الرد هنا"
+obj.auto_replies = auto
+assert obj._auto_reply_variants("من أنا؟")
+assert obj._auto_reply_variants("لقبي؟")
 obj.banned_words = {"كلمة سيئة"}
 obj.moderation_enabled = False
 assert obj._find_publish_filter_hit("هذا نص فيه كلمة سيئة") == "كلمة سيئة"

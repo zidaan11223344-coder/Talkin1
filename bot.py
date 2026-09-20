@@ -1747,6 +1747,13 @@ def _looks_like_bot_command(text):
         or normalized_low in normalized_games
     )
 
+def _auto_reply_key(value):
+    """Normalize an automatic-reply trigger for natural Arabic input."""
+    text = unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
+    text = text.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي"}))
+    text = re.sub(r"[؟?!.,،؛:]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
 def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
     prefixes = (
@@ -3554,7 +3561,7 @@ class TalkinBot:
             fixed = {}
             if isinstance(raw, dict):
                 for k,v in raw.items():
-                    key=str(k).strip().casefold()
+                    key=_auto_reply_key(k)
                     if isinstance(v, dict):
                         replies=v.get("replies")
                         if replies is None and "reply" in v:
@@ -3585,7 +3592,7 @@ class TalkinBot:
         _save_local_json(self.custom_welcomes_file, {"enabled": self.custom_welcome_enabled, "welcomes": self.custom_welcomes})
 
     def _auto_reply_variants(self, trigger):
-        item = self.auto_replies.get(str(trigger or "").strip().casefold())
+        item = self.auto_replies.get(_auto_reply_key(trigger))
         if isinstance(item, dict):
             raw = item.get("replies")
             if isinstance(raw, list):
@@ -3625,7 +3632,7 @@ class TalkinBot:
         variants = self._auto_reply_variants(trigger)
         if not variants:
             return ""
-        key = str(trigger or "").strip().casefold()
+        key = _auto_reply_key(trigger)
         state = getattr(self, "_auto_reply_cycle", {})
         signature = tuple(variants)
         entry = state.get(key) if isinstance(state, dict) else None
@@ -9419,7 +9426,7 @@ class TalkinBot:
         if m_sr and _is_master_name(sender):
             trigger, reply = m_sr.group(1).strip(), m_sr.group(2).strip()
             if trigger and reply:
-                key_sr=trigger.casefold()
+                key_sr=_auto_reply_key(trigger)
                 variants=self._auto_reply_variants(key_sr)
                 if reply not in variants:
                     variants.append(reply)
