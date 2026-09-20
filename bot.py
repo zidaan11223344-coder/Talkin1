@@ -3241,6 +3241,9 @@ class TalkinBot:
         self._incoming_seen = {}
         self._incoming_seen_lock = threading.Lock()
         self._management_command_seen = {}
+        # Runtime-cache maintenance is time-gated so it does not add work to
+        # every incoming message. It only limits temporary in-memory state.
+        self._last_cache_cleanup = 0.0
         # Live room membership cache: username -> role.  This is updated by
         # occupants_list and by user_joined/user_left room events.
         self.room_users = defaultdict(dict)
@@ -9421,7 +9424,70 @@ class TalkinBot:
         self.known_rooms.update(found)
         _save_persistent_rooms(self.known_rooms)
 
+    def _trim_runtime_caches(self):
+        """Keep temporary runtime caches bounded without changing bot behavior."""
+        now = time.time()
+        last = float(getattr(self, "_last_cache_cleanup", 0.0) or 0.0)
+        if now - last < 60.0:
+            return
+        self._last_cache_cleanup = now
+
+        # Management dedup only needs a short history.
+        seen = getattr(self, "_management_command_seen", None)
+        if isinstance(seen, dict):
+            cutoff = now - 120.0
+            for key, ts in list(seen.items()):
+                if float(ts or 0.0) < cutoff:
+                    seen.pop(key, None)
+            if len(seen) > 500:
+                self._management_command_seen = dict(list(seen.items())[-500:])
+
+        # Profile photo URLs are reusable, but an unattended bot can encounter
+        # thousands of different accounts over time. Keep a bounded cache.
+        photos = getattr(self, "user_photos", None)
+        if isinstance(photos, dict) and len(photos) > 5000:
+            self.user_photos = dict(list(photos.items())[-4000:])
+
+        # Reaction codes are temporary. Old codes no longer need to stay in RAM.
+        reactions = getattr(self, "reaction_targets", None)
+        if isinstance(reactions, dict):
+            cutoff = now - 6 * 3600.0
+            for key, info in list(reactions.items()):
+                created = float(info.get("created_at", 0.0) or 0.0) if isinstance(info, dict) else 0.0
+                if created and created < cutoff:
+                    reactions.pop(key, None)
+            if len(reactions) > 5000:
+                self.reaction_targets = dict(list(reactions.items())[-4000:])
+
+        # Pagination data is temporary and can otherwise retain large result
+        # lists indefinitely if a user never asks for the next page.
+        pages = getattr(self, "_result_pages", None)
+        if isinstance(pages, dict):
+            cutoff = now - 30 * 60.0
+            for key, info in list(pages.items()):
+                created = float(info.get("created", 0.0) or 0.0) if isinstance(info, dict) else 0.0
+                if created and created < cutoff:
+                    pages.pop(key, None)
+            if len(pages) > 200:
+                self._result_pages = dict(list(pages.items())[-150:])
+
+        # Game cooldowns only matter for a few seconds/minutes. Remove stale
+        # user keys so a long-running bot does not accumulate them forever.
+        for attr in ("game_cooldown", "board_game_cooldown"):
+            cache = getattr(self, attr, None)
+            if isinstance(cache, dict):
+                cutoff = now - 600.0
+                for key, ts in list(cache.items()):
+                    try:
+                        if float(ts or 0.0) < cutoff:
+                            cache.pop(key, None)
+                    except (TypeError, ValueError):
+                        cache.pop(key, None)
+                if len(cache) > 5000:
+                    setattr(self, attr, dict(list(cache.items())[-4000:]))
+
     def on_message(self, ws, message):
+        self._trim_runtime_caches()
         try:
             if isinstance(message, str):
                 self.log("[WS] unexpected text frame received")
