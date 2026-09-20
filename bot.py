@@ -163,6 +163,7 @@ STREAM_EXPERIMENTAL_ENABLED = os.getenv("STREAM_EXPERIMENTAL_ENABLED", "1") == "
 STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "stream_invite").strip()
 STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip()
 STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip()
+STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 # The current Talkin private-chat gateway displays type=audio as a text-only
 # message.  type=file delivers the actual downloadable MP3 to the recipient.
 PRIVATE_AUDIO_TYPE = os.getenv("PRIVATE_AUDIO_TYPE", "file").strip().lower() or "file"
@@ -4389,17 +4390,12 @@ class TalkinBot:
             self.log("[STREAM] experimental actions are not fully configured")
             return False
         try:
+            self._pending_live_tracks = getattr(self, "_pending_live_tracks", {})
+            self._pending_live_tracks[room] = {
+                "url": media_url, "duration": int(duration or 0), "created_at": time.time()
+            }
             self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
             self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
-            time.sleep(float(os.getenv("STREAM_ACCEPT_DELAY", "0.8")))
-            self.log("[STREAM] accept self invite", room, STREAM_ACCEPT_ACTION)
-            self.send_query(encode_query(STREAM_ACCEPT_ACTION, room=room, to=BOT_ID, value=BOT_ID))
-            time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
-            self.log("[STREAM] publish audio", room, STREAM_AUDIO_ACTION)
-            self.send_query(encode_query(
-                STREAM_AUDIO_ACTION, type_="audio", room=room, url=media_url,
-                length=str(max(0, int(duration or 0))),
-            ))
             return True
         except Exception as exc:
             self.log("[STREAM] experimental live flow failed:", repr(exc))
@@ -4408,6 +4404,39 @@ class TalkinBot:
     def _master_is_online(self):
         """Return the latest presence state known by this bot connection."""
         return bool(getattr(self, "master_online", False))
+
+    def _handle_stream_event(self, event):
+        """Accept a real you_invited event, then publish the queued track."""
+        if not STREAM_EXPERIMENTAL_ENABLED or not isinstance(event, dict):
+            return False
+        if str(event.get(1, "") or "").strip().casefold() != "you_invited":
+            return False
+        room_name = str(event.get(8, "") or "").strip()
+        room_id = str(event.get(6, "") or "").strip()
+        invite_id = str(event.get(5, "") or "").strip()
+        pending = getattr(self, "_pending_live_tracks", {}).get(room_name)
+        self.log("[STREAM] you_invited", room_name, "room_id=", room_id, "invite_id=", invite_id)
+        if not pending or not room_id or not invite_id:
+            self.log("[STREAM] no queued track for invitation", room_name)
+            return False
+        try:
+            self.log("[STREAM] accept invitation", STREAM_ACCEPT_ACTION)
+            self.send_query(encode_query(
+                STREAM_ACCEPT_ACTION, room=room_id, id_=invite_id, to=BOT_ID,
+                value=STREAM_ACCEPT_STATE, state=STREAM_ACCEPT_STATE,
+            ))
+            time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
+            self.log("[STREAM] publish queued audio", STREAM_AUDIO_ACTION, room_id)
+            self.send_query(encode_query(
+                STREAM_AUDIO_ACTION, type_="audio", room=room_id, id_=invite_id,
+                url=str(pending["url"]),
+                length=str(max(0, int(pending.get("duration") or 0))),
+            ))
+            self._pending_live_tracks.pop(room_name, None)
+            return True
+        except Exception as exc:
+            self.log("[STREAM] invitation accept/audio failed:", repr(exc))
+            return False
 
     def _master_service_menu(self, username: str):
         """Greeting/menu shown once per private conversation with the master."""
@@ -5497,8 +5526,10 @@ class TalkinBot:
             else:
                 self.send_private_text(sender, notice)
             return True
+        # Do not send a caption to the recipient: on this gateway the caption
+        # is often the only visible private message while the media card is
+        # hidden. The recipient must receive the audio/file packet alone.
         time.sleep(0.45)
-        self.send_private_text(target, f"🎵 مشاركة أغنية من @{sender}\n🎶 {title}")
         if room:
             self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
         else:
@@ -10359,7 +10390,9 @@ class TalkinBot:
             if result.get("users") or result.get("room_admin"):
                 self.process_occupants_for_invite(result)
             if result.get("stream_event"):
-                self.log("[STREAM]", result["stream_event"])
+                stream_event = result["stream_event"]
+                self.log("[STREAM]", stream_event)
+                self._handle_stream_event(stream_event)
             if result.get("room_admin"):
                 self.log("[ROOM_ADMIN]", result["room_admin"])
             if result.get("chat_message"):

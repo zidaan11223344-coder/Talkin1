@@ -57,10 +57,12 @@ assert route_obj.last_call[3]["broadcast_all"] is True
 stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
 stream_obj.log = lambda *args: None
+stream_obj._pending_live_tracks = {}
 bot.STREAM_EXPERIMENTAL_ENABLED = True
 bot.STREAM_ACCEPT_DELAY = 0
 bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
+stream_obj._handle_stream_event({1: "you_invited", 5: "invite-1", 6: "room-1", 8: "main"})
 assert [item[1][0].decode() for item in payloads[-3:]] == [bot.STREAM_INVITE_ACTION, bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
 
 print("user requested media fixes: PASS")
