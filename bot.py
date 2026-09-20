@@ -6936,7 +6936,7 @@ class TalkinBot:
     def _render_snake_board(self, state, winner_name=""):
         if not PIL_AVAILABLE: return None
         from PIL import Image, ImageDraw
-        W=1000; H=1080; cell=92; left=40; top=130
+        W=1000; H=1180; cell=92; left=40; top=130
         img=Image.new("RGB",(W,H),(8,15,25)); d=ImageDraw.Draw(img)
         font=_gift_font("1",24); small=_gift_font("1",18); title_font=_gift_font("1",34)
         d.rounded_rectangle((20,18,W-20,110), radius=22, fill=(20,35,52), outline=(245,198,70), width=3)
@@ -7019,6 +7019,26 @@ class TalkinBot:
                 d.rounded_rectangle((cx-27,cy-27,cx+27,cy+27),radius=12,fill=colors[i%len(colors)],outline=(255,255,255),width=2)
                 d.text((cx,cy),str(i+1),fill=(10,10,10),font=small,anchor="mm")
             d.text((cx,cy+31),str(u)[:12],fill=(255,255,255),font=_gift_font("1",14),anchor="ma")
+
+        # Final winner card: use the same bottom result-panel style as Ludo.
+        if winner_name:
+            panel_y0 = top + 10*cell + 10
+            panel_y1 = min(H-12, panel_y0 + 100)
+            d.rounded_rectangle((left, panel_y0, left+10*cell, panel_y1),
+                                radius=18, fill=(16,30,45), outline=(245,198,70), width=3)
+            winner_photo = ""
+            try:
+                winner_photo = self.user_photos.get(str(winner_name).casefold(), "") or self._lookup_profile_photo(winner_name)
+            except Exception:
+                pass
+            avatar = _load_sender_avatar(winner_photo, 72) if winner_photo else None
+            if avatar is not None:
+                img.paste(avatar, (left+20, panel_y0+14), avatar)
+            d.text((W//2, panel_y0+31), "🏆 الفائز" if state.get("lang")!="en" else "🏆 WINNER",
+                   fill=(245,205,80), font=_gift_font("1",22), anchor="ma")
+            d.text((W//2, panel_y0+70), f"@{str(winner_name).lstrip('@')}",
+                   fill=(255,255,255), font=_gift_font("1",26), anchor="ma")
+
         out=BASE_DIR/"generated_games"/f"snake_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
         img.save(out,"JPEG",quality=86,optimize=True); return out
 
@@ -9812,24 +9832,38 @@ class TalkinBot:
                                 self._last_connection_notice = now
                         self._had_connection = True
 
-                        while not self.stop_event.is_set():
-                            try:
-                                kind, message = self.ws.recv()
-                            except socket.timeout:
-                                # An idle room is normal. Do not reconnect just
-                                # because no WebSocket frame arrived during the
-                                # read timeout.
-                                continue
-                            if kind == "binary":
-                                self.on_message(self.ws, message)
-                            elif kind == "ping":
-                                continue
-                            elif kind == "pong":
-                                continue
-                            elif kind == "text":
-                                self.log("[WS] unexpected text frame received")
-                            elif kind == "close":
-                                raise ConnectionError(f"WebSocket closed by server: {message}")
+                        # Keep the WebSocket receive loop free from command
+                        # processing. Some handlers (music, searches, database
+                        # work, moderation, etc.) can take time; running them
+                        # directly here used to make the next command wait in
+                        # the socket loop, which made users resend commands 3-4
+                        # times. The socket reader now hands each binary frame
+                        # to a small worker pool immediately. No command logic
+                        # is changed here.
+                        message_workers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ws-message")
+                        try:
+                            while not self.stop_event.is_set():
+                                try:
+                                    kind, message = self.ws.recv()
+                                except socket.timeout:
+                                    # An idle room is normal. Do not reconnect just
+                                    # because no WebSocket frame arrived during the
+                                    # read timeout.
+                                    continue
+                                if kind == "binary":
+                                    message_workers.submit(self.on_message, self.ws, message)
+                                elif kind == "ping":
+                                    continue
+                                elif kind == "pong":
+                                    continue
+                                elif kind == "text":
+                                    self.log("[WS] unexpected text frame received")
+                                elif kind == "close":
+                                    raise ConnectionError(f"WebSocket closed by server: {message}")
+                        finally:
+                            # Do not block the socket loop while workers finish
+                            # an already-received command.
+                            message_workers.shutdown(wait=False, cancel_futures=True)
                         self._stop_heartbeat()
                         return
                     except Exception as e:
