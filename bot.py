@@ -3796,6 +3796,7 @@ class TalkinBot:
             self.send_private_text(sender, "📭 لا توجد ردود تلقائية محفوظة.")
             return True
 
+        # Exactly 10 triggers per page; ns moves to the next page.
         per_page = 10
         total_pages = max(1, (len(items) + per_page - 1) // per_page)
         page = max(1, min(int(page or 1), total_pages))
@@ -3811,6 +3812,11 @@ class TalkinBot:
                 reply = " | ".join(str(x) for x in raw)
             else:
                 reply = str(raw)
+            # Keep every page as ONE actual list message. Long/random reply
+            # collections are shortened only for the list preview; the
+            # stored replies themselves are never changed or deleted.
+            if len(reply) > 70:
+                reply = reply[:67].rstrip() + "..."
             lines.append(f"{idx}. {trigger} ➜ {reply}")
 
         if page < total_pages:
