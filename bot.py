@@ -3554,8 +3554,9 @@ class TalkinBot:
         if requester:
             self.send_private_text(
                 requester,
-                f"⚠️ لم يؤكد الخادم دخول البوت إلى الغرفة: {room}. "
-                "قد تكون الغرفة محظورة أو للأعضاء فقط؛ تحقق من صلاحية البوت ثم أعد المحاولة.",
+                f"⚠️ تعذر تأكيد دخول البوت إلى الغرفة: {room}. "
+                "قد يكون البوت محظوراً من الغرفة أو تحتاج الغرفة إلى صلاحية مشرف/أونر. "
+                "تحقق من صلاحية البوت ثم أعد المحاولة.",
             )
 
     def join_room(self, room: str, force: bool = False, requested_by: str = ""):
@@ -9205,6 +9206,21 @@ class TalkinBot:
             }
             result_type = str(result.get("type") or "").strip()
             result_room = str(result.get("value") or "").strip()
+
+            # Some TalkinChat server versions return a join failure without
+            # putting the room name in ResultMessage.value.  In that case the
+            # room is still known from _pending_room_joins, and that pending
+            # record also contains the exact user who sent دخول@اسم_الغرفة.
+            # Use it so the failure notification is delivered to the requester
+            # instead of falling back to BOT_MASTER.
+            if result_type in join_result_types and not result_room:
+                pending_rooms = list(getattr(self, "_pending_room_joins", {}).keys())
+                if len(pending_rooms) == 1:
+                    result_room = str(
+                        getattr(self, "_pending_room_joins", {}).get(pending_rooms[0], {}).get("room", "")
+                        or ""
+                    ).strip()
+
             if (
                 result_type in join_result_types
                 and result_room
