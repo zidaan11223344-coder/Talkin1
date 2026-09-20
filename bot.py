@@ -7095,6 +7095,13 @@ class TalkinBot:
         command is received and handled immediately instead of waiting for the
         game to finish sleeping.
         """
+        # handle_game_command() is intentionally permissive for callers that
+        # already routed a command, but this receive-path helper must not
+        # claim ordinary conversation.  Returning True for every message
+        # used to prevent automatic replies such as "أنا" and "بوت" from
+        # ever reaching the reply router.
+        if not _looks_like_bot_command(text):
+            return False
         def worker():
             try:
                 self.handle_game_command(room, text, sender_name)
@@ -8152,6 +8159,15 @@ class TalkinBot:
             result_key_user = str(sender or "") if is_private else ""
             result_key = ("chat_message" if is_private else "room_message", result_key_room, result_key_user)
             result_state = result_pages.get(result_key)
+            if not result_state:
+                # l@sr is often issued from a room but replies privately to
+                # the master.  Accept Ns from that private chat as well as
+                # from the original command context.
+                for candidate_key, candidate_state in reversed(list(result_pages.items())):
+                    if (candidate_key[0] == "chat_message"
+                            and candidate_key[2] == str(sender or "")):
+                        result_key, result_state = candidate_key, candidate_state
+                        break
             if result_state:
                 pages = result_state.get("pages") or []
                 part = int(result_state.get("part", 1) or 1)

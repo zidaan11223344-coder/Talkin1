@@ -24,6 +24,8 @@ assert obj._render_auto_reply("@{username} الرد هنا", "@محمد", "غر�
 obj.auto_replies = auto
 assert obj._auto_reply_variants("من أنا؟")
 assert obj._auto_reply_variants("لقبي؟")
+assert obj._run_game_command_async("غرفة", "انا", "محمد") is False
+assert obj._run_game_command_async("غرفة", "بوت", "محمد") is False
 obj.banned_words = {"كلمة سيئة"}
 obj.moderation_enabled = False
 assert obj._find_publish_filter_hit("هذا نص فيه كلمة سيئة") == "كلمة سيئة"
