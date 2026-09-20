@@ -7101,7 +7101,14 @@ class TalkinBot:
         # used to prevent automatic replies such as "أنا" and "بوت" from
         # ever reaching the reply router.
         if not _looks_like_bot_command(text):
-            return False
+            raw = str(text or "").strip()
+            pending_key = (_norm_room(room), _norm_user(sender_name))
+            ludo_game = getattr(self, "ludo_games", {}).get(f"ludo:{_norm_room(room)}")
+            has_pending_choice = pending_key in getattr(self, "pending_bot_choices", {})
+            has_pending_stock = pending_key in getattr(self, "stock_pending", {})
+            is_ludo_choice = raw in {"1", "2", "3", "4", "١", "٢", "٣", "٤"} and bool(ludo_game)
+            if not (has_pending_choice or has_pending_stock or is_ludo_choice):
+                return False
         def worker():
             try:
                 self.handle_game_command(room, text, sender_name)
@@ -7679,7 +7686,9 @@ class TalkinBot:
         img.save(out,"JPEG",quality=88,optimize=True); return out
 
     def _ludo_command(self,room,sender,raw):
-        key=f"ludo:{_norm_room(room)}"; low=str(raw or "").strip().casefold(); game=self.ludo_games.get(key)
+        key=f"ludo:{_norm_room(room)}"; low=str(raw or "").strip().casefold()
+        low=low.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+        game=self.ludo_games.get(key)
         if low in ("لودو","ludo") and not game:
             if not self._board_game_cooldown_notice(room, sender):
                 return True
@@ -9679,8 +9688,13 @@ class TalkinBot:
             self._incoming_seen_lock = threading.Lock()
         event_id = str(event_id or "").strip()
         if event_id:
-            key = (str(kind), "id", event_id)
-            ttl = 300.0
+            # Some server versions recycle event ids for separate messages.
+            # Bind the id to the message content so a later بنك/roll is not
+            # suppressed as a replay of an earlier command.
+            raw = "\x1f".join(str(v or "") for v in values)
+            signature = hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()
+            key = (str(kind), "id", event_id, signature)
+            ttl = 3.0
         else:
             raw = "\x1f".join(str(v or "") for v in values)
             key = (str(kind), "sig", hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest())
