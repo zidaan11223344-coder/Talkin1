@@ -156,6 +156,16 @@ MASTER_SUPPORT_USERNAME = os.getenv(
     "∫♚∫اݪـــۛــ⃮ـاۿــ𓏺𓏺ـيّـــّٰـبــۃ∫♚∫",
 ).strip()
 MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
+# Experimental Talkin live-room actions.  These names are configurable because
+# older APK/server builds use different Query action strings.  The defaults
+# match the action family observed by the current bot transport.
+STREAM_EXPERIMENTAL_ENABLED = os.getenv("STREAM_EXPERIMENTAL_ENABLED", "1") == "1"
+STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "stream_invite").strip()
+STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip()
+STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip()
+# The current Talkin private-chat gateway displays type=audio as a text-only
+# message.  type=file delivers the actual downloadable MP3 to the recipient.
+PRIVATE_AUDIO_TYPE = os.getenv("PRIVATE_AUDIO_TYPE", "file").strip().lower() or "file"
 # TalkinChat's APK uses Query action ``profile_update`` with type ``status``
 # and value field 11. Normalize the old incorrect alias so a stale Railway
 # variable cannot keep sending the unsupported ``update_profile`` action.
@@ -4336,11 +4346,16 @@ class TalkinBot:
             return False
         if media_type not in {"audio", "image", "video", "file"}:
             raise ValueError(f"unsupported private media type: {media_type}")
-        if media_type == "audio":
+        requested_audio = media_type == "audio"
+        if requested_audio:
             self._verify_public_media_url(media_url, "audio")
-        # Private song sharing is audio-only; never infer an image/file packet
-        # from the URL when the gateway receives an MP3.
-        if media_type == "audio" and not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
+            # This Talkin gateway renders type=audio as a text-only message.
+            # Keep the semantic audio validation, but send the MP3 as a file
+            # packet so the recipient gets the actual downloadable sound.
+            media_type = PRIVATE_AUDIO_TYPE
+        if requested_audio and media_type not in {"file", "audio"}:
+            raise ValueError(f"unsupported private audio packet type: {media_type}")
+        if requested_audio and not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
             self.log("[MEDIA] audio URL has no audio extension; explicit audio type is used")
         payload = encode_query(
             "chat_message", type_=media_type, to=username, url=media_url,
@@ -4362,6 +4377,33 @@ class TalkinBot:
                 if attempt == 0:
                     time.sleep(0.8)
         raise last_error
+
+    def _play_music_in_live_room(self, room: str, media_url: str, duration: int = 0):
+        """Experimental flow: invite self, accept, then publish audio live."""
+        if not STREAM_EXPERIMENTAL_ENABLED:
+            return False
+        room = str(room or "").strip()
+        if not room or not media_url:
+            return False
+        if not all((STREAM_INVITE_ACTION, STREAM_ACCEPT_ACTION, STREAM_AUDIO_ACTION)):
+            self.log("[STREAM] experimental actions are not fully configured")
+            return False
+        try:
+            self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
+            self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
+            time.sleep(float(os.getenv("STREAM_ACCEPT_DELAY", "0.8")))
+            self.log("[STREAM] accept self invite", room, STREAM_ACCEPT_ACTION)
+            self.send_query(encode_query(STREAM_ACCEPT_ACTION, room=room, to=BOT_ID, value=BOT_ID))
+            time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
+            self.log("[STREAM] publish audio", room, STREAM_AUDIO_ACTION)
+            self.send_query(encode_query(
+                STREAM_AUDIO_ACTION, type_="audio", room=room, url=media_url,
+                length=str(max(0, int(duration or 0))),
+            ))
+            return True
+        except Exception as exc:
+            self.log("[STREAM] experimental live flow failed:", repr(exc))
+            return False
 
     def _master_is_online(self):
         """Return the latest presence state known by this bot connection."""
@@ -5417,10 +5459,18 @@ class TalkinBot:
                     caption=(f"🎶 تم تشغيل الأغنية\n━━━━━━━━━━━━\n"
                              f"🎵 العنوان: {title}\n🎤 الطلب: @{requester}\n"
                              f"📡 المصدر: {artist or 'Music'}")
+                live_started = False
+                if broadcast_all:
+                    live_started = self._play_music_in_live_room(room, url, duration)
                 target_rooms=self._active_rooms() if broadcast_all else [room]
                 for target_room in target_rooms:
                     self.send_room_text(target_room,caption)
-                    self.send_room_media(target_room,url,"audio",duration)
+                    # If the experimental live actions are accepted, the
+                    # track is already on the room broadcast; do not also
+                    # send a duplicate room attachment. If the server rejects
+                    # them, retain the proven room-audio fallback.
+                    if not live_started:
+                        self.send_room_media(target_room,url,"audio",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
                 self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
@@ -5440,7 +5490,8 @@ class TalkinBot:
             self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
         except Exception as exc:
             self.log("[MUSIC] private share audio failed:", repr(exc))
-            notice = f"⚠️ تعذر إرسال ملف الأغنية إلى @{target}. الرابط العام للصوت غير متاح حالياً."
+            reason = str(exc).strip().replace("\n", " ")[:300] or "سبب غير معروف"
+            notice = f"⚠️ تعذر إرسال ملف الأغنية إلى @{target}.\n🧾 سبب الفشل: {reason}"
             if room:
                 self.send_room_text(room, notice)
             else:

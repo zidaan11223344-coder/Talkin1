@@ -27,7 +27,7 @@ media_obj.send_query = lambda payload: payloads.append(payload) or True
 assert media_obj.send_private_media("target", "https://cdn/song.mp3", "audio", 12)
 fields = bot.decode_message(payloads[0])
 assert fields[1][0] == b"chat_message"
-assert fields[2][0] == b"audio"
+assert fields[2][0] == bot.PRIVATE_AUDIO_TYPE.encode()
 assert fields[5][0] == b""
 assert fields[4][0] == b"target"
 
@@ -52,5 +52,15 @@ command = body.replace(".تشغيل ", ".sa ", 1) if not is_room_broadcast else 
 route_obj.handle_music_command("main", command, "sender", broadcast_all=is_room_broadcast, with_reactions=False)
 assert route_obj.last_call[1] == ".sa اسم الأغنية"
 assert route_obj.last_call[3]["broadcast_all"] is True
+
+# 4) The experimental live flow emits invite -> accept -> audio in order.
+stream_obj = object.__new__(bot.TalkinBot)
+stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
+stream_obj.log = lambda *args: None
+bot.STREAM_EXPERIMENTAL_ENABLED = True
+bot.STREAM_ACCEPT_DELAY = 0
+bot.STREAM_AUDIO_DELAY = 0
+stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
+assert [item[1][0].decode() for item in payloads[-3:]] == [bot.STREAM_INVITE_ACTION, bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
 
 print("user requested media fixes: PASS")
