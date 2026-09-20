@@ -8972,20 +8972,33 @@ class TalkinBot:
         if not hasattr(self, "_incoming_seen_lock"):
             self._incoming_seen_lock = threading.Lock()
         event_id = str(event_id or "").strip()
-        if event_id:
-            key = (str(kind), "id", event_id)
-            ttl = 300.0
-        else:
-            raw = "\x1f".join(str(v or "") for v in values)
-            key = (str(kind), "sig", hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest())
-            ttl = 8.0
+        raw = "\x1f".join(str(v or "") for v in values)
+        signature = hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()
+        # Some Talkin server builds reuse the same event/uid for different
+        # room messages. Using event_id alone can therefore make a legitimate
+        # new command look like a duplicate. Keep the event id paired with the
+        # actual message signature, and also keep a very short signature window
+        # to catch exact transport replays that arrive with a fresh event id.
+        id_key = (str(kind), "id", event_id, signature) if event_id else None
+        sig_key = (str(kind), "sig", signature)
         with self._incoming_seen_lock:
-            previous = self._incoming_seen.get(key, 0.0)
-            self._incoming_seen[key] = now
-            if len(self._incoming_seen) > 2000:
+            previous_id = self._incoming_seen.get(id_key, 0.0) if id_key else 0.0
+            previous_sig = self._incoming_seen.get(sig_key, 0.0)
+            if id_key:
+                self._incoming_seen[id_key] = now
+            self._incoming_seen[sig_key] = now
+            if len(self._incoming_seen) > 3000:
                 cutoff = now - 300.0
                 self._incoming_seen = {k: ts for k, ts in self._incoming_seen.items() if ts >= cutoff}
-        return bool(previous and now - previous < ttl)
+        # Exact same event id + same body is a replay. A fresh event carrying
+        # the same body is considered a replay only for 1.5 seconds, which is
+        # long enough for websocket retransmission but avoids making a user's
+        # legitimate repeated command feel ignored.
+        if previous_id and now - previous_id < 300.0:
+            return True
+        if previous_sig and now - previous_sig < 1.5:
+            return True
+        return False
 
     def _auto_unban(self, room, username):
         try:
