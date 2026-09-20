@@ -5687,7 +5687,11 @@ class TalkinBot:
                 self.fixed_game_waiting[game_name]={"user":sender,"room":room,"created":time.time(),"reserved":True,"prize":prize}
             else:
                 return True
-        self.broadcast_all_rooms(challenge)
+        # The opening/challenge message belongs only to the room where the
+        # player started the game. Do not spam the other rooms. The final
+        # winner/loser result is still handled by _fixed_game_result() and
+        # is sent only to the rooms of the two participants.
+        self.send_room_text(room, challenge)
         return True
 
     def _fruit_match(self, room, sender, emoji):
