@@ -310,6 +310,8 @@ MODERATION_FILE = DATA_DIR / "moderation.json"
 MF_FILE = DATA_DIR / "mf.json"
 FILTER_EXCEPTIONS_FILE = DATA_DIR / "filter_exceptions.json"
 FILTER_BANS_FILE = DATA_DIR / "filter_bans.json"
+# Users blocked from using image publishing after a publish-filter violation.
+PUBLISH_BANS_FILE = DATA_DIR / "publish_bans.json"
 PROTECTION_FILE = DATA_DIR / "room_protection.json"
 SNAKE_FILE = DATA_DIR / "snake_games.json"
 LUDO_FILE = DATA_DIR / "ludo_games.json"
@@ -322,7 +324,7 @@ _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
     "messages.json", "published_posts.json", "game_stats.json", "game_levels.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
-    "moderation.json", "mf.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
+    "moderation.json", "mf.json", "filter_bans.json", "publish_bans.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json", "wager_state.json", "backup_manifest.json",
 )
 
@@ -2054,6 +2056,20 @@ def _filter_bans_list():
     data = _filter_bans_data(); rows=data.get("bans", [])
     return rows if isinstance(rows,list) else []
 
+def _publish_bans_data():
+    data = _load_local_json(PUBLISH_BANS_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+def _publish_banned_users():
+    data = _publish_bans_data()
+    rows = data.get("users", [])
+    return {_norm_user(x) for x in rows if _norm_user(x)} if isinstance(rows, list) else set()
+
+def _save_publish_banned_users(users):
+    clean = sorted({_norm_user(x) for x in users if _norm_user(x)})
+    _save_local_json(PUBLISH_BANS_FILE, {"users": clean})
+    return set(clean)
+
 def _room_protection_data():
     data=_load_local_json(PROTECTION_FILE,{})
     return data if isinstance(data,dict) else {}
@@ -3320,6 +3336,9 @@ class TalkinBot:
         self.banned_words = set(moderation_words)
         self.bot_blocked_users = _bot_blocked_users()
         self.filter_exceptions = _filter_exception_users()
+        # Publish bans are separate from native room bans: a filter violation
+        # removes only the user's ability to use انشر / انشر@الوصف.
+        self.publish_banned_users = _publish_banned_users()
         self._joinleave_state = defaultdict(lambda: defaultdict(lambda: {"events":[], "last_type":"", "banned_until":0.0}))
         self._pending_protection_number = {}
         self.snake_games = {}
@@ -8080,6 +8099,16 @@ class TalkinBot:
                     lines.append(f"{i}. @{r.get('username','')} | السبب: {r.get('reason','كلمة مسيئة')} | الغرفة: {r.get('room','')}")
                 self.send_private_text(sender,"\n".join(lines))
             return True
+        if low == "l@mpb":
+            if not _is_master_name(sender): return True
+            users = sorted(getattr(self, "publish_banned_users", set()))
+            if not users:
+                self.send_private_text(sender,"📭 لا يوجد مستخدمون ممنوعون من النشر.")
+            else:
+                lines=["🚫 الممنوعون من استخدام النشر بسبب الفلتر:"]
+                lines.extend(f"{i}. @{u}" for i,u in enumerate(users,1))
+                self.send_private_text(sender,"\n".join(lines))
+            return True
 
         if low in ("تشغيل الحماية", "تشغيل الحمايه", "الحماية تشغيل", "الحمايه تشغيل"):
             if not room or not _room_manager(self, room, sender):
@@ -8412,6 +8441,27 @@ class TalkinBot:
             if _norm_user(target) != _norm_user(sender):
                 self.send_private_text(target, f"💰 إشعار تحويل: استلمت {_fmt_points(amount)} نقطة من @{sender}. رصيدك الحالي: {_fmt_points(new)}")
             return True
+
+        # Publishing uses the offensive-word filter automatically. A matching
+        # user is blocked from publishing only; the bot never native-bans them
+        # from the room for a publish-filter violation.
+        if low == "انشر" or low.startswith("انشر@"):
+            sender_key = _norm_user(sender)
+            if sender_key in getattr(self, "publish_banned_users", set()) and not _is_master_name(sender):
+                self.send_private_text(sender, "🚫 تم منعك من استخدام النشر بسبب مخالفة فلتر النشر.")
+                return True
+            desc=text[5:].strip() if low.startswith("انشر@") else ""
+            if sender_key not in getattr(self, "filter_exceptions", set()) and desc:
+                normalized_desc = _norm_filter_text(desc)
+                publish_hit = next((w for w in sorted(self.banned_words)
+                                    if _norm_filter_text(w) and _norm_filter_text(w) in normalized_desc), None)
+                if publish_hit:
+                    self.publish_banned_users = _save_publish_banned_users(
+                        getattr(self, "publish_banned_users", set()) | {sender_key}
+                    )
+                    _record_filter_ban(sender, room, "منع من استخدام النشر بسبب كلمة مسيئة", publish_hit)
+                    self.send_private_text(sender, "🚫 تم منعك من استخدام النشر بسبب كلمة محظورة في الفلتر.")
+                    return True
 
         # VIP users may publish images; the actual image is handled by _handle_publish_media.
         if (low == "انشر" or low.startswith("انشر@")) and _is_vip_user(sender):
@@ -8878,11 +8928,24 @@ class TalkinBot:
             return True
         # Publishing: master or verified user says `انشر` or `انشر@description`, then sends an image.
         if low == "انشر" or low.startswith("انشر@"):
+            sender_key = _norm_user(sender)
+            if sender_key in getattr(self, "publish_banned_users", set()) and not _is_master_name(sender):
+                self.send_private_text(sender, "🚫 تم منعك من استخدام النشر بسبب مخالفة فلتر النشر.")
+                return True
             desc=text[5:].strip() if low.startswith("انشر@") else ""
+            if sender_key not in getattr(self, "filter_exceptions", set()) and desc:
+                normalized_desc = _norm_filter_text(desc)
+                publish_hit = next((w for w in sorted(self.banned_words)
+                                    if _norm_filter_text(w) and _norm_filter_text(w) in normalized_desc), None)
+                if publish_hit:
+                    self.publish_banned_users = _save_publish_banned_users(
+                        getattr(self, "publish_banned_users", set()) | {sender_key}
+                    )
+                    _record_filter_ban(sender, room, "منع من استخدام النشر بسبب كلمة مسيئة", publish_hit)
+                    self.send_private_text(sender, "🚫 تم منعك من استخدام النشر بسبب كلمة محظورة في الفلتر.")
+                    return True
             # The image may be sent later in a room or in private chat.
-            # Key the pending publish by sender, not by the command room, so
-            # sending the image from another room still completes the publish.
-            self.publish_pending[_norm_user(sender)]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":False}
+            self.publish_pending[sender_key]={"description":desc,"source_room":str(room or ""),"created_at":time.time(),"silent":False}
             self.send_private_text(sender,"🖼️ تم استلام أمر النشر. أرسل الصورة الآن خلال دقيقتين في الروم أو الخاص، وسيتم نشرها في جميع الغرف." + (f"\n📝 الوصف: {desc}" if desc else ""))
             return True
         return False
@@ -8894,14 +8957,24 @@ class TalkinBot:
         if not pending: return False
         if time.time()-pending.get("created_at",0)>120:
             self.publish_pending.pop(key,None); self.send_private_text(sender,"⌛ انتهت مهلة النشر، أرسل أمر انشر من جديد."); return True
+        # Publish filtering is automatic and independent of room protection.
+        # A violation blocks only publishing; it never calls native room ban.
+        if key in getattr(self, "publish_banned_users", set()) and not _is_master_name(sender):
+            self.publish_pending.pop(key, None)
+            self.send_private_text(sender, "🚫 تم منعك من استخدام النشر بسبب مخالفة فلتر النشر.")
+            return True
         desc=pending.get("description",description or "")
-        protection_cfg = self._room_protection_cfg(room) if room else {"swear": False}
         publish_check=_norm_filter_text(desc)
-        publish_hit=(next((w for w in sorted(self.banned_words) if _norm_filter_text(w) and _norm_filter_text(w) in publish_check), None) if bool(protection_cfg.get("swear", False)) else None)
+        publish_hit=(next((w for w in sorted(self.banned_words)
+                           if _norm_filter_text(w) and _norm_filter_text(w) in publish_check), None)
+                     if key not in getattr(self, "filter_exceptions", set()) else None)
         if publish_hit:
-            self.send_private_text(sender,f"🚫 تم منع النشر: الوصف يحتوي كلمة محظورة في الفلتر.")
+            self.publish_banned_users = _save_publish_banned_users(
+                getattr(self, "publish_banned_users", set()) | {key}
+            )
+            self.send_private_text(sender,"🚫 تم منعك من استخدام النشر بسبب كلمة محظورة في الفلتر.")
             self.publish_pending.pop(key,None)
-            _record_filter_ban(sender,room,"محاولة نشر كلمة مسيئة",publish_hit)
+            _record_filter_ban(sender,room,"منع من استخدام النشر بسبب كلمة مسيئة",publish_hit)
             return True
         source_room=str(pending.get("source_room") or room or "")
         silent_publish=bool(pending.get("silent"))
