@@ -3723,13 +3723,117 @@ class TalkinBot:
         text = str(text or "")
         return [text] if text else [""]
 
+    def _send_mf_word_page(self, sender: str, page: int = 1):
+        """عرض صفحة واحدة من كلمات الفلتر؛ ns ينتقل للصفحة التالية."""
+        words = sorted(self.banned_words, key=lambda x: _norm_filter_text(x))
+        if not words:
+            self.send_private_text(sender, "🚫 قائمة الفلتر فارغة حالياً.")
+            return True
+
+        per_page = 10
+        total_pages = max(1, (len(words) + per_page - 1) // per_page)
+        page = max(1, min(int(page or 1), total_pages))
+        self._mf_list_page = page
+        start = (page - 1) * per_page
+        current = words[start:start + per_page]
+
+        lines = [f"🚫 كلمات الفلتر | القائمة {page}/{total_pages}", "━━━━━━━━━━━━"]
+        for idx, word in enumerate(current, start + 1):
+            lines.append(f"{idx}. {word}")
+        lines.append("━━━━━━━━━━━━")
+        if page < total_pages:
+            lines.append("➡️ اكتب ns لعرض القائمة التالية")
+        else:
+            lines.append("✅ هذه آخر قائمة")
+        self.send_private_text(sender, "\n".join(lines))
+        return True
+
+    def _send_sr_reply_page(self, sender: str, page: int = 1):
+        """عرض صفحة واحدة من الردود التلقائية؛ ns ينتقل للصفحة التالية."""
+        items = list(self.auto_replies.items())
+        if not items:
+            self.send_private_text(sender, "📭 لا توجد ردود تلقائية محفوظة.")
+            return True
+
+        per_page = 10
+        total_pages = max(1, (len(items) + per_page - 1) // per_page)
+        page = max(1, min(int(page or 1), total_pages))
+        self._sr_list_page = page
+        start = (page - 1) * per_page
+        current = items[start:start + per_page]
+
+        lines = [f"📋 الردود التلقائية | القائمة {page}/{total_pages}", "━━━━━━━━━━━━"]
+        for idx, (key, ar) in enumerate(current, start + 1):
+            trigger = str(ar.get("trigger", key)) if isinstance(ar, dict) else str(key)
+            raw = ar.get("reply", "") if isinstance(ar, dict) else ar
+            if isinstance(raw, list):
+                reply = " | ".join(str(x) for x in raw)
+            else:
+                reply = str(raw)
+            lines.append(f"{idx}. {trigger} ➜ {reply}")
+
+        if page < total_pages:
+            lines.append("━━━━━━━━━━━━")
+            lines.append("➡️ اكتب ns لعرض القائمة التالية")
+        else:
+            lines.append("━━━━━━━━━━━━")
+            lines.append("✅ هذه آخر قائمة")
+
+        # القائمة الواحدة رسالة واحدة؛ الحد العام للرسائل الطويلة يبقى فعالاً لباقي البوت.
+        self.send_private_text(sender, "\n".join(lines))
+        return True
+
     def _send_text_packets(self, packet_type: str, text: str, **kwargs):
-        # Normal replies remain one complete message. Only help menus use the
-        # explicit line-based batching in _send_help_chunks below.
-        payload = dict(kwargs)
-        payload["type_"] = "text"
-        payload["body"] = str(text or "")
-        self.send_query(encode_query(packet_type, **payload))
+        """Send text safely, automatically splitting long messages.
+
+        Short messages stay as one bubble. Long messages are divided in the
+        same safe line-based style used by the command lists, preserving all
+        text and avoiding oversized Talkin packets.
+        """
+        text = str(text or "")
+        if not text:
+            payload = dict(kwargs)
+            payload["type_"] = "text"
+            payload["body"] = ""
+            self.send_query(encode_query(packet_type, **payload))
+            return True
+
+        limit = HELP_PACKET_MAX_CHARS
+        lines = text.splitlines() or [text]
+        chunks = []
+        current = ""
+
+        def flush():
+            nonlocal current
+            if current:
+                chunks.append(current)
+                current = ""
+
+        for raw_line in lines:
+            line = raw_line
+            # Preserve very long individual lines by hard-wrapping them.
+            while len(line) > limit:
+                if current:
+                    room_left = limit - len(current) - 1
+                    if room_left > 0:
+                        current += "\n" + line[:room_left]
+                        line = line[room_left:]
+                    flush()
+                chunks.append(line[:limit])
+                line = line[limit:]
+
+            candidate = line if not current else current + "\n" + line
+            if current and (len(candidate) > limit or len(current.splitlines()) >= HELP_LINES_PER_MESSAGE):
+                flush()
+                candidate = line
+            current = candidate
+
+        flush()
+        for chunk in chunks:
+            payload = dict(kwargs)
+            payload["type_"] = "text"
+            payload["body"] = chunk
+            self.send_query(encode_query(packet_type, **payload))
         return True
 
     def _send_help_chunks(self, packet_type: str, text: str, limit: int = HELP_PACKET_MAX_CHARS, **kwargs):
@@ -7778,11 +7882,9 @@ class TalkinBot:
                 _save_mf_config(self.moderation_enabled, [])
                 return True
             if low == "l@mf":
-                words = sorted(self.banned_words, key=lambda x: _norm_filter_text(x))
-                if words:
-                    self.send_private_text(sender, "🚫 كلمات الفلتر:\n" + "\n".join(f"• {w}" for w in words))
-                else:
-                    self.send_private_text(sender, "🚫 قائمة الفلتر فارغة حالياً.")
+                self._mf_list_active = True
+                self._mf_list_page = 1
+                return self._send_mf_word_page(sender, self._mf_list_page)
                 return True
 
         # Joining a room: ask the master for bot language first.
@@ -8262,29 +8364,25 @@ class TalkinBot:
                 self.send_private_text(sender, f"✅ تمت إضافة الرد التلقائي\n📌 الوصف: {trigger}\n💬 الرد: {reply}")
             return True
         if re.match(r"^l@sr$", text.strip(), re.I) and _is_master_name(sender):
-            items = list(self.auto_replies.items())
-            if not items:
-                self.send_private_text(sender, "📭 لا توجد ردود تلقائية محفوظة.")
+            self._mf_list_active = False
+            # عرض الردود على صفحات ثابتة، 10 ردود في كل قائمة.
+            # لا نرسل عدة رسائل للقائمة الواحدة؛ الأمر ns يعرض القائمة التالية.
+            self._sr_list_page = 1
+            return self._send_sr_reply_page(sender, self._sr_list_page)
+
+        if re.match(r"^ns(?:@(\d+))?$", text.strip(), re.I) and _is_master_name(sender):
+            requested = re.match(r"^ns(?:@(\d+))?$", text.strip(), re.I)
+            if getattr(self, "_mf_list_active", False):
+                if requested and requested.group(1):
+                    self._mf_list_page = max(1, int(requested.group(1)))
+                else:
+                    self._mf_list_page = getattr(self, "_mf_list_page", 1) + 1
+                return self._send_mf_word_page(sender, self._mf_list_page)
+            if requested and requested.group(1):
+                self._sr_list_page = max(1, int(requested.group(1)))
             else:
-                lines = [f"📋 قائمة الردود التلقائية ({len(items)})", "━━━━━━━━━━━━"]
-                for idx, (key, ar) in enumerate(items, 1):
-                    trigger = str(ar.get("trigger", key)) if isinstance(ar, dict) else str(key)
-                    raw = ar.get("reply", "") if isinstance(ar, dict) else ar
-                    if isinstance(raw, list):
-                        reply = " | ".join(str(x) for x in raw)
-                    else:
-                        reply = str(raw)
-                    lines.append(f"{idx}. {trigger} ➜ {reply}")
-                # Keep private messages reasonably sized.
-                chunk = ""
-                for line in lines:
-                    if chunk and len(chunk) + len(line) + 1 > 3500:
-                        self.send_private_text(sender, chunk)
-                        chunk = ""
-                    chunk += ("\n" if chunk else "") + line
-                if chunk:
-                    self.send_private_text(sender, chunk)
-            return True
+                self._sr_list_page = getattr(self, "_sr_list_page", 1) + 1
+            return self._send_sr_reply_page(sender, self._sr_list_page)
         if re.match(r"^sr@(?:on|off)$", text.strip(), re.I) and _is_master_name(sender):
             self.auto_replies_enabled = text.strip().lower() == "sr@on"
             self._save_social_features()
