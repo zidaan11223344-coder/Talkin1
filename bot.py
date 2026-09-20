@@ -3389,8 +3389,6 @@ class TalkinBot:
         self._pending_protection_number = {}
         self.snake_games = {}
         self.ludo_games = {}
-        # Ludo is available only in rooms explicitly entered with دخول@... and a language choice.
-        self.room_languages = {}
         self.bot_protection_enabled = _bot_protection_enabled()
         self._bot_protection_menu_state = None
         self._bot_block_notice_at = {}
@@ -7029,212 +7027,54 @@ class TalkinBot:
         out=BASE_DIR/"generated_games"/f"ludo_{uuid.uuid4().hex}.jpg";out.parent.mkdir(parents=True,exist_ok=True);img.save(out,"JPEG",quality=82,optimize=True);return out
 
     def _ludo_command(self,room,sender,raw):
-        """Room-scoped Ludo.
-
-        Ludo is enabled only for rooms entered through ``دخول@اسم_الغرفة`` and
-        after the language choice (1=Arabic, 2=English) has been completed.
-        Each room gets its own game state, so a game in one room cannot consume
-        commands or player choices from another room.
-        """
-        room_name = str(room or "").strip()
-        room_key = _norm_room(room_name)
-        if not room_key:
-            return False
-
-        languages = getattr(self, "room_languages", {})
-        lang = languages.get(room_key)
-        if lang not in ("ar", "en"):
-            # This room was not entered through the language-selection flow.
-            return False
-
-        raw = str(raw or "").strip()
-        low = raw.casefold()
-        key = f"ludo:{room_key}"
-        game = self.ludo_games.get(key)
-
-        if low in ("لودو", "ludo") and not game:
-            game = {
-                "players": [sender],
-                "tokens": {sender: 0},
-                "lang": lang,
-                "turn": 0,
-                "created": time.time(),
-                "rooms": {room_name},
-                "max_players": 0,
-                "bot": False,
-                "started": False,
-            }
-            self.ludo_games[key] = game
-            if lang == "en":
-                self.send_room_text(
-                    room_name,
-                    "🎲 Ludo\\nChoose players:\\n"
-                    "1️⃣ Play with bot\\n2️⃣ 2 players\\n3️⃣ 3 players\\n4️⃣ 4 players\\n"
-                    "Send the number only."
-                )
+        key="__shared_ludo__"; low=raw.casefold(); game=self.ludo_games.get(key)
+        if low in ("لودو","ludo") and not game:
+            game={"players":[sender],"tokens":{sender:0},"lang":"en" if low=="ludo" else "ar","turn":0,"created":time.time(),"rooms":{room},"max_players":0,"bot":False,"started":False}
+            self.ludo_games[key]=game
+            self.send_room_text(room,"🎲 Ludo: choose players 1-4. Type 1/2/3/4." if low=="ludo" else "🎲 لودو: اختر عدد اللاعبين\n1 مع البوت\n2 لاعبين\n3 لاعبين\n4 لاعبين")
+            return True
+        if not game: return False
+        game.setdefault("rooms",set()).add(room)
+        if low in ("لودو","ludo"):
+            self.send_room_text(room,"🎲 توجد لعبة لودو قيد التجهيز. اختر العدد أو اكتب join/انضمام." if game.get("lang")!="en" else "🎲 A Ludo game is being prepared. Choose the player count or type join.")
+            return True
+        if low in ("1","2","3","4") and len(game["players"])==1 and not game.get("started"):
+            count=int(low); game["max_players"]=2 if count==1 else count; game["bot"]=(count==1)
+            if count==1:
+                game["players"]=[sender,"🤖 البوت"]; game["tokens"]["🤖 البوت"]=0
+                self.send_room_text(room,"🤖 تم اختيار اللعب مع البوت. لم تبدأ الجولة بعد؛ اكتب rool لبدء اللعب.")
             else:
-                self.send_room_text(
-                    room_name,
-                    "🎲 لودو\\nاختر عدد اللاعبين:\\n"
-                    "1️⃣ اللعب مع البوت\\n2️⃣ لاعبان\\n3️⃣ ثلاثة لاعبين\\n4️⃣ أربعة لاعبين\\n"
-                    "أرسل الرقم فقط."
-                )
+                self.send_room_text(room,"✅ تم اختيار العدد. اكتب join أو انضمام حتى يكتمل عدد اللاعبين.")
             return True
-
-        if not game:
-            return False
-
-        game.setdefault("rooms", set()).add(room_name)
-
-        # Do not let another "لودو/ludo" restart an existing game.
-        if low in ("لودو", "ludo"):
-            self.send_room_text(
-                room_name,
-                "🎲 توجد لعبة لودو قيد التجهيز. اختر 1 أو 2 أو 3 أو 4."
-                if lang == "ar"
-                else "🎲 A Ludo game is already being prepared. Choose 1, 2, 3 or 4."
-            )
+        if low in ("join","انضمام") and not game.get("started"):
+            if sender not in game["players"] and len(game["players"])<int(game.get("max_players",4)):
+                game["players"].append(sender); game["tokens"][sender]=0; game["rooms"].add(room)
+                self.send_room_text(room,"✅ انضم اللاعب. عند اكتمال العدد تبدأ اللعبة عند أول rool.")
             return True
-
-        # IMPORTANT: numeric choices are handled here before the generic
-        # bot-command detector, which previously ignored plain "1/2/3/4".
-        if low in ("1", "2", "3", "4") and len(game["players"]) == 1 and not game.get("started"):
-            count = int(low)
-            game["max_players"] = 2 if count == 1 else count
-            game["bot"] = (count == 1)
-
-            if count == 1:
-                game["players"] = [sender, "🤖 البوت"]
-                game["tokens"]["🤖 البوت"] = 0
-                msg = (
-                    "🤖 تم اختيار اللعب مع البوت. اكتب rool أو roll لبدء اللعب."
-                    if lang == "ar"
-                    else "🤖 Bot mode selected. Type rool or roll to start."
-                )
-            else:
-                msg = (
-                    f"✅ تم اختيار {count} لاعبين. اكتب انضمام لإضافة اللاعبين."
-                    if lang == "ar"
-                    else f"✅ {count} players selected. Type join to add players."
-                )
-            self.send_room_text(room_name, msg)
-            return True
-
-        if low in ("join", "انضمام") and not game.get("started"):
-            if sender not in game["players"] and len(game["players"]) < int(game.get("max_players", 4)):
-                game["players"].append(sender)
-                game["tokens"][sender] = 0
-                game["rooms"].add(room_name)
-
-                if len(game["players"]) >= int(game.get("max_players", 4)):
-                    msg = (
-                        "✅ اكتمل عدد اللاعبين. اكتب rool أو roll لبدء اللعبة."
-                        if lang == "ar"
-                        else "✅ All players joined. Type rool or roll to start."
-                    )
-                else:
-                    remaining = int(game.get("max_players", 4)) - len(game["players"])
-                    msg = (
-                        f"✅ انضم اللاعب. متبقي {remaining} لاعب."
-                        if lang == "ar"
-                        else f"✅ Player joined. {remaining} player(s) remaining."
-                    )
-                self.send_room_text(room_name, msg)
-            return True
-
-        if low in ("rool", "roll", "رول") and sender in game["players"]:
-            if game.get("max_players", 0) == 0:
-                self.send_room_text(
-                    room_name,
-                    "❌ اختر 1 أو 2 أو 3 أو 4 أولاً."
-                    if lang == "ar"
-                    else "❌ Choose 1, 2, 3 or 4 first."
-                )
-                return True
-
-            if len(game["players"]) < int(game["max_players"]):
-                self.send_room_text(
-                    room_name,
-                    "⏳ ننتظر اكتمال عدد اللاعبين."
-                    if lang == "ar"
-                    else "⏳ Waiting for all players to join."
-                )
-                return True
-
-            if game["players"].index(sender) != game.get("turn", 0):
-                self.send_room_text(
-                    room_name,
-                    "⏳ انتظر دورك."
-                    if lang == "ar"
-                    else "⏳ Wait for your turn."
-                )
-                return True
-
+        if low in ("rool","roll","رول") and sender in game["players"]:
+            if game.get("max_players",0)==0:
+                self.send_room_text(room,"❌ اختر عدد اللاعبين أولاً: 1 أو 2 أو 3 أو 4."); return True
+            if len(game["players"])<int(game["max_players"]):
+                self.send_room_text(room,"⏳ ما زلنا ننتظر اكتمال عدد اللاعبين."); return True
+            if game["players"].index(sender)!=game.get("turn",0): self.send_room_text(room,"⏳ انتظر دورك."); return True
             if not game.get("started"):
-                game["started"] = True
-                title = (
-                    "🎲 بدأت لعبة لودو! اكتب rool أو roll عندما يأتي دورك."
-                    if lang == "ar"
-                    else "🎲 Ludo started! Type rool or roll when it is your turn."
-                )
-                for r in self._game_rooms(game):
-                    self.send_room_text(r, title)
-
-            roll = secrets.randbelow(6) + 1
-            old = game["tokens"].get(sender, 0)
-            new = min(40, old + roll)
-            game["tokens"][sender] = new
-
-            img = self._render_ludo_board(game)
-            url = self._game_public_image(img) if img else ""
+                game["started"]=True; game["rooms"].add(room)
+                self._broadcast_game_start("🎲 بدأت لعبة لودو! للمشاركة واللعب اكتب rool عند دورك." if game.get("lang")!="en" else "🎲 Ludo game started! Type rool when it is your turn.", game)
+            else:
+                game["rooms"].add(room)
+            roll=secrets.randbelow(6)+1; old=game["tokens"].get(sender,0); new=min(40,old+roll); game["tokens"][sender]=new
+            img=self._render_ludo_board(game); url=self._game_public_image(img) if img else ""
             for r in self._game_rooms(game):
-                if url:
-                    self.send_room_media(r, url, "image")
-                if lang == "ar":
-                    self.send_room_text(
-                        r,
-                        f"🎲 @{sender} ظهر له {roll} وانتقل من المربع {old} إلى {new}."
-                    )
-                else:
-                    self.send_room_text(
-                        r,
-                        f"🎲 @{sender} rolled {roll} and moved from square {old} to {new}."
-                    )
-
-            if new >= 40:
-                win_img = self._render_ludo_board(game, winner_name=sender)
-                win_url = self._game_public_image(win_img) if win_img else ""
-                win_text = (
-                    f"🏆 مبروك! فاز @{sender} بلعبة لودو.\n🎲 الرول الأخير: {roll}"
-                    if lang == "ar"
-                    else f"🏆 Congratulations! @{sender} won Ludo.\n🎲 Final roll: {roll}"
-                )
-                for r in self._game_rooms(game):
-                    if win_url:
-                        self.send_room_media(r, win_url, "image")
-                    self.send_room_text(r, win_text)
-                self.ludo_games.pop(key, None)
-                return True
-
-            game["turn"] = (game.get("turn", 0) + 1) % len(game["players"])
-
-            # Bot makes its move immediately, then returns the turn to the user.
-            if game.get("bot") and game["players"][game["turn"]] == "🤖 البوت":
-                br = secrets.randbelow(6) + 1
-                bot_old = game["tokens"].get("🤖 البوت", 0)
-                bot_new = min(40, bot_old + br)
-                game["tokens"]["🤖 البوت"] = bot_new
-                game["turn"] = 0
-                bot_text = (
-                    f"🤖 البوت رمى {br} وانتقل من {bot_old} إلى {bot_new}."
-                    if lang == "ar"
-                    else f"🤖 Bot rolled {br} and moved from {bot_old} to {bot_new}."
-                )
-                for r in self._game_rooms(game):
-                    self.send_room_text(r, bot_text)
-
+                if url:self.send_room_media(r,url,"image")
+                self.send_room_text(r,f"🎲 @{sender} وقف الرول على {roll} وانتقل من المربع {old} إلى {new}.")
+            if new>=40:
+                win_img=self._render_ludo_board(game,winner_name=sender)
+                self._broadcast_game_result_all_rooms(f"🏆 مبروك! فاز @{sender} بلعبة لودو.\n🎲 الرول الأخير: {roll}\n📍 وصل إلى نهاية المسار.",win_img)
+                self.ludo_games.pop(key,None); return True
+            game["turn"]=(game.get("turn",0)+1)%len(game["players"])
+            if game.get("bot") and game["players"][game["turn"]]=="🤖 البوت":
+                br=secrets.randbelow(6)+1; game["tokens"]["🤖 البوت"]=min(40,game["tokens"].get("🤖 البوت",0)+br); game["turn"]=0
             return True
-
         return False
 
     def handle_game_command(self, room, text, sender_name):
@@ -7251,14 +7091,7 @@ class TalkinBot:
                 return self._stock_exchange_game(room,sender_name,int(raw))
         if self._handle_pending_bot_choice(room, raw, sender_name):
             return True
-
-        # Ludo has its own room-scoped command state. Handle it BEFORE the
-        # generic command detector so plain numeric choices (1/2/3/4) are not
-        # discarded as ordinary chat.
-        if self._ludo_command(room, sender_name, raw):
-            return True
-
-        # Do not run the verification gate for ordinary conversation. The
+        # Do not run the verification gate for ordinary conversation.  The
         # caller may pass every room message here, so first require a known
         # bot/game command; unrelated text must be ignored silently.
         if not _looks_like_bot_command(raw):
@@ -7266,6 +7099,7 @@ class TalkinBot:
         low=raw.casefold()
         normalized_raw = raw.replace("ة", "ه")
         if self._snake_command(room,sender_name,raw): return True
+        if self._ludo_command(room,sender_name,raw): return True
         # Game-name normalization: Arabic ه/ة variants are treated as the same
         # command (e.g. سناره/سنارة, حصانه/حصانة), while preserving raw text
         # for commands that contain user arguments.
