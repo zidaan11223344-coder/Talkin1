@@ -4338,6 +4338,10 @@ class TalkinBot:
             raise ValueError(f"unsupported private media type: {media_type}")
         if media_type == "audio":
             self._verify_public_media_url(media_url, "audio")
+        # Private song sharing is audio-only; never infer an image/file packet
+        # from the URL when the gateway receives an MP3.
+        if media_type == "audio" and not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
+            self.log("[MEDIA] audio URL has no audio extension; explicit audio type is used")
         payload = encode_query(
             "chat_message", type_=media_type, to=username, url=media_url,
             body="",
@@ -4347,6 +4351,8 @@ class TalkinBot:
         for attempt in range(2):
             try:
                 result = self.send_query(payload)
+                if result is False:
+                    raise RuntimeError("خادم Talkin رفض حزمة الوسائط الخاصة")
                 if attempt:
                     self.log("[MEDIA] private media delivered after retry:", username, media_type)
                 return result
@@ -9982,13 +9988,22 @@ class TalkinBot:
         # publish that image even when it was sent from a different room.
         if event_type == "image":
             media_url = str(event.get(7, "") or event.get(6, "") or event.get("url", "") or "").strip()
-            if frm and frm != BOT_ID and media_url:
+            # Different Talkin server versions put the image author in field
+            # 2 or field 22 (or expose it by name). Try all candidates so a
+            # valid انشر followed by a photo is never silently discarded.
+            media_senders = []
+            for candidate in (frm, event.get(22, ""), event.get("sender", ""), event.get("username", "")):
+                candidate = str(candidate or "").strip()
+                if candidate and candidate not in media_senders and _norm_user(candidate) != _norm_user(BOT_ID):
+                    media_senders.append(candidate)
+            if media_senders and media_url:
                 # The pending publish record is the authorization. Do not add
                 # a second verification gate here: some servers identify the
                 # sender differently on media events, which used to make the
                 # image silently disappear after a valid انشر command.
-                if self._handle_publish_media(room, frm, media_url):
-                    return
+                for media_sender in media_senders:
+                    if self._handle_publish_media(room, media_sender, media_url):
+                        return
             return
 
         if event_type != "text" or not body:
@@ -10180,8 +10195,11 @@ class TalkinBot:
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لتشغيل الأغاني.\n{_verification_notice()}")
                 return
-            command = body.replace(".تشغيل ", ".sa ", 1) if body.strip().startswith(".تشغيل ") else body.replace("بث ", ".sa ", 1)
-            if self.handle_music_command(room, command, frm, broadcast_all=False, with_reactions=False):
+            is_room_broadcast = body.strip().startswith("بث ")
+            command = body.replace(".تشغيل ", ".sa ", 1) if not is_room_broadcast else body.replace("بث ", ".sa ", 1)
+            # بث means broadcast to every room connected to this bot;
+            # .تشغيل remains local to the room where it was requested.
+            if self.handle_music_command(room, command, frm, broadcast_all=is_room_broadcast, with_reactions=False):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
@@ -10387,8 +10405,9 @@ class TalkinBot:
                         self.share_last_music(frm, m_share.group(1))
                         return
                     if body.strip().startswith((".تشغيل ", "بث ")):
-                        command = body.replace(".تشغيل ", ".sa ", 1) if body.strip().startswith(".تشغيل ") else body.replace("بث ", ".sa ", 1)
-                        if self.handle_music_command(self.room, command, frm, broadcast_all=False, with_reactions=False):
+                        is_room_broadcast = body.strip().startswith("بث ")
+                        command = body.replace(".تشغيل ", ".sa ", 1) if not is_room_broadcast else body.replace("بث ", ".sa ", 1)
+                        if self.handle_music_command(self.room, command, frm, broadcast_all=is_room_broadcast, with_reactions=False):
                             return
                     if body.strip().lower().startswith(".sa "):
                         if self.handle_music_command(self.room, body, frm):
