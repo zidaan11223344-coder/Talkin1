@@ -324,7 +324,7 @@ _STATE_FILE_NAMES = (
     "messages.json", "published_posts.json", "game_stats.json", "game_levels.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
     "moderation.json", "mf.json", "filter_bans.json", "publish_bans.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
-    "custom_commands.json", "repair_state.json", "wager_state.json", "backup_manifest.json",
+    "custom_commands.json", "repair_state.json", "wager_state.json", "last_action.json", "backup_manifest.json",
 )
 
 def _json_has_real_data(path):
@@ -1662,7 +1662,7 @@ def _looks_like_bot_command(text):
         return False
     prefixes = (
         "sa@", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@",
-        "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
+        ".u", "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "هدايا", "gifts", "gv", "sher@", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "انشر", "نشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
@@ -1684,7 +1684,7 @@ def _looks_like_bot_command(text):
 def _looks_like_admin_command(text):
     low = str(text or "").strip().casefold()
     prefixes = (
-        "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
+        ".u", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "mas@", "umas@", "sb@",
         "b@", "bl@", "k@", "u@", "ub@", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ",
         "i@", "inv", "دعوات", "invite", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "انشر", "نشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "دخول الكل", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "توثيق الكل", "وثق الكل", "verify",
@@ -3321,6 +3321,12 @@ class TalkinBot:
         self.pending_admin_actions = {}
         self.pending_admin_lock = threading.Lock()
         self.last_admin_actions = {}
+        # Last successfully dispatched bot command. Used by `.u` to repeat
+        # the exact command (room, sender, privacy and arguments).
+        self.last_bot_action = _load_local_json(DATA_DIR / "last_action.json", {})
+        if not isinstance(self.last_bot_action, dict):
+            self.last_bot_action = {}
+        self._replaying_bot_action = False
         # Reaction/publish state must exist before any background music or
         # image-publish worker can write to it.
         self.reaction_targets = {}
@@ -3920,6 +3926,92 @@ class TalkinBot:
             if line is not None:
                 self.send_room_text(room, str(line))
         return True
+
+    def _remember_bot_action(self, room, body, sender, is_private=False):
+        """Remember the last command the bot actually dispatched.
+
+        `.u` replays this command verbatim. We deliberately store the original
+        sender and room so permission checks and room-scoped commands behave
+        exactly as they did the first time. Replay itself is never recorded as
+        a new action.
+        """
+        if getattr(self, "_replaying_bot_action", False):
+            return
+        text = str(body or "").strip()
+        if not text or text.casefold() == ".u":
+            return
+        # Navigation/help is not a meaningful bot action to repeat.
+        if _is_ns_command(text) or re.fullmatch(r"a[1-6]", text, re.I) or text.casefold() in {"اوامر", "الاوامر", "help", "مساعدة"}:
+            return
+        action = {
+            "command": text,
+            "room": str(room or ""),
+            "sender": str(sender or ""),
+            "is_private": bool(is_private),
+            "created_at": int(time.time()),
+        }
+        self.last_bot_action = action
+        try:
+            _save_local_json(DATA_DIR / "last_action.json", action)
+        except Exception as exc:
+            self.log("[UNDO] save last action failed:", repr(exc))
+        self.log(f"[UNDO] last action saved: {text!r} room={room!r} sender={sender!r}")
+
+    def _replay_last_bot_action(self, requester):
+        """Replay the last stored bot command once, without replacing it."""
+        action = getattr(self, "last_bot_action", None)
+        if not isinstance(action, dict) or not str(action.get("command") or "").strip():
+            action = _load_local_json(DATA_DIR / "last_action.json", {})
+        if not isinstance(action, dict) or not str(action.get("command") or "").strip():
+            self.send_private_text(requester, "📭 لا يوجد أمر سابق نفذه البوت لإعادته.")
+            return True
+
+        command = str(action.get("command") or "").strip()
+        if command.casefold() == ".u":
+            self.send_private_text(requester, "📭 لا يوجد أمر سابق صالح لإعادته.")
+            return True
+        target_room = str(action.get("room") or "").strip()
+        original_sender = str(action.get("sender") or "").strip() or str(requester or "").strip()
+        is_private = bool(action.get("is_private", False))
+
+        self.send_private_text(
+            requester,
+            f"↻ إعادة تنفيذ آخر أمر للبوت:\n"
+            f"📌 الأمر: {command}\n"
+            f"🏠 الغرفة: {target_room or 'غير محددة'}"
+        )
+
+        old_flag = getattr(self, "_replaying_bot_action", False)
+        self._replaying_bot_action = True
+        try:
+            # Use the same command pipeline used by normal incoming messages.
+            # The replay flag prevents .u from replacing the saved action with itself.
+            if self._handle_management_command(target_room, command, original_sender, is_private=is_private):
+                return True
+            low = command.casefold()
+            if re.match(r"^sa@[^@]+@.+$", command, re.I):
+                return bool(self.handle_gift_command(target_room, command, original_sender))
+            if low in ("هدايا", "gifts", "gv"):
+                self.gift_help(target_room)
+                return True
+            if re.fullmatch(r"sher@(.+)", command, re.I):
+                self.share_last_music(original_sender, command.split("@",1)[1], target_room)
+                return True
+            if low.startswith(".sa "):
+                return bool(self.handle_music_command(target_room, command, original_sender))
+            if low in ("نقاطي", "points"):
+                self.send_room_text(target_room, _points_summary_text(original_sender))
+                return True
+            if self._run_game_command_async(target_room, command, original_sender):
+                return True
+            self.send_private_text(requester, "⚠️ لم يعد الأمر السابق معروفاً في النسخة الحالية من البوت.")
+            return True
+        except Exception as exc:
+            self.log("[UNDO] replay failed:", repr(exc))
+            self.send_private_text(requester, f"❌ تعذر إعادة تنفيذ الأمر: {exc}")
+            return True
+        finally:
+            self._replaying_bot_action = old_flag
 
     def send_admin(self, room: str, target: str, operation: str):
         """Execute room moderation directly over TalkinChat's native room_admin query.
@@ -6843,6 +6935,8 @@ class TalkinBot:
                     self.report_master_error("الألعاب", exc, room)
                 except Exception:
                     pass
+        if not getattr(self, "_replaying_bot_action", False):
+            self._remember_bot_action(room, text, sender_name, is_private=False)
         threading.Thread(
             target=worker,
             name="game-command",
@@ -7955,6 +8049,7 @@ class TalkinBot:
             return True
 
         is_publish = _is_publish_command(body)
+        repeat_last_command = str(body or "").strip().casefold() == ".u"
         security_command = bool(
             re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I)
             or re.match(r"^mr@\d+$", str(body or "").strip(), re.I)
@@ -7977,6 +8072,7 @@ class TalkinBot:
                 and not (is_publish and _is_verified_user(sender))
                 and not join_command
                 and not join_all_command
+                and not repeat_last_command
                 and not (security_command and room and _room_manager(self, room, sender))):
             return False
         # A private command can be replayed by the Talkin transport with a new
@@ -8009,6 +8105,8 @@ class TalkinBot:
             help_command = bool(re.fullmatch(r"a[1-6]", str(body or '').strip(), re.I)
                                 or str(body or '').strip().casefold() in
                                 {"اوامر", "الاوامر", "help", "مساعدة", "ns", "n", "التالي", "القائمة التالية", "next"})
+            if handled and not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, sender, is_private=is_private)
             if handled and _is_master_name(sender) and not help_command:
                 if is_private and not self._master_reply_local.private_replied:
                     self.send_private_text(sender, f"✅ تم تنفيذ الأمر: {str(body or '').strip()}")
@@ -8998,19 +9096,10 @@ class TalkinBot:
         if low == ".u":
             if not _is_master_name(sender):
                 return True
-            undo = self.last_admin_actions.get(_norm_user(sender))
-            if not undo:
-                self.send_private_text(sender, "📭 لا يوجد إجراء إداري مؤكد يمكن التراجع عنه.")
-                return True
-            target_room = str(undo.get("room") or room or "").strip()
-            target_user = str(undo.get("target") or "").strip().lstrip("@")
-            inverse = str(undo.get("inverse") or "member").strip().lower()
-            if not target_room or not target_user:
-                self.send_private_text(sender, "❌ تعذر تحديد آخر إجراء للتراجع عنه.")
-                return True
-            if self.request_admin_action(target_room, target_user, inverse, sender):
-                self.send_private_text(sender, f"↩️ جاري التراجع عن آخر إجراء: @{target_user}")
-            return True
+            # `.u` means repeat the last bot action, not undo it. This covers
+            # moderation, owner/admin changes, games, music, publishing and
+            # other commands that reached the normal dispatcher.
+            return self._replay_last_bot_action(sender)
 
         m=re.match(r"^(u@|ub@|unban\s+)(@?[^\s]+)$", text, re.I)
         if m:
@@ -9792,6 +9881,8 @@ class TalkinBot:
         # نقاطي متاح للجميع ولا يحتاج توثيقاً.
         if body.strip().casefold() in ("نقاطي", "points"):
             self.send_room_text(room, _points_summary_text(frm))
+            if not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, frm, is_private=False)
             return
 
         # Verified users may use normal bot commands; administration remains
@@ -9810,19 +9901,27 @@ class TalkinBot:
                 self.send_room_text(room, f"🔒 @{frm} يحتاج توثيقاً لاستخدام الهدايا.\n{_verification_notice()}")
                 return
             if self.handle_gift_command(room, body, frm):
+                if not getattr(self, "_replaying_bot_action", False):
+                    self._remember_bot_action(room, body, frm, is_private=False)
                 return
         if body.strip().casefold() in ("هدايا", "gifts", "gv"):
             self.gift_help(room)
+            if not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, frm, is_private=False)
             return
         m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
         if m_share:
             self.share_last_music(frm, m_share.group(1), room)
+            if not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, frm, is_private=False)
             return
         if body.strip().lower().startswith(".sa "):
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.\n{_verification_notice()}")
                 return
             if self.handle_music_command(room, body, frm):
+                if not getattr(self, "_replaying_bot_action", False):
+                    self._remember_bot_action(room, body, frm, is_private=False)
                 return
 
         # Keep a small per-room message history for diagnostics.
@@ -9833,6 +9932,8 @@ class TalkinBot:
             return
 
         if self._run_game_command_async(room, body, frm):
+            if not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, frm, is_private=False)
             return
 
         # Exact-match automatic replies are intentionally evaluated LAST so
