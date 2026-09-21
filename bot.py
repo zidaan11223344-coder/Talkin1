@@ -499,6 +499,12 @@ def _arabic_filter_word(word):
 BANNED_WORDS = {w for w in (_ENV_BANNED_WORDS | _BUILTIN_OFFENSIVE_WORDS) if _arabic_filter_word(w)}
 AUTO_BAN_WORDS = os.getenv("AUTO_BAN_WORDS", "1") == "1"
 
+# دخول عدد كبير من النكات خلال ثوانٍ = فلود دخول.
+# هذه الحماية تعمل فقط عندما تكون حماية الدخول/الخروج مفعلة.
+JOIN_FLOOD_WINDOW_SECONDS = max(2.0, float(os.getenv("JOIN_FLOOD_WINDOW_SECONDS", "10")))
+JOIN_FLOOD_THRESHOLD = max(2, int(os.getenv("JOIN_FLOOD_THRESHOLD", "4")))
+JOIN_FLOOD_ACTIVE_SECONDS = max(3.0, float(os.getenv("JOIN_FLOOD_ACTIVE_SECONDS", "15")))
+
 # ------------------------- protobuf wire helpers -------------------------
 
 def _varint(n: int) -> bytes:
@@ -3541,6 +3547,12 @@ class TalkinBot:
         self.bot_blocked_users = _bot_blocked_users()
         self.filter_exceptions = _filter_exception_users()
         self._joinleave_state = defaultdict(lambda: defaultdict(lambda: {"events":[], "last_type":"", "banned_until":0.0}))
+        # Join-flood state: room -> {events: [(timestamp, username)], active_until: float}
+        # When several different nicknames enter in a short burst, all nicknames
+        # in that burst are banned immediately, and new arrivals during the active
+        # window are banned as well.
+        self._join_flood_state = defaultdict(lambda: {"events": [], "active_until": 0.0})
+        self._join_flood_lock = threading.Lock()
         self._pending_protection_number = {}
         self.snake_games = {}
         self.ludo_games = {}
@@ -8847,8 +8859,8 @@ class TalkinBot:
                 "2️⃣ إيقاف حماية الغرفة من السب\n"
                 "3️⃣ تشغيل حماية الغرفة من الفلود\n"
                 "4️⃣ إيقاف حماية الغرفة من الفلود\n"
-                "5️⃣ تشغيل حماية الغرفة من الدخول والخروج\n"
-                "6️⃣ إيقاف حماية الغرفة من الدخول والخروج\n"
+                "5️⃣ تشغيل حماية الغرفة من فلود الدخول والخروج\n"
+                "6️⃣ إيقاف حماية الغرفة من فلود الدخول والخروج\n"
                 "7️⃣ تعيين عدد الرسائل للحماية من الفلود\n\n"
                 "📌 أرسل رقم الخيار الآن.")
             return True
@@ -8915,7 +8927,8 @@ class TalkinBot:
             if not room or not _room_manager(self, room, sender):
                 return True
             cfg = _save_room_moderation(room, enabled=True)
-            _save_room_protection(room, swear=True, flood=True)
+            # Full protection includes message flood + profanity + join-flood.
+            _save_room_protection(room, swear=True, flood=True, joinleave=True)
             self.send_room_text(room, f"🛡️ حماية الغرفة شغالة. حد التكرار: {cfg['repeat_limit']} رسائل.")
             return True
         if low in ("إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "الحماية إيقاف", "الحمايه ايقاف"):
@@ -10038,6 +10051,94 @@ class TalkinBot:
         except Exception as exc:
             self.log("[JOINLEAVE] auto-unban failed", repr(exc))
 
+    def _handle_join_flood(self, room, username):
+        """Detect a burst of distinct room joins and ban the whole burst.
+
+        This is intentionally tied to the room's `joinleave` protection switch.
+        The configured bot/master accounts are never auto-banned.
+        """
+        room = str(room or "").strip()
+        username = str(username or "").strip().lstrip("@")
+        if not room or not username:
+            return False
+
+        ukey = _norm_user(username)
+        if not ukey or ukey in {_norm_user(BOT_ID), _norm_user(BOT_MASTER)}:
+            return False
+
+        rkey = _norm_room(room)
+        now = time.time()
+        targets = set()
+        triggered = False
+
+        with self._join_flood_lock:
+            st = self._join_flood_state[rkey]
+            events = st.setdefault("events", [])
+            cutoff = now - JOIN_FLOOD_WINDOW_SECONDS
+            events[:] = [
+                (float(ts), str(user))
+                for ts, user in events
+                if float(ts) >= cutoff and _norm_user(user)
+            ]
+
+            # Keep one entry per nickname in the current window.
+            if not any(_norm_user(user) == ukey for _, user in events):
+                events.append((now, username))
+
+            unique = {}
+            for ts, user in events:
+                key = _norm_user(user)
+                if key not in {_norm_user(BOT_ID), _norm_user(BOT_MASTER)}:
+                    unique[key] = user
+
+            active_until = float(st.get("active_until", 0.0) or 0.0)
+
+            if len(unique) >= JOIN_FLOOD_THRESHOLD:
+                triggered = True
+                st["active_until"] = now + JOIN_FLOOD_ACTIVE_SECONDS
+                targets.update(unique.values())
+            elif now < active_until:
+                # Once a join flood is detected, catch every new nickname that
+                # enters during the short active window.
+                targets.add(username)
+
+        if not targets:
+            return False
+
+        # Do the native room bans immediately and independently so one failure
+        # does not prevent the remaining flood accounts from being banned.
+        def ban_target(target):
+            try:
+                self.send_admin(room, target, "ban")
+                _record_filter_ban(
+                    target,
+                    room,
+                    "حماية فلود الدخول",
+                    "دخول عدة نكات خلال وقت قصير",
+                )
+                self.log(f"[JOIN-FLOOD] banned room={room} target=@{target}")
+            except Exception as exc:
+                self.log(f"[JOIN-FLOOD] ban failed room={room} target=@{target}: {exc!r}")
+
+        workers = []
+        for target in sorted(targets, key=lambda x: _norm_user(x)):
+            t = threading.Thread(
+                target=ban_target,
+                args=(target,),
+                daemon=True,
+                name="join-flood-ban",
+            )
+            t.start()
+            workers.append(t)
+
+        if triggered:
+            self.log(
+                f"[JOIN-FLOOD] detected room={room} "
+                f"unique={len(targets)} threshold={JOIN_FLOOD_THRESHOLD} "
+                f"window={JOIN_FLOOD_WINDOW_SECONDS}s"
+            )
+        return True
+
     def handle_room_event(self, result):
         event = result.get("room_event") or {}
         if not hasattr(self, "blocked_rooms"):
@@ -10081,6 +10182,10 @@ class TalkinBot:
         # exact event names and RoomEvent fields.
         if event_type in ("user_joined", "user_left") and username:
             pcfg=_room_protection_cfg(room)
+            if event_type == "user_joined" and pcfg.get("joinleave"):
+                # A burst of different nicknames is treated as join-flood.
+                # The helper bans every nickname already inside the burst.
+                self._handle_join_flood(room, username)
             if pcfg.get("joinleave") and _norm_user(username)!=_norm_user(BOT_ID):
                 st=self._joinleave_state[_norm_room(room)][_norm_user(username)]
                 now=time.time(); evs=st.setdefault("events",[])
