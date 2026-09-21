@@ -76,7 +76,7 @@ bot.STREAM_ACCEPT_DELAY = 0
 bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
 stream_obj._handle_stream_event({1: "you_invited", 5: "invite-1", 6: "room-1", 8: "main"})
-assert [item[1][0].decode() for item in payloads[-3:]] == [bot.STREAM_INVITE_ACTION, bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
+assert [item[1][0].decode() for item in payloads[-4:]] == [bot.STREAM_INVITE_ACTION, bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION, bot.STREAM_ACCEPT_ACTION]
 
 # Older gateway builds use an equivalent invitation name and string fields.
 stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "duration": 9, "room_id": "room-2"}

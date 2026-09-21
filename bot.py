@@ -4392,12 +4392,17 @@ class TalkinBot:
             return False
         try:
             self._pending_live_tracks = getattr(self, "_pending_live_tracks", {})
-            self._pending_live_tracks[room] = {
+            pending = {
                 "url": media_url, "duration": int(duration or 0),
                 "room_id": "", "created_at": time.time()
             }
-            self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
-            self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
+            self._pending_live_tracks[room] = pending
+            ready_rooms = getattr(self, "_live_ready_rooms", set())
+            if room in ready_rooms:
+                ready_rooms.discard(room)
+            else:
+                self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
+                self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
             # Older servers do not emit a you_invited callback for a self
             # invitation. Keep the legacy room-based accept/audio fallback;
             # newer servers will consume the callback path below instead.
@@ -4424,6 +4429,24 @@ class TalkinBot:
             self.log("[STREAM] experimental live flow failed:", repr(exc))
             return False
 
+    def request_live_room(self, room: str):
+        """Request a live-room seat before a later `بث` command."""
+        room = str(room or "").strip()
+        if not STREAM_EXPERIMENTAL_ENABLED:
+            self.send_room_text(room, "❌ البث الحي غير مفعّل في إعدادات البوت.")
+            return True
+        if not room:
+            return False
+        try:
+            self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
+            self.log("[STREAM] manual invite", room, STREAM_INVITE_ACTION)
+            self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
+            self.send_room_text(room, "📡 تم إرسال طلب صعود البوت للبث. بعد صعوده اكتب: بث اسم الأغنية")
+        except Exception as exc:
+            self.log("[STREAM] manual invite failed:", repr(exc))
+            self.send_room_text(room, f"❌ تعذر إرسال طلب الصعود للبث: {str(exc)[:180]}")
+        return True
+
     def _master_is_online(self):
         """Return the latest presence state known by this bot connection."""
         return bool(getattr(self, "master_online", False))
@@ -4446,10 +4469,24 @@ class TalkinBot:
             pending = pending_tracks.get(pending_key) if pending_key else None
             room_name = pending_key or room_name
         self.log("[STREAM] you_invited", room_name, "room_id=", room_id, "invite_id=", invite_id)
-        if not pending or not room_id or not invite_id:
+        if not room_id or not invite_id:
             self.log("[STREAM] no queued track for invitation", room_name)
             return False
+        if not pending:
+            try:
+                self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
+                self._live_ready_rooms.add(room_name)
+                self.send_query(encode_query(
+                    STREAM_ACCEPT_ACTION, room=room_id, id_=invite_id, to=BOT_ID,
+                    value=STREAM_ACCEPT_STATE, state=STREAM_ACCEPT_STATE,
+                ))
+                self.log("[STREAM] accepted seat invitation; waiting for بث command", room_name)
+                return True
+            except Exception as exc:
+                self.log("[STREAM] seat invitation accept failed:", repr(exc))
+                return False
         try:
+            getattr(self, "_live_ready_rooms", set()).add(room_name)
             self.log("[STREAM] accept invitation", STREAM_ACCEPT_ACTION)
             self.send_query(encode_query(
                 STREAM_ACCEPT_ACTION, room=room_id, id_=invite_id, to=BOT_ID,
@@ -5530,6 +5567,11 @@ class TalkinBot:
                         # proven room-audio fallback for visible commands.
                         if not live_started:
                             self.send_room_media(target_room,url,"audio",duration)
+                elif live_stream:
+                    if live_started:
+                        self.send_room_text(room, f"✅ تم تشغيل {title} في البث الحي.")
+                    else:
+                        self.send_room_text(room, "❌ لم يصعد البوت للبث؛ استخدم أمر صعود ثم أعد أمر بث.")
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
                 if room_output:
@@ -10303,6 +10345,12 @@ class TalkinBot:
             self.gift_help(room)
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
+            return
+        if body.strip().casefold() in ("صعود", "اصعد", "إصعد", ".صعود", "live", "join live"):
+            if not is_verified:
+                self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام البث.\n{_verification_notice()}")
+                return
+            self.request_live_room(room)
             return
         m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)\s+@?([^\s@]+)", body.strip(), re.I)
         if m_share_ar:
