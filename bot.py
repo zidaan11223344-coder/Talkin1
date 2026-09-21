@@ -3463,6 +3463,12 @@ class TalkinBot:
         # image-publish worker can write to it.
         self.reaction_targets = {}
         self.publish_pending = {}
+        monitored = _load_local_json(DATA_DIR / "monitored_users.json", [])
+        self.monitored_users = {
+            _norm_user(item) for item in (monitored if isinstance(monitored, list) else [])
+            if _norm_user(item)
+        }
+        self._monitor_invited = set()
         self.invite_pending = False
         self.invites_enabled = True
         self.invite_silent_master = False
@@ -3687,6 +3693,60 @@ class TalkinBot:
                 self.send_private_text(BOT_MASTER, message)
             except Exception as notify_error:
                 self.log("[MASTER-ERROR] failed:", repr(notify_error))
+
+    def _monitor_command(self, sender, text):
+        """Handle master-only private monitoring commands."""
+        if not _is_primary_master(sender):
+            return False
+        raw = str(text or "").strip()
+        match = re.fullmatch(r"(?:مراقبه|مراقبة|راقب)\s*@?([^\s@]+)", raw, re.I)
+        if match:
+            username = match.group(1).strip().lstrip("@")
+            key = _norm_user(username)
+            if not key:
+                self.send_private_text(sender, "❌ الصيغة: مراقبه اسم_المستخدم")
+                return True
+            self.monitored_users.add(key)
+            _save_local_json(DATA_DIR / "monitored_users.json", sorted(self.monitored_users))
+            self.send_private_text(sender, f"👁️ تمت إضافة @{username} للمراقبة.")
+            return True
+        match = re.fullmatch(r"(?:إلغاء\s+مراقبه|الغاء\s+مراقبه|إيقاف\s+مراقبه|ايقاف\s+مراقبه)\s*@?([^\s@]+)", raw, re.I)
+        if match:
+            username = match.group(1).strip().lstrip("@")
+            self.monitored_users.discard(_norm_user(username))
+            self._monitor_invited = {x for x in self._monitor_invited if x[1] != _norm_user(username)}
+            _save_local_json(DATA_DIR / "monitored_users.json", sorted(self.monitored_users))
+            self.send_private_text(sender, f"✅ تم إيقاف مراقبة @{username}.")
+            return True
+        if raw.casefold() in {"المراقبين", "المراقبة", "قائمة المراقبة"}:
+            names = "، ".join(sorted(self.monitored_users)) or "لا يوجد"
+            self.send_private_text(sender, f"👁️ المستخدمون المراقبون:\n{names}")
+            return True
+        return False
+
+    def _report_monitored_event(self, room, event_type, username, detail=""):
+        key = _norm_user(username)
+        if not key or key not in getattr(self, "monitored_users", set()):
+            return
+        room = str(room or self.room or "").strip()
+        summary = f"👁️ مراقبة @{username}\n📌 الحدث: {event_type}\n🏠 الغرفة: {room}"
+        if detail:
+            summary += f"\n📝 {str(detail)[:240]}"
+        try:
+            self.send_private_text(BOT_MASTER, summary)
+        except Exception as exc:
+            self.log("[MONITOR] report failed:", repr(exc))
+        # Invite once per user/room, using the same native invite path used by
+        # the normal invite command. Never spam the user on every event.
+        invite_key = (_norm_room(room), key)
+        if room and invite_key not in self._monitor_invited:
+            self._monitor_invited.add(invite_key)
+            try:
+                self.send_private_invite(username, room)
+                self.send_private_text(BOT_MASTER, f"📨 أرسلت دعوة إلى @{username} من غرفة {room}.")
+            except Exception as exc:
+                self.log("[MONITOR] invite failed:", repr(exc))
+                self.send_private_text(BOT_MASTER, f"❌ تعذر دعوة @{username} من غرفة {room}: {str(exc)[:180]}")
 
     def authenticate(self):
         body = encode_auth_request(BOT_ID, BOT_PWD)
@@ -9964,6 +10024,8 @@ class TalkinBot:
             _save_persistent_rooms(self.known_rooms)
         event_id = str(event.get(41, ""))
         username = str(event.get(22, "") or "").strip()
+        monitored_username = username or frm or str(event.get(17, "") or "").strip()
+        self._report_monitored_event(room, event_type, monitored_username, body)
         # NS is a navigation command. Every newly received NS must be accepted
         # immediately; do not let the transport replay/duplicate cache suppress
         # rapid NS presses.
@@ -10556,6 +10618,8 @@ class TalkinBot:
                         self.master_online = True
                         self.master_last_seen = time.time()
                     if body and self._handle_master_process_command(frm, body, is_private=True):
+                        return
+                    if body and self._monitor_command(frm, body):
                         return
                     # When this process is the master account, it owns the
                     # private service flow and performs verification itself.
