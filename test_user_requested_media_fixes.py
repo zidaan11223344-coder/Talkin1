@@ -53,6 +53,19 @@ route_obj.handle_music_command("main", command, "sender", broadcast_all=is_room_
 assert route_obj.last_call[1] == ".sa اسم الأغنية"
 assert route_obj.last_call[3]["broadcast_all"] is True
 
+# 3b) `.sa` publishes the audio file to every connected room.
+route_obj.handle_music_command("main", ".sa اسم الأغنية", "sender", broadcast_all=True, room_output=True)
+assert route_obj.last_call[3]["broadcast_all"] is True
+assert route_obj.last_call[3]["room_output"] is True
+
+# 3c) `بث` is live-only and must not send a normal room attachment.
+route_obj.handle_music_command(
+    "main", ".sa اسم الأغنية", "sender",
+    broadcast_all=False, room_output=False, live_stream=True,
+)
+assert route_obj.last_call[3]["live_stream"] is True
+assert route_obj.last_call[3]["room_output"] is False
+
 # 4) The experimental live flow emits invite -> accept -> audio in order.
 stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
@@ -64,5 +77,10 @@ bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
 stream_obj._handle_stream_event({1: "you_invited", 5: "invite-1", 6: "room-1", 8: "main"})
 assert [item[1][0].decode() for item in payloads[-3:]] == [bot.STREAM_INVITE_ACTION, bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
+
+# Older gateway builds use an equivalent invitation name and string fields.
+stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "duration": 9, "room_id": "room-2"}
+stream_obj._handle_stream_event({"type": "invited", "invite_id": "invite-2", "room_id": "room-2", "room": ""})
+assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
 
 print("user requested media fixes: PASS")

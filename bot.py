@@ -4392,7 +4392,8 @@ class TalkinBot:
         try:
             self._pending_live_tracks = getattr(self, "_pending_live_tracks", {})
             self._pending_live_tracks[room] = {
-                "url": media_url, "duration": int(duration or 0), "created_at": time.time()
+                "url": media_url, "duration": int(duration or 0),
+                "room_id": "", "created_at": time.time()
             }
             self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
             self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
@@ -4409,12 +4410,19 @@ class TalkinBot:
         """Accept a real you_invited event, then publish the queued track."""
         if not STREAM_EXPERIMENTAL_ENABLED or not isinstance(event, dict):
             return False
-        if str(event.get(1, "") or "").strip().casefold() != "you_invited":
+        event_type = str(event.get(1, "") or event.get("type", "") or "").strip().casefold()
+        if event_type not in {"you_invited", "invited", "stream_invite", "live_invite"}:
             return False
-        room_name = str(event.get(8, "") or "").strip()
-        room_id = str(event.get(6, "") or "").strip()
-        invite_id = str(event.get(5, "") or "").strip()
-        pending = getattr(self, "_pending_live_tracks", {}).get(room_name)
+        room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or "").strip()
+        room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or "").strip()
+        invite_id = str(event.get(5, "") or event.get(4, "") or event.get("invite_id", "") or event.get("id", "") or "").strip()
+        pending_tracks = getattr(self, "_pending_live_tracks", {})
+        pending = pending_tracks.get(room_name)
+        if not pending and room_id:
+            pending_key = next((key for key, item in pending_tracks.items()
+                                if str(item.get("room_id", "")) == room_id), None)
+            pending = pending_tracks.get(pending_key) if pending_key else None
+            room_name = pending_key or room_name
         self.log("[STREAM] you_invited", room_name, "room_id=", room_id, "invite_id=", invite_id)
         if not pending or not room_id or not invite_id:
             self.log("[STREAM] no queued track for invitation", room_name)
@@ -5453,7 +5461,7 @@ class TalkinBot:
         detail=" | ".join(errors[-10:])
         raise RuntimeError("تعذر تنزيل ملف صوت من SoundCloud أو YouTube."+(f" تفاصيل: {detail[:1200]}" if detail else ""))
 
-    def handle_music_command(self,room,text,requester,private_to="",broadcast_all=True,with_reactions=True):
+    def handle_music_command(self,room,text,requester,private_to="",broadcast_all=True,with_reactions=True,room_output=True,live_stream=False):
         raw=text.strip()
         if not raw.lower().startswith(".sa "): return False
         query=raw[4:].strip()
@@ -5488,21 +5496,22 @@ class TalkinBot:
                     caption=(f"🎶 تم تشغيل الأغنية\n━━━━━━━━━━━━\n"
                              f"🎵 العنوان: {title}\n🎤 الطلب: @{requester}\n"
                              f"📡 المصدر: {artist or 'Music'}")
-                live_started = False
-                if broadcast_all:
-                    live_started = self._play_music_in_live_room(room, url, duration)
-                target_rooms=self._active_rooms() if broadcast_all else [room]
-                for target_room in target_rooms:
-                    self.send_room_text(target_room,caption)
-                    # If the experimental live actions are accepted, the
-                    # track is already on the room broadcast; do not also
-                    # send a duplicate room attachment. If the server rejects
-                    # them, retain the proven room-audio fallback.
-                    if not live_started:
-                        self.send_room_media(target_room,url,"audio",duration)
+                # `.sa` publishes the audio file to the connected rooms.
+                # `بث` is the separate live-room mode and must not duplicate
+                # the track as a normal room attachment.
+                live_started = self._play_music_in_live_room(room, url, duration) if live_stream else False
+                if room_output:
+                    target_rooms=self._active_rooms() if broadcast_all else [room]
+                    for target_room in target_rooms:
+                        self.send_room_text(target_room,caption)
+                        # If the live actions are unavailable, retain the
+                        # proven room-audio fallback for visible commands.
+                        if not live_started:
+                            self.send_room_media(target_room,url,"audio",duration)
             except Exception as e:
                 self.report_master_error("تشغيل الأغنية", e, room)
-                self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
+                if room_output:
+                    self.send_room_text(room, "❌ تعذر تشغيل الأغنية. تم إرسال الخطأ الحقيقي للماستر.")
         threading.Thread(target=worker,name="music-request",daemon=True).start(); self.send_room_text(room,"⏳ جاري البحث عن الأغنية وتحضير الصوت..."); return True
 
     def share_last_music(self, sender: str, target: str, room: str = ""):
@@ -10281,7 +10290,12 @@ class TalkinBot:
             command = body.replace(".تشغيل ", ".sa ", 1) if not is_room_broadcast else body.replace("بث ", ".sa ", 1)
             # بث means broadcast to every room connected to this bot;
             # .تشغيل remains local to the room where it was requested.
-            if self.handle_music_command(room, command, frm, broadcast_all=is_room_broadcast, with_reactions=False):
+            if self.handle_music_command(
+                    room, command, frm,
+                    broadcast_all=not is_room_broadcast,
+                    with_reactions=False,
+                    room_output=not is_room_broadcast,
+                    live_stream=is_room_broadcast):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
