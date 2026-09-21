@@ -5146,15 +5146,9 @@ class TalkinBot:
         with self.invite_lock:
             self.invite_sent.add(username)
         self.log("[INV] normal private invite sent:", username, "room=", room)
-        # Talkin renders the font tag as the same green system-style notice
-        # used for role changes such as promotion/ban confirmations.
-        try:
-            self.send_room_text(
-                room,
-                f'<font color="#00C853">📨 تمت دعوة @{username} من الغرفة.</font>',
-            )
-        except Exception as exc:
-            self.log("[INV] room notice failed:", repr(exc))
+        # Do NOT announce each invitation inside the room. Invitations are a
+        # background action: only the invited user receives the private invite,
+        # while progress/result is reported privately to the command sender.
         return True
 
     def _users_from_room_admin(self, room_admin):
@@ -9712,11 +9706,14 @@ class TalkinBot:
                 }
                 self.send_room_text(target_room, "⏳ جاري التحقق من رتبة البوت...\n👑 يجب أن يكون البوت أونر لإكمال الدعوات.")
                 return True
+            # Run the invitation job in the background. Do not spam the room
+            # with per-user notices or HTML <font> tags; send the final result
+            # privately to the user who issued `inv`.
             self.request_occupants(
                 target_room,
                 silent_master=False,
-                response_room=target_room,
-                response_to="",
+                response_room="",
+                response_to=sender,
             )
             return True
         m_single_invite = re.fullmatch(r"i@(.+)", text.strip(), re.I)
