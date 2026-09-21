@@ -1,6 +1,8 @@
 import threading
 import bot
 
+assert bot.first_http_url({99: ["not-url", {77: "https://cdn/image-hidden.jpg"}]}) == "https://cdn/image-hidden.jpg"
+
 
 # 1) A photo event whose author is in field 22 must complete a pending publish.
 obj = object.__new__(bot.TalkinBot)

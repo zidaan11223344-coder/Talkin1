@@ -641,6 +641,27 @@ def as_text(v):
     return str(v)
 
 
+def first_http_url(value):
+    """Find the first public HTTP(S) URL in a decoded Talkin payload."""
+    if isinstance(value, str):
+        for token in value.replace("\n", " ").split():
+            token = token.strip("<>[](){}\"'")
+            if token.startswith(("http://", "https://")):
+                return token.rstrip(",.;")
+        return ""
+    if isinstance(value, dict):
+        for item in value.values():
+            found = first_http_url(item)
+            if found:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            found = first_http_url(item)
+            if found:
+                return found
+    return ""
+
+
 def first_text(fields, num, default=""):
     vals = fields.get(num)
     return as_text(vals[0]) if vals else default
@@ -10237,7 +10258,7 @@ class TalkinBot:
                 (str(event.get(key, "") or "").strip() for key in (7, 6, 9, 10, 11, "url", "media_url", "image_url")
                  if str(event.get(key, "") or "").strip().startswith(("http://", "https://"))),
                 "",
-        )
+        ) or first_http_url(event)
         if event_type in {"image", "photo", "picture", "media", "file"} or (media_url and event_type not in {"text", "user_joined", "user_left"}):
             # Different Talkin server versions put the image author in field
             # 2 or field 22 (or expose it by name). Try all candidates so a
@@ -10588,7 +10609,7 @@ class TalkinBot:
                         (str(cm.get(key, "") or "").strip() for key in (6, 7, 9, 10)
                          if str(cm.get(key, "") or "").strip().startswith(("http://", "https://"))),
                         "",
-                    )
+                    ) or first_http_url(cm)
                     # Every NS is a fresh navigation request. Do not suppress
                     # rapid NS commands with the normal transport de-dup cache.
                     # Direct private message is a user command, not an admin
