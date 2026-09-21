@@ -14,6 +14,10 @@ obj.connected_rooms = {"main"}
 obj.room_users = {}
 obj.publish_pending = {bot._norm_user("sender"): {"description": "test", "created_at": __import__("time").time()}}
 obj._handle_publish_media = lambda room, sender, url: sender == "sender" and url == "https://cdn/image.jpg"
+obj._try_publish_pending_media = lambda room, url, candidates=(): any(
+    obj._handle_publish_media(room, sender, url)
+    for sender in list(candidates) + list(obj.publish_pending)
+)
 obj.ack = lambda uid: None
 obj.log = lambda *args: None
 obj.send_room_text = lambda *args: None

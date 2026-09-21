@@ -4430,7 +4430,7 @@ class TalkinBot:
             return False
 
     def request_live_room(self, room: str):
-        """Request a live-room seat before a later `بث` command."""
+        """Join the live room directly before a later `بث` command."""
         room = str(room or "").strip()
         if not STREAM_EXPERIMENTAL_ENABLED:
             self.send_room_text(room, "❌ البث الحي غير مفعّل في إعدادات البوت.")
@@ -4439,12 +4439,20 @@ class TalkinBot:
             return False
         try:
             self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
-            self.log("[STREAM] manual invite", room, STREAM_INVITE_ACTION)
-            self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
-            self.send_room_text(room, "📡 تم إرسال طلب صعود البوت للبث. بعد صعوده اكتب: بث اسم الأغنية")
+            # A self-invite is not a real seat request on Talkin. Use the
+            # native accept/join action directly; the server may already have
+            # an open seat for the bot in this room.
+            self.log("[STREAM] direct live join", room, STREAM_ACCEPT_ACTION)
+            self.send_query(encode_query(
+                STREAM_ACCEPT_ACTION, room=room, to=BOT_ID,
+                value=BOT_ID, state=STREAM_ACCEPT_STATE,
+            ))
+            self._live_ready_rooms.add(room)
+            self.send_room_text(room, "✅ صعد البوت للبث مباشرة. اكتب الآن: بث اسم الأغنية")
         except Exception as exc:
+            self._live_ready_rooms.discard(room)
             self.log("[STREAM] manual invite failed:", repr(exc))
-            self.send_room_text(room, f"❌ تعذر إرسال طلب الصعود للبث: {str(exc)[:180]}")
+            self.send_room_text(room, f"❌ تعذر صعود البوت للبث: {str(exc)[:180]}")
         return True
 
     def _master_is_online(self):
@@ -9883,6 +9891,24 @@ class TalkinBot:
                 self.send_private_text(sender, "❌ أخطاء النشر: " + " | ".join(f"{r}: {e[:60]}" for r,e in errors))
         return True
 
+    def _try_publish_pending_media(self, room, media_url, candidates=()):
+        """Consume a pending publish request from any Talkin media wrapper."""
+        media_url = str(media_url or "").strip()
+        if not media_url:
+            return False
+        tried = set()
+        ordered = list(candidates or [])
+        ordered.extend(list(getattr(self, "publish_pending", {}).keys()))
+        for sender in ordered:
+            sender = str(sender or "").strip()
+            key = _norm_user(sender)
+            if not key or key in tried:
+                continue
+            tried.add(key)
+            if self._handle_publish_media(room, sender, media_url):
+                return True
+        return False
+
     def _is_duplicate_incoming(self, kind, values, event_id=""):
         """Return True when the server has replayed an inbound event.
 
@@ -10161,16 +10187,8 @@ class TalkinBot:
                 # a second verification gate here: some servers identify the
                 # sender differently on media events, which used to make the
                 # image silently disappear after a valid انشر command.
-                for media_sender in media_senders:
-                    if self._handle_publish_media(room, media_sender, media_url):
-                        return
-                # Some image packets contain no usable username at all. If a
-                # publish request is pending, try those authorized requesters
-                # rather than dropping the image silently.
-                for pending_sender in list(getattr(self, "publish_pending", {}).keys()):
-                    if pending_sender not in {_norm_user(x) for x in media_senders}:
-                        if self._handle_publish_media(room, pending_sender, media_url):
-                            return
+                if self._try_publish_pending_media(room, media_url, media_senders):
+                    return
             return
 
         if event_type != "text" or not body:
@@ -10556,14 +10574,11 @@ class TalkinBot:
                         # the image; let the media handler validate it rather
                         # than rejecting it on a second private-message role
                         # check.
-                        private_media_senders = []
-                        for candidate in (frm, cm.get(22, ""), cm.get("sender", ""), cm.get("username", "")):
-                            candidate = str(candidate or "").strip()
-                            if candidate and candidate not in private_media_senders:
-                                private_media_senders.append(candidate)
-                        for media_sender in private_media_senders:
-                            if self._handle_publish_media(self.room, media_sender, media_url):
-                                return
+                        private_media_senders = [
+                            frm, cm.get(22, ""), cm.get("sender", ""), cm.get("username", "")
+                        ]
+                        if self._try_publish_pending_media(self.room, media_url, private_media_senders):
+                            return
                     # Silently ignore master-only commands from everyone else.
                     is_publish_command = _is_publish_command(body)
                     if (body and _looks_like_admin_command(body)
