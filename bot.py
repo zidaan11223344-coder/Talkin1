@@ -164,6 +164,7 @@ STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "stream_invite").strip(
 STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip()
 STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip()
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
+STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
 # The current Talkin private-chat gateway displays type=audio as a text-only
 # message.  type=file delivers the actual downloadable MP3 to the recipient.
 PRIVATE_AUDIO_TYPE = os.getenv("PRIVATE_AUDIO_TYPE", "file").strip().lower() or "file"
@@ -4397,6 +4398,27 @@ class TalkinBot:
             }
             self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
             self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
+            # Older servers do not emit a you_invited callback for a self
+            # invitation. Keep the legacy room-based accept/audio fallback;
+            # newer servers will consume the callback path below instead.
+            if STREAM_AUTO_ACCEPT:
+                time.sleep(float(os.getenv("STREAM_ACCEPT_DELAY", "0.8")))
+                if room in self._pending_live_tracks:
+                    self.log("[STREAM] legacy accept self", room, STREAM_ACCEPT_ACTION)
+                    self.send_query(encode_query(
+                        STREAM_ACCEPT_ACTION, room=room, to=BOT_ID,
+                        value=BOT_ID, state=STREAM_ACCEPT_STATE,
+                    ))
+                    time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
+                pending = self._pending_live_tracks.get(room)
+                if pending:
+                    self.log("[STREAM] legacy publish audio", room, STREAM_AUDIO_ACTION)
+                    self.send_query(encode_query(
+                        STREAM_AUDIO_ACTION, type_="audio", room=room,
+                        url=str(pending["url"]),
+                        length=str(max(0, int(pending.get("duration") or 0))),
+                    ))
+                    self._pending_live_tracks.pop(room, None)
             return True
         except Exception as exc:
             self.log("[STREAM] experimental live flow failed:", repr(exc))
@@ -10077,17 +10099,22 @@ class TalkinBot:
         # A photo sent in a room arrives as RoomEvent type=image with its
         # public URL in field 7 (url). If a master previously used `انشر`,
         # publish that image even when it was sent from a different room.
-        if event_type == "image":
-            media_url = str(event.get(7, "") or event.get(6, "") or event.get("url", "") or "").strip()
+        media_url = next(
+                (str(event.get(key, "") or "").strip() for key in (7, 6, 9, 10, 11, "url", "media_url", "image_url")
+                 if str(event.get(key, "") or "").strip().startswith(("http://", "https://"))),
+                "",
+        )
+        if event_type in {"image", "photo", "picture", "media", "file"} or (media_url and event_type not in {"text", "user_joined", "user_left"}):
             # Different Talkin server versions put the image author in field
             # 2 or field 22 (or expose it by name). Try all candidates so a
             # valid انشر followed by a photo is never silently discarded.
             media_senders = []
-            for candidate in (frm, event.get(22, ""), event.get("sender", ""), event.get("username", "")):
+            for candidate in (frm, event.get(22, ""), event.get(17, ""), event.get(2, ""),
+                              event.get("sender", ""), event.get("username", ""), event.get("from", "")):
                 candidate = str(candidate or "").strip()
                 if candidate and candidate not in media_senders and _norm_user(candidate) != _norm_user(BOT_ID):
                     media_senders.append(candidate)
-            if media_senders and media_url:
+            if media_url:
                 # The pending publish record is the authorization. Do not add
                 # a second verification gate here: some servers identify the
                 # sender differently on media events, which used to make the
@@ -10095,6 +10122,13 @@ class TalkinBot:
                 for media_sender in media_senders:
                     if self._handle_publish_media(room, media_sender, media_url):
                         return
+                # Some image packets contain no usable username at all. If a
+                # publish request is pending, try those authorized requesters
+                # rather than dropping the image silently.
+                for pending_sender in list(getattr(self, "publish_pending", {}).keys()):
+                    if pending_sender not in {_norm_user(x) for x in media_senders}:
+                        if self._handle_publish_media(room, pending_sender, media_url):
+                            return
             return
 
         if event_type != "text" or not body:
@@ -10403,8 +10437,11 @@ class TalkinBot:
                 self._process_room_list(result.get("rooms"))
             if result.get("users") or result.get("room_admin"):
                 self.process_occupants_for_invite(result)
-            if result.get("stream_event"):
-                stream_event = result["stream_event"]
+            # Different Talkin builds wrap the live invitation as StreamEvent,
+            # CallInfo, or (less commonly) a RoomEvent. Try all wrappers.
+            for stream_event in tuple(
+                    x for x in (result.get("stream_event"), result.get("call_info"), result.get("room_event"))
+                    if isinstance(x, dict)):
                 self.log("[STREAM]", stream_event)
                 self._handle_stream_event(stream_event)
             if result.get("room_admin"):
@@ -10415,7 +10452,11 @@ class TalkinBot:
                 try:
                     frm = str(cm.get(3, "") or "").strip()
                     body = str(cm.get(5, "") or "").strip()
-                    media_url = str(cm.get(6, "") or "").strip()
+                    media_url = next(
+                        (str(cm.get(key, "") or "").strip() for key in (6, 7, 9, 10)
+                         if str(cm.get(key, "") or "").strip().startswith(("http://", "https://"))),
+                        "",
+                    )
                     # Every NS is a fresh navigation request. Do not suppress
                     # rapid NS commands with the normal transport de-dup cache.
                     # Direct private message is a user command, not an admin
@@ -10467,8 +10508,14 @@ class TalkinBot:
                         # the image; let the media handler validate it rather
                         # than rejecting it on a second private-message role
                         # check.
-                        if self._handle_publish_media(self.room, frm, media_url):
-                            return
+                        private_media_senders = []
+                        for candidate in (frm, cm.get(22, ""), cm.get("sender", ""), cm.get("username", "")):
+                            candidate = str(candidate or "").strip()
+                            if candidate and candidate not in private_media_senders:
+                                private_media_senders.append(candidate)
+                        for media_sender in private_media_senders:
+                            if self._handle_publish_media(self.room, media_sender, media_url):
+                                return
                     # Silently ignore master-only commands from everyone else.
                     is_publish_command = _is_publish_command(body)
                     if (body and _looks_like_admin_command(body)
