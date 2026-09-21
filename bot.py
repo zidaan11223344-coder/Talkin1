@@ -5110,6 +5110,15 @@ class TalkinBot:
         with self.invite_lock:
             self.invite_sent.add(username)
         self.log("[INV] normal private invite sent:", username, "room=", room)
+        # Talkin renders the font tag as the same green system-style notice
+        # used for role changes such as promotion/ban confirmations.
+        try:
+            self.send_room_text(
+                room,
+                f'<font color="#00C853">📨 تمت دعوة @{username} من الغرفة.</font>',
+            )
+        except Exception as exc:
+            self.log("[INV] room notice failed:", repr(exc))
         return True
 
     def _users_from_room_admin(self, room_admin):
