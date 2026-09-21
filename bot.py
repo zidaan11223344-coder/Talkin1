@@ -4430,7 +4430,7 @@ class TalkinBot:
             return False
 
     def request_live_room(self, room: str):
-        """Join the live room directly before a later `بث` command."""
+        """Send a real live-seat invitation for this exact room."""
         room = str(room or "").strip()
         if not STREAM_EXPERIMENTAL_ENABLED:
             self.send_room_text(room, "❌ البث الحي غير مفعّل في إعدادات البوت.")
@@ -4439,20 +4439,15 @@ class TalkinBot:
             return False
         try:
             self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
-            # A self-invite is not a real seat request on Talkin. Use the
-            # native accept/join action directly; the server may already have
-            # an open seat for the bot in this room.
-            self.log("[STREAM] direct live join", room, STREAM_ACCEPT_ACTION)
+            self.log("[STREAM] real live invite", room, STREAM_INVITE_ACTION)
             self.send_query(encode_query(
-                STREAM_ACCEPT_ACTION, room=room, to=BOT_ID,
-                value=BOT_ID, state=STREAM_ACCEPT_STATE,
+                STREAM_INVITE_ACTION, room=room, to=BOT_ID,
             ))
-            self._live_ready_rooms.add(room)
-            self.send_room_text(room, "✅ صعد البوت للبث مباشرة. اكتب الآن: بث اسم الأغنية")
+            self.send_room_text(room, "📡 تم إرسال دعوة صعود فعلية للبوت في هذه الغرفة. بانتظار تأكيد الخادم...")
         except Exception as exc:
             self._live_ready_rooms.discard(room)
             self.log("[STREAM] manual invite failed:", repr(exc))
-            self.send_room_text(room, f"❌ تعذر صعود البوت للبث: {str(exc)[:180]}")
+            self.send_room_text(room, f"❌ تعذر إرسال دعوة الصعود للبث: {str(exc)[:180]}")
         return True
 
     def _master_is_online(self):
