@@ -1,3 +1,4 @@
+livekit==1.1.19
 requests>=2.31
 python-dotenv>=1.0
 yt-dlp>=2026.08.19
@@ -8,3 +9,4 @@ fonttools>=4.50
 supabase>=2.0
 
 pytesseract>=0.3.13
+livekit==1.1.19

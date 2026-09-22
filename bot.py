@@ -10,6 +10,7 @@ import socket
 import struct
 import hashlib
 import threading
+import asyncio
 import time
 import uuid
 import subprocess
@@ -20,6 +21,7 @@ import mimetypes
 import unicodedata
 import html
 import sys
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, unquote
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -166,6 +168,11 @@ STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip() o
 STREAM_ROOM_ACTION = os.getenv("STREAM_ROOM_ACTION", "room_stream").strip() or "room_stream"
 STREAM_ROOM_TYPE = os.getenv("STREAM_ROOM_TYPE", "publish").strip() or "publish"
 STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip()
+# Re-assert the Talkin speaker seat immediately before audio starts. This is
+# enabled by default because some Talkin builds can show the bot as a listener
+# even though the LiveKit publisher is already connected.
+STREAM_REASSERT_SPEAKER = os.getenv("STREAM_REASSERT_SPEAKER", "1").strip() == "1"
+STREAM_REASSERT_DELAY = max(0.0, float(os.getenv("STREAM_REASSERT_DELAY", "0.8")))
 STREAM_INVITE_TOKEN = os.getenv("STREAM_INVITE_TOKEN", "Token").strip() or "Token"
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
@@ -308,6 +315,19 @@ def _select_persistent_data_dir():
     return BASE_DIR / "data"
 
 DATA_DIR = _select_persistent_data_dir()
+
+# Telegram diagnostics: only the bot token is required. The first incoming
+# Telegram message is used to learn and persist the chat_id automatically.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_LOG_COMMANDS = {
+    x.strip().casefold() for x in os.getenv(
+        "TELEGRAM_LOG_COMMANDS",
+        "سجل,السجل,ارسل السجل,ارسال السجل,إرسال السجل,ارسال اللوق,أرسل السجل,send log,log",
+    ).split(",") if x.strip()
+}
+TELEGRAM_POLL_SECONDS = max(1.0, float(os.getenv("TELEGRAM_POLL_SECONDS", "2")))
+TELEGRAM_LOG_FILE = Path(os.getenv("TELEGRAM_LOG_FILE", str(DATA_DIR / "bot_runtime.log"))).expanduser()
+TELEGRAM_CHAT_FILE = Path(os.getenv("TELEGRAM_CHAT_FILE", str(DATA_DIR / "telegram_chat_id.json"))).expanduser()
 
 # Every mutable bot record lives in its own dedicated JSON file.
 MASTERS_FILE = DATA_DIR / "masters.json"
@@ -830,8 +850,11 @@ class RawWebSocket:
         raw = self._connect_android_like()
 
         # Android Client obtains the platform default SSLSocketFactory.
-        ctx = ssl.create_default_context()
-        self.sock = ctx.wrap_socket(raw, server_hostname=self.host)
+        if self.scheme == "wss":
+            ctx = ssl.create_default_context()
+            self.sock = ctx.wrap_socket(raw, server_hostname=self.host)
+        else:
+            self.sock = raw
         self.sock.settimeout(self.timeout)
 
         # Y9/v: SecureRandom -> 16 bytes -> Base64.
@@ -919,6 +942,10 @@ class RawWebSocket:
 
     def send_binary(self, payload):
         payload = bytes(payload)
+        max_bytes = int(os.getenv("WS_MAX_MESSAGE_BYTES", "1800"))
+        if len(payload) > max_bytes:
+            print(f"[WS_DROP_OVERSIZE] تم تجاهل إرسال حزمة WebSocket بحجم {len(payload)} بايت لتجاوزها الحد الآمن ({max_bytes} بايت) لمنع فصل الخادم برمز 1009.", flush=True)
+            return
         mask = os.urandom(4)
         n = len(payload)
         if n < 126:
@@ -3517,10 +3544,21 @@ class TalkinBot:
         }
         self._monitor_invited = set()
         self._pending_live_accepts = {}
+        # Persistent live-seat state for the current WebSocket session.
+        # The server may send publish_stream after the temporary invitation
+        # record has already been consumed by stream_accept, so music playback
+        # must not depend on _pending_live_accepts alone.
+        self._live_ready_rooms = set()
+        self._live_session_by_room = {}
         self._stream_error_log_lock = threading.Lock()
         self._stream_error_log_file = Path(
             os.getenv("STREAM_ERROR_LOG_FILE", str(DATA_DIR / "stream_accept_errors.log"))
         ).expanduser()
+        self._runtime_log_lock = threading.Lock()
+        self._telegram_chat_id = ""
+        self._telegram_update_offset = 0
+        self._telegram_stop = threading.Event()
+        self._load_telegram_chat_id()
         self._live_room_ids = {}
         self.invite_pending = False
         self.invites_enabled = True
@@ -3729,8 +3767,161 @@ class TalkinBot:
         return self._render_auto_reply(reply, username, room)
 
     def log(self, *args):
-        if DEBUG:
-            print(*args, flush=True)
+        """Write diagnostics to Railway stdout and to a persistent local log file."""
+        try:
+            line = " ".join(str(x) for x in args)
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            record = f"[{stamp}] {line}"
+            try:
+                TELEGRAM_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+                lock = getattr(self, "_runtime_log_lock", None)
+                if lock is None:
+                    lock = threading.Lock()
+                    self._runtime_log_lock = lock
+                with lock:
+                    with TELEGRAM_LOG_FILE.open("a", encoding="utf-8") as handle:
+                        handle.write(record[:12000] + "\n")
+                        handle.flush()
+            except Exception:
+                pass
+            if DEBUG:
+                print(*args, flush=True)
+        except Exception:
+            if DEBUG:
+                try:
+                    print(*args, flush=True)
+                except Exception:
+                    pass
+
+    def _load_telegram_chat_id(self):
+        try:
+            if TELEGRAM_CHAT_FILE.exists():
+                obj = json.loads(TELEGRAM_CHAT_FILE.read_text(encoding="utf-8"))
+                self._telegram_chat_id = str(obj.get("chat_id", "") or "").strip()
+        except Exception as exc:
+            self.log("[TELEGRAM] chat id load failed:", repr(exc))
+
+    def _save_telegram_chat_id(self, chat_id):
+        chat_id = str(chat_id or "").strip()
+        if not chat_id:
+            return
+        self._telegram_chat_id = chat_id
+        try:
+            TELEGRAM_CHAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            TELEGRAM_CHAT_FILE.write_text(
+                json.dumps({"chat_id": chat_id, "saved_at": time.time()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            self.log("[TELEGRAM] chat id save failed:", repr(exc))
+
+    def _telegram_api(self, method, **payload):
+        if not TELEGRAM_BOT_TOKEN:
+            return None
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
+        try:
+            response = requests.post(url, json=payload, timeout=20)
+            data = response.json()
+            if not data.get("ok"):
+                self.log("[TELEGRAM] API error:", method, str(data)[:1000])
+            return data
+        except Exception as exc:
+            self.log("[TELEGRAM] API request failed:", method, repr(exc))
+            return None
+
+    def _telegram_poll_loop(self):
+        """Learn the first Telegram chat_id automatically from the first message."""
+        if not TELEGRAM_BOT_TOKEN:
+            return
+        self.log("[TELEGRAM] polling started; waiting for first Telegram message")
+        while not self.stop_event.is_set() and not self._telegram_stop.is_set():
+            try:
+                params = {"timeout": max(1, int(TELEGRAM_POLL_SECONDS)), "allowed_updates": ["message"]}
+                if self._telegram_update_offset:
+                    params["offset"] = self._telegram_update_offset
+                data = self._telegram_api("getUpdates", **params)
+                if not data or not data.get("ok"):
+                    time.sleep(TELEGRAM_POLL_SECONDS)
+                    continue
+                for update in data.get("result", []) or []:
+                    try:
+                        uid = int(update.get("update_id", 0))
+                        self._telegram_update_offset = max(self._telegram_update_offset, uid + 1)
+                        msg = update.get("message") or update.get("channel_post") or {}
+                        chat = msg.get("chat") or {}
+                        chat_id = str(chat.get("id", "") or "").strip()
+                        if chat_id and not self._telegram_chat_id:
+                            self._save_telegram_chat_id(chat_id)
+                            self.log("[TELEGRAM] first chat_id captured automatically:", chat_id)
+                            self._telegram_api(
+                                "sendMessage",
+                                chat_id=chat_id,
+                                text="✅ تم حفظ Chat ID تلقائياً. يمكنك الآن طلب إرسال سجل البوت من Talkin بالأمر: سجل"
+                            )
+                    except Exception as exc:
+                        self.log("[TELEGRAM] update handling failed:", repr(exc))
+            except Exception as exc:
+                self.log("[TELEGRAM] polling loop error:", repr(exc))
+                time.sleep(TELEGRAM_POLL_SECONDS)
+
+    def _send_runtime_log_to_telegram(self, requester=""):
+        if not TELEGRAM_BOT_TOKEN:
+            if requester:
+                self.send_private_text(requester, "❌ ضع المتغير TELEGRAM_BOT_TOKEN في Railway Variables ثم أعد تشغيل البوت.")
+            return False
+        chat_id = str(getattr(self, "_telegram_chat_id", "") or "").strip()
+        if not chat_id:
+            if requester:
+                self.send_private_text(requester, "📨 لم يتم العثور على Chat ID بعد. أرسل أي رسالة إلى بوت Telegram أولاً، ثم أرسل أمر: سجل")
+            return False
+        try:
+            path = Path(TELEGRAM_LOG_FILE)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("لا يوجد سجل بعد.\n", encoding="utf-8")
+            caption = "📋 سجل بوت Talkin\nآخر سجل تشخيصي تم جمعه من البوت."
+            with path.open("rb") as fh:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
+                    data={"chat_id": chat_id, "caption": caption},
+                    files={"document": (path.name, fh, "text/plain")},
+                    timeout=60,
+                )
+            data = response.json()
+            ok = bool(data.get("ok"))
+            if ok and requester:
+                self.send_private_text(requester, "✅ تم إرسال سجل البوت إلى Telegram.")
+            elif not ok:
+                self.log("[TELEGRAM] sendDocument failed:", str(data)[:1200])
+                if requester:
+                    self.send_private_text(requester, "❌ تعذر إرسال السجل إلى Telegram؛ راجع سجل Railway.")
+            return ok
+        except Exception as exc:
+            self.log("[TELEGRAM] send log failed:", repr(exc))
+            if requester:
+                self.send_private_text(requester, "❌ تعذر إرسال السجل إلى Telegram.")
+            return False
+
+    def _handle_telegram_log_command(self, body, sender=""):
+        if str(body or "").strip().casefold() not in TELEGRAM_LOG_COMMANDS:
+            return False
+        if sender and not _is_master_name(sender):
+            return True
+        threading.Thread(
+            target=self._send_runtime_log_to_telegram,
+            args=(sender,),
+            name="telegram-log-upload",
+            daemon=True,
+        ).start()
+        if sender:
+            self.send_private_text(sender, "⏳ جاري تجهيز وإرسال السجل إلى Telegram...")
+        return True
+
+    def _log_stream_stage(self, stage, status, room="", **extra):
+        """Log a distinct stage in the live-stream acceptance lifecycle safely to console logs."""
+        tag = f"[STREAM_{stage.upper()}]"
+        details = " ".join(f"{k}={v}" for k, v in extra.items() if v)
+        self.log(tag, f"status={status}", f"room={room}", details)
 
     def _log_stream_accept_error(self, stage, error, room="", room_id="", invite_id=""):
         """Persist a safe diagnostic when accepting a live-seat invitation fails."""
@@ -4396,10 +4587,30 @@ class TalkinBot:
             )
             return self.send_query(payload)
 
+        if operation in ("ban_ip", "ip_ban"):
+            self.log(f"[MOD] room ban_ip room={room} target=@{target}")
+            try:
+                self.send_query(
+                    encode_query(
+                        "room_admin",
+                        type_="ban_ip",
+                        room=room,
+                        to=target,
+                        value="outcast",
+                    )
+                )
+            except Exception as e:
+                self.log("[MOD] ban_ip packet warning:", repr(e))
+            payload = encode_query(
+                "room_admin",
+                type_="change_role",
+                room=room,
+                to=target,
+                value="outcast",
+            )
+            return self.send_query(payload)
+
         if operation == "ban":
-            # A room ban is represented by the same role transition that the
-            # client reports in `role_changed`.  `ban_ip` was accepted by the
-            # gateway in some versions but did not change room membership.
             self.log(f"[MOD] room outcast room={room} target=@{target}")
             payload = encode_query(
                 "room_admin",
@@ -4565,46 +4776,385 @@ class TalkinBot:
         raise last_error
 
     def _play_music_in_live_room(self, room: str, media_url: str, duration: int = 0):
-        """Queue audio and wait for a manually sent invitation."""
+        """Play immediately if already live on mic, or queue audio and join live stream."""
         room = str(room or "").strip()
+        media_url = str(media_url or "").strip()
         if not room or not media_url:
             return False
+        # الملف المحلي هو المصدر الحقيقي للـLiveKit، والرابط العام يستخدم فقط
+        # لحزم Talkin القديمة إذا احتاجها الخادم.
+        packet_url = media_url
+        try:
+            local_media = Path(media_url).expanduser()
+            if local_media.is_file():
+                base = _public_base_url()
+                if base:
+                    packet_url = base.rstrip("/") + "/media/" + local_media.name
+        except Exception:
+            pass
         if not all((STREAM_INVITE_ACTION, STREAM_ACCEPT_ACTION, STREAM_AUDIO_ACTION)):
             self.log("[STREAM] experimental actions are not fully configured")
             return False
         try:
+            ready_rooms = getattr(self, "_live_ready_rooms", set())
+            pending_accepts = getattr(self, "_pending_live_accepts", {})
+            live_sessions = getattr(self, "_live_session_by_room", {})
+            accepted = (pending_accepts.get(room, {}) or live_sessions.get(room, {}) or {})
+            # Also tolerate case/Unicode differences in the room key returned
+            # by different Talkin builds.
+            if not accepted:
+                rkey = _norm_room(room).casefold()
+                for rk, rv in list(live_sessions.items()):
+                    if _norm_room(rk).casefold() == rkey:
+                        accepted = rv or {}
+                        break
+            is_active = (
+                room in ready_rooms
+                or accepted.get("publish_confirmed")
+                or getattr(self, f"_livekit_active_{room}", False)
+                or bool(accepted.get("livekit_active"))
+            )
+
+            # إذا كان البوت صاعداً للبث والمايك بالفعل، نبث الصوت فوراً لجميع القنوات
+            if is_active:
+                self.log("[STREAM] البوت صاعد للمايك؛ جاري بث الصوت فوراً في:", room)
+                ready_rooms.add(room)
+                self._live_ready_rooms = ready_rooms
+
+                room_id = str(
+                    accepted.get("room_id", "")
+                    or getattr(self, "_live_room_ids", {}).get(room, "")
+                    or ""
+                )
+                if not room_id and getattr(self, "db", None):
+                    try:
+                        room_id = str(self.db.room_id(room) or "").strip()
+                    except Exception:
+                        pass
+                if not room_id:
+                    room_id = room
+
+                session_id = str(
+                    accepted.get("session_id", "")
+                    or accepted.get("publish_id", "")
+                    or accepted.get("id_", "")
+                    or accepted.get("invite_id", "")
+                    or ""
+                )
+
+                # انتظر حتى تصبح قناة LiveKit فعّالة فعلياً قبل إرسال الصوت.
+                # إرسال room_stream قبل جاهزية الجلسة يجعل الخادم يعامل البوت
+                # كمستمع ولا يربط الصوت بمقعد المايك.
+                if not getattr(self, f"_livekit_active_{room}", False):
+                    wait_until = time.time() + float(os.getenv("STREAM_LIVEKIT_READY_TIMEOUT", "20"))
+                    while time.time() < wait_until:
+                        if getattr(self, f"_livekit_active_{room}", False):
+                            break
+                        time.sleep(0.25)
+
+                # لا نعتبر الأمر ناجحاً لمجرد وصول publish_stream؛ يجب أن تكون
+                # جلسة LiveKit نفسها متصلة وبها AudioSource قبل إعلان التشغيل.
+                livekit_source = getattr(self, f"_livekit_source_{room}", None)
+                livekit_loop = getattr(self, f"_livekit_loop_{room}", None)
+                if (not getattr(self, f"_livekit_active_{room}", False)
+                        or livekit_source is None
+                        or livekit_loop is None
+                        or getattr(livekit_loop, "is_closed", lambda: True)()):
+                    self.log("[STREAM] LiveKit publisher غير جاهز فعلياً؛ لن نعلن نجاح التشغيل:", room)
+                    return False
+
+                # بعد اتصال LiveKit، أعد تثبيت مقعد المتحدث في بوابة Talkin نفسها.
+                # هذا مهم لأن بعض الإصدارات تعرض Publisher كـListener حتى يصل
+                # تأكيد native publish/accept مرة أخرى بعد جاهزية WebRTC.
+                self._reassert_live_speaker(room, accepted)
+
+                # البث الحقيقي: أرسل الملف داخل مسار LiveKit المنشور فعلياً.
+                # حزم room_stream أدناه تبقى للتوافق مع خوادم Talkin القديمة.
+                live_audio_started = self._feed_livekit_audio(room, media_url, duration)
+                self.log("[STREAM_VERIFY] LiveKit publisher first_frame=", live_audio_started, "room=", room)
+                if not live_audio_started:
+                    self.log("[STREAM_VERIFY] ❌ لم يتم إدخال أي إطار صوت فعلي إلى LiveKit:", room)
+                    return False
+
+                # 1. إرسال حزمة STREAM_AUDIO_ACTION
+                try:
+                    self.send_query(encode_query(
+                        STREAM_AUDIO_ACTION,
+                        type_="audio",
+                        room=room_id,
+                        id_=session_id,
+                        url=str(packet_url),
+                        length=str(max(0, int(duration or 0))),
+                    ))
+                    self.log("[STREAM] أُرسلت حزمة STREAM_AUDIO_ACTION بنجاح إلى:", room)
+                except Exception as exc:
+                    self.log("[STREAM] فشل إرسال STREAM_AUDIO_ACTION:", repr(exc))
+
+                # 2. إرسال حزمة room_stream المخصصة للبث
+                audio_sent = False
+                try:
+                    self.send_query(encode_query(
+                        "room_stream",
+                        type_="audio",
+                        room=room_id,
+                        id_=session_id,
+                        url=str(packet_url),
+                        length=str(max(0, int(duration or 0))),
+                    ))
+                    audio_sent = True
+                    self.log("[STREAM] أُرسلت حزمة room_stream audio بنجاح إلى:", room)
+                except Exception as exc:
+                    self.log("[STREAM] فشل إرسال room_stream audio:", repr(exc))
+
+                # === اختبار آلي للتحقق من إرسال حزم الصوت وجاهزية البث ===
+                lk_active = getattr(self, f"_livekit_active_{room}", False)
+                lk_ws = getattr(self, f"_livekit_ws_{room}", None)
+                socket_healthy = bool(lk_ws and getattr(lk_ws, "sock", None))
+                self.log(f"[STREAM_VERIFY] فحص جاهزية البث في {room}: audio_sent={audio_sent}, livekit_active={lk_active}, socket_ok={socket_healthy}")
+                
+                # دورة إدارة تشغيل الأغنية في خيط مستقل لضمان استمرار البث حتى انتهاء الملف
+                # وتوقف الصوت بأمان دون مغادرة البوت أو إغلاق LiveKit
+                def _playback_lifecycle(target_room, r_id, s_id, track_len):
+                    try:
+                        self.log(f"[STREAM_PLAYBACK] بدء مراقبة تشغيل الأغنية في {target_room} لمدة {track_len} ثانية.")
+                        start_time = time.time()
+                        # إبقاء البوت متصلاً والنبض مستمراً طوال مدة الأغنية
+                        while time.time() - start_time < track_len:
+                            time.sleep(2.0)
+                            # إرسال تأكيد بقاء الصوت حياً داخل البث
+                            if getattr(self, f"_livekit_active_{target_room}", False) is False:
+                                self.log(f"[STREAM_PLAYBACK] تنبيه: انقطع اتصال البث أثناء تشغيل الأغنية في {target_room}")
+                                break
+                        self.log(f"[STREAM_PLAYBACK] اكتملت مدة الأغنية ({track_len} ثانية) في {target_room}. البوت يبقى على المايك بأمان.")
+                        # إرسال حزمة توقف الصوت الآمنة بدون خروج من الغرفة
+                        try:
+                            self.send_query(encode_query("room_stream", type_="audio_stop", room=r_id, id_=s_id))
+                        except Exception:
+                            pass
+                    except Exception as play_err:
+                        self.log("[STREAM_PLAYBACK] خطأ أثناء دورة تشغيل الصوت:", repr(play_err))
+
+                dur_sec = max(5, int(duration or 180))
+                threading.Thread(
+                    target=_playback_lifecycle,
+                    args=(room, room_id, session_id, dur_sec),
+                    name=f"stream-lifecycle-{room}",
+                    daemon=True,
+                ).start()
+
+                return True
+
+            # إذا لم يكن البوت على المايك بعد، نحفظ الصوت معلقاً ونطلب الصعود
             self._pending_live_tracks = getattr(self, "_pending_live_tracks", {})
             pending = {
                 "url": media_url, "duration": int(duration or 0),
                 "room_id": "", "created_at": time.time()
             }
             self._pending_live_tracks[room] = pending
-            ready_rooms = getattr(self, "_live_ready_rooms", set())
-            if room in ready_rooms:
-                ready_rooms.discard(room)
-            elif STREAM_MANUAL_ACCEPT_ONLY:
+
+            if STREAM_MANUAL_ACCEPT_ONLY:
                 self.log("[STREAM] manual invitation mode: waiting for you_invited", room)
-            else:
-                room_id = str(getattr(self, "_live_room_ids", {}).get(room, "") or "").strip()
-                if not room_id:
-                    try:
-                        room_id = str(self.db.room_id(room) or "").strip() if getattr(self, "db", None) else ""
-                    except Exception as exc:
-                        self.log("[STREAM] live room id lookup failed:", room, repr(exc))
-                if not room_id.isdigit():
-                    self._pending_live_tracks.pop(room, None)
-                    self.log("[STREAM] live invitation skipped: numeric room_id unavailable", room)
-                    return False
+                return False
+
+            room_id = str(getattr(self, "_live_room_ids", {}).get(room, "") or "").strip()
+            if not room_id and getattr(self, "db", None):
+                try:
+                    room_id = str(self.db.room_id(room) or "").strip()
+                except Exception as exc:
+                    self.log("[STREAM] live room id lookup failed:", room, repr(exc))
+
+            if room_id.isdigit():
                 self.log("[STREAM] send native live invitation", room, "room_id=", room_id)
-                if not self.send_live_invitation_to_user(BOT_ID, room):
-                    self._pending_live_tracks.pop(room, None)
-                    return False
-            # Never publish audio before the server sends `you_invited` and
-            # the exact stream_accept packet has been sent.
-            return True
-        except Exception as exc:
-            self.log("[STREAM] experimental live flow failed:", repr(exc))
+                self.send_live_invitation_to_user(BOT_ID, room)
+            # الصوت أصبح معلّقاً بانتظار publish_stream؛ لا نرسل للمستخدم
+            # "تم التشغيل" قبل أن يصبح البوت Publisher فعلياً.
             return False
+        except Exception as exc:
+            self.log("[STREAM] live play failed:", repr(exc))
+            return False
+
+    def _reassert_live_speaker(self, room: str, accepted: dict):
+        """Re-send the native Talkin publish/accept packets after LiveKit is ready.
+
+        Some Talkin server builds acknowledge publish_stream and connect LiveKit,
+        yet leave the seat visually/semantically as listener until the native
+        room_stream/stream_accept pair is asserted again. Never use the large
+        LiveKit JWT here; use the original invitation token captured in stage 2.
+        """
+        if not STREAM_REASSERT_SPEAKER or not isinstance(accepted, dict):
+            return False
+        room = str(room or "").strip()
+        if not room:
+            return False
+        token = str(accepted.get("token", "") or "").strip()
+        invite_id = str(
+            accepted.get("invite_id", "")
+            or accepted.get("session_id", "")
+            or accepted.get("publish_id", "")
+            or ""
+        ).strip()
+        room_id = str(
+            accepted.get("room_id", "")
+            or getattr(self, "_live_room_ids", {}).get(room, "")
+            or ""
+        ).strip()
+        if not token:
+            self.log("[STREAM] cannot reassert speaker: original invitation token is missing", room)
+            return False
+        ok = False
+        try:
+            # Re-assert the native publish seat. Keep the JWT out of diagnostics.
+            self.send_query(encode_query(
+                STREAM_ROOM_ACTION,
+                type_=STREAM_ROOM_TYPE,
+                to=token,
+                token=token,
+                id_=invite_id,
+                room=room,
+            ))
+            ok = True
+            self._log_stream_stage("3.4_إعادة_تثبيت_المتحدث", "publish_تم_إعادة_الإرسال", room=room)
+        except Exception as exc:
+            self.log("[STREAM] speaker publish reassert failed:", room, repr(exc))
+
+        try:
+            # Re-assert accept by room name.
+            self.send_query(encode_query(
+                STREAM_ACCEPT_ACTION,
+                type_="accept",
+                to=token,
+                token=token,
+                id_=invite_id,
+                room=room,
+                state=STREAM_ACCEPT_STATE,
+                value=STREAM_ACCEPT_STATE,
+            ))
+            ok = True
+        except Exception as exc:
+            self.log("[STREAM] speaker accept reassert failed:", room, repr(exc))
+
+        if room_id and room_id != room and room_id.isdigit():
+            try:
+                self.send_query(encode_query(
+                    STREAM_ACCEPT_ACTION,
+                    type_="accept",
+                    to=token,
+                    token=token,
+                    id_=invite_id,
+                    room=room_id,
+                    state=STREAM_ACCEPT_STATE,
+                    value=STREAM_ACCEPT_STATE,
+                ))
+                ok = True
+            except Exception as exc:
+                self.log("[STREAM] numeric speaker accept reassert failed:", room, room_id, repr(exc))
+
+        if STREAM_REASSERT_DELAY:
+            time.sleep(STREAM_REASSERT_DELAY)
+        return ok
+
+
+    def _feed_livekit_audio(self, room: str, media_url: str, duration: int = 0):
+        """Start real PCM audio feeding and return True only after first frame is captured."""
+        room = str(room or "").strip()
+        media_url = str(media_url or "").strip()
+        if not room or not media_url:
+            return False
+
+        source = getattr(self, f"_livekit_source_{room}", None)
+        loop = getattr(self, f"_livekit_loop_{room}", None)
+        if source is None or loop is None or getattr(loop, "is_closed", lambda: True)():
+            self.log("[LIVEKIT] audio feeder not ready:", room)
+            return False
+
+        existing = getattr(self, f"_livekit_audio_feeding_{room}", None)
+        if existing:
+            self.log("[LIVEKIT] audio feeder already running; waiting briefly for first frame:", room)
+            ready_event = getattr(self, f"_livekit_first_frame_event_{room}", None)
+            if ready_event is not None and ready_event.wait(timeout=3):
+                return True
+            return False
+
+        setattr(self, f"_livekit_audio_feeding_{room}", True)
+        first_frame = threading.Event()
+        setattr(self, f"_livekit_first_frame_event_{room}", first_frame)
+        state = {"ok": False, "frames": 0, "error": ""}
+
+        def _run():
+            proc = None
+            try:
+                source_path = Path(media_url).expanduser()
+                is_local_file = source_path.is_file()
+                ffmpeg_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-re"]
+                if not is_local_file:
+                    ffmpeg_cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+                ffmpeg_cmd += [
+                    "-i", media_url, "-vn", "-ac", "1", "-ar", "48000",
+                    "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1",
+                ]
+                self.log("[LIVEKIT] starting ffmpeg audio feeder:", room, "source=", media_url if is_local_file else "remote")
+                proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+                bytes_per_frame = 960 * 2
+                deadline = time.time() + max(5, int(duration or 900)) + 8
+                while time.time() < deadline and not self.stop_event.is_set():
+                    chunk = proc.stdout.read(bytes_per_frame)
+                    if not chunk:
+                        err = b""
+                        try:
+                            err = proc.stderr.read() or b""
+                        except Exception:
+                            pass
+                        state["error"] = err.decode("utf-8", "ignore")[-1000:]
+                        break
+                    if len(chunk) < bytes_per_frame:
+                        chunk += b"\x00" * (bytes_per_frame - len(chunk))
+                    from livekit import rtc
+                    frame = rtc.AudioFrame(
+                        data=chunk, sample_rate=48000, num_channels=1, samples_per_channel=960
+                    )
+                    capture = source.capture_frame(frame)
+                    if inspect.isawaitable(capture):
+                        fut = asyncio.run_coroutine_threadsafe(capture, loop)
+                        fut.result(timeout=5)
+                    state["ok"] = True
+                    state["frames"] += 1
+                    if state["frames"] == 1:
+                        self.log("[LIVEKIT] first PCM frame accepted:", room, "bytes=", len(chunk))
+                    # Do not report success until a short real burst has entered
+                    # the LiveKit source. This avoids a false positive where the
+                    # first frame is accepted but the publisher remains effectively
+                    # silent.
+                    if state["frames"] >= 12 and not first_frame.is_set():
+                        first_frame.set()
+                self.log("[LIVEKIT] audio feeder finished:", room, "ok=", state["ok"], "error=", state["error"][:300])
+            except FileNotFoundError as exc:
+                state["error"] = "ffmpeg غير مثبت"
+                self.log("[LIVEKIT] ffmpeg missing:", room, repr(exc))
+            except Exception as exc:
+                state["error"] = str(exc)[:1000]
+                self.log("[LIVEKIT] audio feeder failed:", room, repr(exc))
+            finally:
+                first_frame.set()
+                setattr(self, f"_livekit_audio_feeding_{room}", False)
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_run, name=f"livekit-audio-{room}", daemon=True).start()
+        # Wait for a short burst of actual PCM frames, not only one frame.
+        # This prevents a false "تم التشغيل" message when the publisher is silent.
+        first_frame.wait(timeout=10)
+        if state["frames"] >= 12:
+            self.log("[LIVEKIT] real audio burst captured successfully:", room, "frames=", state["frames"])
+            return True
+        self.log("[LIVEKIT] no sufficient audio burst captured:", room, "frames=", state["frames"], state["error"])
+        return False
 
     def request_live_room(self, room: str):
         """Request a live seat using the app-compatible native invitation flow."""
@@ -4617,7 +5167,7 @@ class TalkinBot:
             self.log("[STREAM] request live seat", room, STREAM_INVITE_ACTION)
 
             if STREAM_MANUAL_ACCEPT_ONLY:
-                self.send_room_text(room, "📡 البوت جاهز لاستقبال دعوة البث من تطبيق Talkin وسيقبلها تلقائيًا عند وصولها.")
+                self.send_room_text(room, "🎙️ جاهز، أرسل: بث اسم الأغنية لتشغيلها")
                 return True
 
             # A self-seat request must use the same real invitation packet as
@@ -4628,7 +5178,7 @@ class TalkinBot:
                 raise RuntimeError("تعذر إرسال دعوة البث الفعلية إلى البوت")
             # Do not send a guessed accept packet here. The real acceptance
             # requires token/room_id/room_name/session_id from `you_invited`.
-            self.send_room_text(room, "📡 أرسلت دعوة بث فعلية إلى البوت؛ بانتظار حدث you_invited ثم قبول الخادم.")
+            self.send_room_text(room, "🎙️ جاهز، أرسل: بث اسم الأغنية لتشغيلها")
         except Exception as exc:
             self._live_ready_rooms.discard(room)
             self.log("[STREAM] manual live join failed:", repr(exc))
@@ -4640,7 +5190,7 @@ class TalkinBot:
         return bool(getattr(self, "master_online", False))
 
     def _handle_stream_event(self, event):
-        """Accept a real you_invited event, then publish the queued track."""
+        """Accept a real you_invited event, then publish the queued track with distinct stage logging."""
         if not isinstance(event, dict):
             return False
         event_type = str(event.get(1, "") or event.get("type", "") or "").strip().casefold()
@@ -4656,27 +5206,47 @@ class TalkinBot:
             try:
                 self.send_private_text(
                     BOT_MASTER,
-                    f"📨 تم إرسال دعوة بث فقط في الغرفة: {room_name}\n"
-                    "⚠️ هذا ليس حدث دعوة واردة للبوت؛ لم يتم قبول البث بعد.",
+                    f"📨 تم إرسال دعوة بث فقط في الغرفة: {room_name}\n⚠️ هذا ليس حدث دعوة واردة للبوت؛ لم يتم قبول البث بعد.",
                 )
             except Exception as exc:
                 self.log("[STREAM] sent-invitation report failed:", repr(exc))
             self.log("[STREAM] sent_invitation is not an incoming seat invitation", room_name)
             return False
-        # The app-compatible acceptance packet is the room_stream query, not
-        # the older stream_accept query. It echoes field 5 of you_invited as
-        # query field 4 (to), and carries field 8 as query field 6 (room).
+
         stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
+
+        # === المرحلة 1: استقبال الدعوة وتحليل حقولها ===
+        fields_summary = ",".join(str(k) for k in sorted(event.keys(), key=str) if str(k).isdigit())[:80]
+        self._log_stream_stage(
+            "1_دعوة",
+            "استلام_الدعوة",
+            room=room_name,
+            room_id=room_id,
+            invite_id=invite_id,
+            token_present=bool(stream_token),
+            fields=fields_summary,
+        )
+
         if not stream_token:
+            self._log_stream_stage(
+                "1_خطأ_دعوة",
+                "فقدان_التوكن",
+                room=room_name,
+                room_id=room_id,
+                invite_id=invite_id,
+                hint="الحقل 5 / token غير متوفر في الدعوة",
+            )
             self._log_stream_accept_error(
-                "missing_invite_token", "you_invited has no field-5 token", room_name, room_id, invite_id
+                "stage1_missing_token", "you_invited has no field-5 token", room_name, room_id, invite_id
             )
             return False
+
         try:
             if BOT_MASTER and _norm_user(BOT_MASTER) != _norm_user(BOT_ID):
-                self.send_private_text(BOT_MASTER, f"📡 وصل حدث دعوة بث: {event_type} | الغرفة: {room_name}")
+                pass
         except Exception as exc:
             self.log("[STREAM] invite event report failed:", repr(exc))
+
         pending_tracks = getattr(self, "_pending_live_tracks", {})
         pending = pending_tracks.get(room_name)
         if not pending and room_id:
@@ -4684,28 +5254,134 @@ class TalkinBot:
                                 if str(item.get("room_id", "")) == room_id), None)
             pending = pending_tracks.get(pending_key) if pending_key else None
             room_name = pending_key or room_name
-        self.log("[STREAM] you_invited", room_name, "room_id=", room_id, "invite_id=", invite_id)
+
         if not room_id:
-            self._log_stream_accept_error(
-                "missing_room_id", "دعوة البث لا تحتوي على room_id", room_name, room_id, invite_id
+            self._log_stream_stage(
+                "1_خطأ_دعوة",
+                "فقدان_معرف_الغرفة",
+                room=room_name,
+                invite_id=invite_id,
             )
-            self.log("[STREAM] no queued track for invitation", room_name)
+            self._log_stream_accept_error(
+                "stage1_missing_room_id", "دعوة البث لا تحتوي على room_id", room_name, room_id, invite_id
+            )
             return False
+
         try:
-            # The gateway may repeat the same invitation while the client is
-            # reconnecting or while the seat transition is being propagated.
-            # Match the app's idempotent behaviour: one invitation produces
-            # one room_stream/publish packet.
             accepted_invites = getattr(self, "_accepted_live_invites", set())
             invitation_key = (room_name, invitation_stream_id or room_id)
             if invitation_key in accepted_invites:
-                self.log("[STREAM] duplicate invitation ignored", room_name)
+                self._log_stream_stage(
+                    "1_تجاهل",
+                    "دعوة_مكررة",
+                    room=room_name,
+                    invite_id=invitation_stream_id,
+                )
                 return True
-            self.log("[STREAM] publish invitation", STREAM_ROOM_ACTION, STREAM_ROOM_TYPE)
-            self.send_query(encode_query(
-                STREAM_ROOM_ACTION, type_=STREAM_ROOM_TYPE, to=stream_token,
+
+            # === المرحلة 2.1: إرسال حزمة room_stream (type=publish) ===
+            self._log_stream_stage(
+                "2.1_إرسال_publish",
+                "بدء_الإرسال",
                 room=room_name,
-            ))
+                action=STREAM_ROOM_ACTION,
+                type=STREAM_ROOM_TYPE,
+                to=stream_token[:20] + "...",
+                id=invitation_stream_id,
+            )
+            try:
+                self.send_query(encode_query(
+                    STREAM_ROOM_ACTION, type_=STREAM_ROOM_TYPE, to=stream_token,
+                    token=stream_token, id_=invitation_stream_id,
+                    room=room_name,
+                ))
+                self._log_stream_stage(
+                    "2.1_تم_إرسال_publish",
+                    "نجاح_الإرسال",
+                    room=room_name,
+                )
+            except Exception as exc_pub:
+                self._log_stream_stage(
+                    "2.1_خطأ_publish",
+                    "فشل_الإرسال",
+                    room=room_name,
+                    error=str(exc_pub),
+                )
+                self._log_stream_accept_error("stage2_publish_send_failed", exc_pub, room_name, room_id, invite_id)
+                raise
+
+            # === المرحلة 2.2: إرسال حزم stream_accept لحجز المايك ===
+            self._log_stream_stage(
+                "2.2_إرسال_stream_accept",
+                "بدء_الإرسال",
+                room=room_name,
+                action=STREAM_ACCEPT_ACTION,
+                state="accept",
+            )
+            try:
+                # إرسال باسم الغرفة
+                self.send_query(encode_query(
+                    STREAM_ACCEPT_ACTION, type_="accept", to=stream_token,
+                    token=stream_token, id_=invitation_stream_id,
+                    room=room_name, state="accept", value="accept",
+                ))
+                self._log_stream_stage(
+                    "2.2_تم_stream_accept",
+                    "تم_الإرسال_باسم_الغرفة",
+                    room=room_name,
+                )
+
+                # إرسال برقم الغرفة (إذا كان مختلفاً ورقمياً)
+                if room_id and room_id != room_name and room_id.isdigit():
+                    self.send_query(encode_query(
+                        STREAM_ACCEPT_ACTION, type_="accept", to=stream_token,
+                        token=stream_token, id_=invitation_stream_id,
+                        room=room_id, state="accept", value="accept",
+                    ))
+                    self._log_stream_stage(
+                        "2.2_تم_stream_accept",
+                        "تم_الإرسال_برقم_الغرفة",
+                        room=room_name,
+                        room_id=room_id,
+                    )
+            except Exception as exc_acc:
+                self._log_stream_stage(
+                    "2.2_خطأ_stream_accept",
+                    "فشل_stream_accept",
+                    room=room_name,
+                    error=str(exc_acc),
+                )
+                self.log("[STREAM] stage2 stream_accept error:", repr(exc_acc))
+
+            # محاولة احتياطية مجدولة برقم الغرفة في حال تأخر publish_stream
+            if room_id and room_id != room_name and room_id.isdigit():
+                def _live_room_id_fallback():
+                    try:
+                        time.sleep(float(os.getenv("STREAM_ROOM_ID_FALLBACK_DELAY", "1.2")))
+                        current = getattr(self, "_pending_live_accepts", {}).get(room_name, {})
+                        if current.get("publish_confirmed"):
+                            return
+                        self._log_stream_stage(
+                            "2.3_إعادة_محاولة_room_id",
+                            "تأخر_التأكيد_إرسال_بالرقم",
+                            room=room_name,
+                            room_id=room_id,
+                        )
+                        self.send_query(encode_query(
+                            STREAM_ROOM_ACTION,
+                            type_=STREAM_ROOM_TYPE,
+                            to=stream_token,
+                            room=room_id,
+                        ))
+                    except Exception as exc:
+                        self.log("[STREAM] stage2 room_id fallback failed:", repr(exc))
+
+                threading.Thread(
+                    target=_live_room_id_fallback,
+                    name="talkin-live-room-id-fallback",
+                    daemon=True,
+                ).start()
+
             accepted_invites.add(invitation_key)
             self._accepted_live_invites = accepted_invites
             pending_accepts = getattr(self, "_pending_live_accepts", None)
@@ -4713,29 +5389,425 @@ class TalkinBot:
                 pending_accepts = {}
                 self._pending_live_accepts = pending_accepts
             pending_accepts[room_name] = {
-                "room_id": room_id, "session_id": "",
+                "room_id": room_id,
+                "session_id": "",
+                "publish_id": "",
+                "livekit_token": "",
+                "token": stream_token,
+                "invite_id": invitation_stream_id,
                 "sent_at": time.time(),
+                "publish_confirmed": False,
             }
             try:
-                self.send_private_text(
-                    BOT_MASTER,
-                    f"📤 أرسلت حزمة {STREAM_ROOM_ACTION} type={STREAM_ROOM_TYPE} في {room_name}\n"
-                    f"📌 token field5={stream_token} | room field8={room_name}\n"
-                    "⏳ بانتظار تأكيد الخادم.",
-                )
+                msg2 = "\n".join([
+                    f"📤 [مرحلة 2: إرسال قبول] أرسلت حزم room_stream و stream_accept في {room_name}",
+                    f"📌 token={stream_token[:20]}... | room={room_name} | id={room_id}",
+                    "⏳ بانتظار تأكيد الخادم (publish_stream)."
+                ])
+                self.send_private_text(BOT_MASTER, msg2)
             except Exception as exc:
-                self.log("[STREAM] acceptance report failed:", repr(exc))
+                self.log("[STREAM] stage2 notification failed:", repr(exc))
+
             if not pending:
                 self.log("[STREAM] accepted seat invitation; waiting for بث command", room_name)
                 return True
             self.log("[STREAM] audio queued until server confirms live seat", room_name)
             return True
         except Exception as exc:
-            self._log_stream_accept_error(
-                "accept_or_audio", exc, room_name, room_id, invite_id
+            self._log_stream_stage(
+                "2_خطأ_عام",
+                "فشل_المرحلة_2",
+                room=room_name,
+                room_id=room_id,
+                error=str(exc),
             )
-            self.log("[STREAM] invitation accept/audio failed:", repr(exc))
+            self._log_stream_accept_error(
+                "stage2_accept_general_error", exc, room_name, room_id, invite_id
+            )
+            self.log("[STREAM] stage2 invitation accept failed:", repr(exc))
             return False
+
+    def _stream_event_contains_publish_stream(self, value, _seen=None):
+        """Return True when a direct or nested Talkin event contains publish_stream.
+
+        Different app/server builds may place the event name at different
+        protobuf fields or wrap it inside another StreamEvent/CallInfo object.
+        """
+        if _seen is None:
+            _seen = set()
+        if isinstance(value, (bytes, bytearray)):
+            key = id(value)
+            if key in _seen:
+                return False
+            _seen.add(key)
+            try:
+                value = decode_generic(bytes(value))
+            except Exception:
+                try:
+                    value = bytes(value).decode("utf-8", "ignore")
+                except Exception:
+                    return False
+
+        if isinstance(value, str):
+            return "publish_stream" in value.casefold()
+
+        if isinstance(value, dict):
+            key = id(value)
+            if key in _seen:
+                return False
+            _seen.add(key)
+            for k, v in value.items():
+                if isinstance(k, str) and "publish_stream" in k.casefold():
+                    return True
+                if isinstance(v, str) and "publish_stream" in v.casefold():
+                    return True
+                if self._stream_event_contains_publish_stream(v, _seen):
+                    return True
+            return False
+
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                if self._stream_event_contains_publish_stream(item, _seen):
+                    return True
+        return False
+
+    def _live_master_debug(self, title, **data):
+        """Safely record live-stream diagnostics in console logs without spamming private chat."""
+        try:
+            parts = [f"[STREAM_DEBUG] {title}"]
+            for key, value in data.items():
+                if value is None:
+                    continue
+                v_str = str(value).replace("\n", " ").strip()
+                if len(v_str) > 60:
+                    v_str = v_str[:57] + "..."
+                parts.append(f"{key}={v_str}")
+            self.log(" | ".join(parts))
+        except Exception:
+            pass
+
+    def _handle_publish_stream_confirmation(self, result):
+        """Handle a publish_stream event only when a live invitation is pending with distinct stage logs."""
+        if not self._stream_event_contains_publish_stream(result):
+            return False
+
+        pending = getattr(self, "_pending_live_accepts", {})
+        if not isinstance(pending, dict):
+            pending = {}
+            self._pending_live_accepts = pending
+
+        room = ""
+        if isinstance(result, dict):
+            room = str(
+                result.get("room", "")
+                or result.get(8, "")
+                or result.get("room_name", "")
+                or ""
+            ).strip()
+
+        if not room and len(pending) == 1:
+            room = next(iter(pending))
+        if not room:
+            sessions = getattr(self, "_live_session_by_room", {})
+            if len(sessions) == 1:
+                room = next(iter(sessions))
+
+        # Some server builds consume the invitation record before publish_stream
+        # arrives. Rebuild a usable session from the publish event instead of
+        # treating it as stale.
+        accepted = pending.get(room) or getattr(self, "_live_session_by_room", {}).get(room) or {}
+        stream_event_probe = result.get("stream_event", {}) if isinstance(result, dict) else {}
+        if not accepted and isinstance(stream_event_probe, dict):
+            probe_room_id = str(stream_event_probe.get(8, "") or stream_event_probe.get("room_id", "") or "").strip()
+            probe_id = str(stream_event_probe.get(9, "") or stream_event_probe.get("id", "") or "").strip()
+            probe_token = str(stream_event_probe.get(5, "") or stream_event_probe.get("token", "") or "").strip()
+            if room:
+                accepted = {
+                    "room_id": probe_room_id if probe_room_id.isdigit() else "",
+                    "session_id": probe_id,
+                    "publish_id": probe_id,
+                    "livekit_token": probe_token,
+                    "token": probe_token,
+                    "invite_id": probe_id,
+                    "sent_at": time.time(),
+                    "publish_confirmed": False,
+                }
+                pending[room] = accepted
+
+        if not room or not accepted:
+            self.log("[STREAM] ignored publish_stream: no room/session data", room)
+            self._log_stream_stage(
+                "3_تجاهل",
+                "publish_stream_بدون_جلسة",
+                room=room,
+            )
+            return True
+
+        stream_event = result.get("stream_event", {}) if isinstance(result, dict) else {}
+
+        # === المرحلة 3.1: استلام وتطابق حدث publish_stream ===
+        self._log_stream_stage(
+            "3.1_تأكيد_publish_stream",
+            "تم_تطابق_الحدث_مع_الدعوة",
+            room=room,
+            room_id=accepted.get("room_id", ""),
+            uid=str(result.get("uid", "") if isinstance(result, dict) else ""),
+            type=str(result.get("type", "") if isinstance(result, dict) else ""),
+        )
+
+        if isinstance(stream_event, dict) and stream_event:
+            self._log_stream_stage(
+                "3.1_تفاصيل_stream_event",
+                "بيانات_الجلسة",
+                room=room,
+                event_type=stream_event.get("type", ""),
+                event_room=stream_event.get("room", "") or stream_event.get(8, ""),
+                event_id=stream_event.get("id", "") or stream_event.get(9, ""),
+                has_event_token=bool(stream_event.get("token", "") or stream_event.get(5, "")),
+            )
+
+        if accepted.get("publish_confirmed"):
+            self._log_stream_stage(
+                "3.1_تكرار",
+                "تم_تأكيد_البث_مسبقاً",
+                room=room,
+            )
+            return True
+
+        self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
+        self._live_ready_rooms.add(room)
+
+        # استخراج بيانات الجلسة الحية لتثبيت المقعد
+        stream_event_data = result.get("stream_event", {}) if isinstance(result, dict) else {}
+        event_id = str(stream_event_data.get(9, "") or stream_event_data.get("id", "") or accepted.get("invite_id", "") or "").strip()
+        event_token = str(stream_event_data.get(5, "") or stream_event_data.get("token", "") or accepted.get("token", "") or "").strip()
+        event_room = str(stream_event_data.get(8, "") or stream_event_data.get("room", "") or room).strip()
+        live_room_id = str(accepted.get("room_id", "") or "").strip()
+
+        # publish_stream يحمل معرف جلسة البث الحقيقي في field 9،
+        # والتوكن الخاص بـLiveKit في field 5. يجب حفظهما قبل تشغيل الصوت.
+        # session_id كان يبقى فارغاً في النسخة السابقة، ولذلك كانت حزمة
+        # room_stream تصل بلا جلسة مرتبطة بمقعد المتحدث.
+        if event_id:
+            accepted["session_id"] = event_id
+            accepted["publish_id"] = event_id
+        if event_token:
+            accepted["livekit_token"] = event_token
+        if event_room and not live_room_id and event_room.isdigit():
+            live_room_id = event_room
+            accepted["room_id"] = event_room
+            try:
+                getattr(self, "_live_room_ids", {})[room] = event_room
+            except Exception:
+                pass
+        accepted["publish_confirmed"] = True
+        accepted["publish_confirmed_at"] = time.time()
+        pending[room] = accepted
+        self._pending_live_accepts = pending
+        live_sessions = getattr(self, "_live_session_by_room", {})
+        live_sessions[room] = accepted
+        self._live_session_by_room = live_sessions
+        self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
+        self._live_ready_rooms.add(room)
+
+        # === المرحلة 3.2: تثبيت المقعد ومعالجة publish_stream ===
+        # ملاحظة هامة: حدث publish_stream هو تأكيد الخادم الرسمي بأن البوت أصبح على المايك.
+        # توكن publish_stream (event_token) هو توكن وسائط JWT طويل (500 بايت) مخصص لخادم الميديا.
+        # إرساله في stream_accept أو كرسالة خاصة يتسبب فوراً في إغلاق السيرفر للاتصال بالرمز 1009 (رسالة كبيرة جداً).
+        try:
+            # إرسال ack_msg فقط إذا توفر معرف الرسالة لتأكيد الاستلام دون إرسال توكنات ضخمة
+            uid_val = str(result.get("uid") or "").strip()
+            if uid_val:
+                self.send_query(encode_query("ack_msg", uid=uid_val))
+                self._log_stream_stage(
+                    "3.2_ack_msg",
+                    "تم_إرسال_ack",
+                    room=room,
+                    uid=uid_val,
+                )
+        except Exception as exc:
+            self.log("[STREAM] ack_msg error:", repr(exc))
+
+        # === ربط جلسة الصوت الحية عبر خادم LiveKit للصعود الفعلي للمايك ===
+        livekit_token = event_token or accepted.get("token", "")
+        if livekit_token and len(livekit_token) > 50:
+            def _run_livekit_client(token_jwt, r_name, r_id):
+                """Connect to LiveKit as a real publisher using the official SDK."""
+                loop = None
+                try:
+                    from livekit import rtc
+
+                    lk_url = os.getenv("LIVEKIT_URL", "ws://chatp.net:7880").strip()
+                    if lk_url.endswith("/rtc"):
+                        lk_url = lk_url[:-4].rstrip("/")
+
+                    self.log("[LIVEKIT] بدء Publisher حقيقي:", r_name, lk_url)
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    room_obj = rtc.Room()
+                    setattr(self, "_livekit_loop_" + r_name, loop)
+                    setattr(self, "_livekit_room_" + r_name, room_obj)
+
+                    async def _connect_publish():
+                        await room_obj.connect(lk_url, token_jwt)
+                        self.log("[LIVEKIT] ✅ تم Join WebRTC:", r_name)
+
+                        source = rtc.AudioSource(48000, 1, queue_size_ms=2000, loop=loop)
+                        track = rtc.LocalAudioTrack.create_audio_track("music", source)
+                        options = rtc.TrackPublishOptions(
+                            source=rtc.TrackSource.SOURCE_MICROPHONE,
+                            dtx=False,
+                            red=True,
+                        )
+                        publication = await room_obj.local_participant.publish_track(track, options)
+                        try:
+                            track.unmute()
+                        except Exception:
+                            pass
+
+                        setattr(self, "_livekit_source_" + r_name, source)
+                        setattr(self, "_livekit_track_" + r_name, track)
+                        setattr(self, "_livekit_publication_" + r_name, publication)
+
+                        subscribed = False
+                        try:
+                            await asyncio.wait_for(
+                                publication.wait_for_subscription(),
+                                timeout=float(os.getenv("STREAM_FIRST_SUBSCRIPTION_TIMEOUT", "6")),
+                            )
+                            subscribed = True
+                        except Exception as exc:
+                            self.log("[LIVEKIT] no listener subscription yet; continuing publisher:", r_name, repr(exc))
+
+                        setattr(self, "_livekit_subscribed_" + r_name, subscribed)
+                        setattr(self, "_livekit_active_" + r_name, True)
+
+                        sid = str(getattr(publication, "sid", "") or "")
+                        muted = bool(getattr(track, "muted", False))
+                        self.log(
+                            "[LIVEKIT] 🎙️ البوت الآن Publisher/متحدث:", r_name,
+                            "track_sid=", sid,
+                            "muted=", muted,
+                            "subscribed=", subscribed,
+                        )
+
+                        # Keep the SDK event loop alive for the entire live-seat session.
+                        while not getattr(self, "_livekit_stop_requested_" + r_name, False):
+                            await asyncio.sleep(2)
+
+                    loop.run_until_complete(_connect_publish())
+                except Exception as exc:
+                    self.log("[LIVEKIT] ❌ فشل Publisher الحقيقي:", repr(exc))
+                    setattr(self, "_livekit_active_" + r_name, False)
+                finally:
+                    if loop is not None:
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass
+
+            threading.Thread(
+                target=_run_livekit_client,
+                args=(livekit_token, room, live_room_id),
+                name=f"talkin-livekit-{room}",
+                daemon=True,
+            ).start()
+
+        # === المرحلة 3.4: إعلان الصعود والنجاح النهائي ===
+        try:
+            self.send_private_text(
+                BOT_MASTER,
+                f"📡 [مرحلة 3: تأكيد نهائي] وصل تأكيد publish_stream وصعد البوت للمايك بنجاح في: {room}",
+            )
+            self._log_stream_stage(
+                "3.4_صعود_ناجح",
+                "البوت_على_المايك",
+                room=room,
+            )
+        except Exception as exc:
+            self.log("[STREAM] publish confirmation report failed:", repr(exc))
+
+        try:
+            pass  # الصعود الناجح يكون صامتًا؛ تم إرسال رسالة الجاهزية عند أمر اصعد
+        except Exception as exc:
+            self.log("[STREAM] room live announcement failed:", repr(exc))
+
+        # تشغيل الصوت المعلق إن وُجد
+        track = getattr(self, "_pending_live_tracks", {}).pop(room, None)
+        if track:
+            try:
+                time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
+                room_id = str(
+                    accepted.get("room_id", "")
+                    or getattr(self, "_live_room_ids", {}).get(room, "")
+                    or ""
+                )
+                session_id = str(
+                    accepted.get("session_id", "")
+                    or accepted.get("publish_id", "")
+                    or accepted.get("id_", "")
+                    or accepted.get("invite_id", "")
+                    or ""
+                )
+                # لا نرسل الصوت قبل أن تصبح جلسة LiveKit جاهزة.
+                if not getattr(self, f"_livekit_active_{room}", False):
+                    wait_until = time.time() + float(os.getenv("STREAM_LIVEKIT_READY_TIMEOUT", "12"))
+                    while time.time() < wait_until:
+                        if getattr(self, f"_livekit_active_{room}", False):
+                            break
+                        time.sleep(0.25)
+                self._log_stream_stage(
+                    "3.5_بث_الصوت",
+                    "إرسال_حزمة_الصوت",
+                    room=room,
+                    room_id=room_id,
+                )
+                wait_until = time.time() + float(os.getenv("STREAM_LIVEKIT_READY_TIMEOUT", "15"))
+                while not getattr(self, f"_livekit_active_{room}", False) and time.time() < wait_until:
+                    time.sleep(0.25)
+                if getattr(self, f"_livekit_active_{room}", False):
+                    self._feed_livekit_audio(room, str(track["url"]), int(track.get("duration") or 0))
+                else:
+                    self.log("[LIVEKIT] لم تصبح جلسة Publisher جاهزة ضمن المهلة:", room)
+                self.send_query(encode_query(
+                    STREAM_AUDIO_ACTION,
+                    type_="audio",
+                    room=room_id or room,
+                    id_=session_id,
+                    url=str(track["url"]),
+                    length=str(max(0, int(track.get("duration") or 0))),
+                ))
+                try:
+                    self.send_query(encode_query(
+                        "room_stream",
+                        type_="audio",
+                        room=room_id or room,
+                        id_=session_id,
+                        url=str(track["url"]),
+                        length=str(max(0, int(track.get("duration") or 0))),
+                    ))
+                except Exception:
+                    pass
+                try:
+                    self.send_room_media(room, str(track["url"]), "audio", int(track.get("duration") or 0))
+                except Exception:
+                    pass
+            except Exception as exc:
+                self._log_stream_stage(
+                    "3.5_خطأ_بث_الصوت",
+                    "فشل_إرسال_الصوت",
+                    room=room,
+                    error=str(exc),
+                )
+                self._log_stream_accept_error(
+                    "stage3_audio_after_publish_stream",
+                    exc,
+                    room,
+                    accepted.get("room_id", ""),
+                    accepted.get("invite_id", ""),
+                )
+        return True
 
     def _handle_stream_result_ack(self, result):
         """Report the server's acceptance/failure after stream_accept."""
@@ -4749,11 +5821,34 @@ class TalkinBot:
         if not room and len(pending) == 1:
             room = next(iter(pending))
         if not room or room not in pending:
+            self._live_master_debug(
+                "رد بث غير مطابق",
+                type=kind,
+                room=room,
+                pending_rooms=",".join(str(x) for x in pending.keys())[:100],
+            )
             return False
         positive = any(word in kind for word in ("started", "accepted", "accept", "streaming", "live_ok", "success", "ok", "تم"))
         negative = any(word in kind for word in ("reject", "رفض", "failed", "فشل", "denied", "error"))
+        if negative:
+            self._live_master_debug(
+                "الخادم رفض البث",
+                type=kind,
+                room=room,
+                result=str(result),
+            )
+
         if positive and not negative:
+            self._live_master_debug(
+                "الخادم أكد البث",
+                type=kind,
+                room=room,
+            )
             accepted = pending.pop(room, None) or {}
+            live_sessions = getattr(self, "_live_session_by_room", {})
+            if accepted:
+                live_sessions[room] = accepted
+                self._live_session_by_room = live_sessions
             self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
             self._live_ready_rooms.add(room)
             self.send_private_text(BOT_MASTER, f"✅ أكد الخادم صعود البوت للبث في الغرفة: {room}")
@@ -5835,7 +6930,10 @@ class TalkinBot:
                 # `.sa` publishes the audio file to the connected rooms.
                 # `بث` is the separate live-room mode and must not duplicate
                 # the track as a normal room attachment.
-                live_started = self._play_music_in_live_room(room, url, duration) if live_stream else False
+                # استخدم الملف المحلي للبث الحي؛ رابط PUBLIC_BASE_URL يبقى للرسائل
+                # والمشاركة فقط. هذا يمنع فشل ffmpeg بسبب مسار Railway العام.
+                live_source = str(path) if live_stream else url
+                live_started = self._play_music_in_live_room(room, live_source, duration) if live_stream else False
                 if room_output:
                     target_rooms=self._active_rooms() if broadcast_all else [room]
                     for target_room in target_rooms:
@@ -9026,14 +10124,16 @@ class TalkinBot:
                 return True
             self._pending_protection_number[_norm_user(sender)] = {"room":target_room,"created":time.time()}
             self.send_private_text(sender,
-                "🛡️ حماية الغرفة\n"
+                "🛡️ قائمة حماية الغرفة\n"
+                "━━━━━━━━━━━━\n"
                 "1️⃣ تشغيل حماية الغرفة من السب\n"
                 "2️⃣ إيقاف حماية الغرفة من السب\n"
-                "3️⃣ تشغيل حماية الغرفة من الفلود\n"
-                "4️⃣ إيقاف حماية الغرفة من الفلود\n"
-                "5️⃣ تشغيل حماية الغرفة من الدخول والخروج\n"
-                "6️⃣ إيقاف حماية الغرفة من الدخول والخروج\n"
-                "7️⃣ تعيين عدد الرسائل للحماية من الفلود\n\n"
+                "3️⃣ تشغيل حماية الفلود (هجوم الدخول المتزامن + حظر IP)\n"
+                "4️⃣ إيقاف حماية الفلود\n"
+                "5️⃣ تشغيل حماية الدخول والخروج (تكرار الدخول)\n"
+                "6️⃣ إيقاف حماية الدخول والخروج\n"
+                "7️⃣ تعيين حد رسائل الفلود\n"
+                "━━━━━━━━━━━━\n"
                 "📌 أرسل رقم الخيار الآن.")
             return True
 
@@ -10260,6 +11360,8 @@ class TalkinBot:
         username = str(event.get(22, "") or "").strip()
         monitored_username = username or frm or str(event.get(17, "") or "").strip()
         self._report_monitored_event(room, event_type, monitored_username, body)
+        if event_type == "text" and self._handle_telegram_log_command(body, frm):
+            return
         # NS is a navigation command. Every newly received NS must be accepted
         # immediately; do not let the transport replay/duplicate cache suppress
         # rapid NS presses.
@@ -10284,20 +11386,51 @@ class TalkinBot:
         # Keep the live membership state in sync.  The APK itself uses these
         # exact event names and RoomEvent fields.
         if event_type in ("user_joined", "user_left") and username:
-            pcfg=_room_protection_cfg(room)
-            if pcfg.get("joinleave") and _norm_user(username)!=_norm_user(BOT_ID):
-                st=self._joinleave_state[_norm_room(room)][_norm_user(username)]
-                now=time.time(); evs=st.setdefault("events",[])
-                evs[:]=[x for x in evs if now-float(x[0])<=600]
-                evs.append((now,event_type))
-                if len(evs)>=4 and now>=float(st.get("banned_until",0) or 0):
+            pcfg = _room_protection_cfg(room)
+            now = time.time()
+            norm_u = _norm_user(username)
+            norm_r = _norm_room(room)
+
+            # --- حماية الفلود: كشف دخول عدد نكات غير محدود/جماعي بنفس الوقت وحظرهم IP ---
+            if event_type == "user_joined" and pcfg.get("flood") and norm_u != _norm_user(BOT_ID) and not _is_master_name(username):
+                if not hasattr(self, "_join_flood_history"):
+                    self._join_flood_history = defaultdict(list)
+                history = self._join_flood_history[norm_r]
+                # إبقاء سجل آخر 5 ثوانٍ
+                history[:] = [h for h in history if now - h[0] <= 5.0]
+                history.append((now, username))
+                # إذا دخل 3 أو أكثر من النكات المختلفة خلال 5 ثوانٍ (هجوم فلود نكات)
+                if len(history) >= 3:
+                    self.log(f"[FLOOD] كشف فلود دخول جماعي في {room}: {len(history)} نكات خلال 5 ثوانٍ")
+                    banned_names = []
+                    for _, u_flood in list(history):
+                        if _norm_user(u_flood) != _norm_user(BOT_ID) and not _is_master_name(u_flood):
+                            try:
+                                self.send_admin(room, u_flood, "ban_ip")
+                                _record_filter_ban(u_flood, room, "حماية الفلود", "دخول جماعي متزامن (حظر IP)")
+                                banned_names.append(f"@{u_flood}")
+                            except Exception as f_err:
+                                self.log("[FLOOD] ban_ip error:", repr(f_err))
+                    history.clear()
+                    if banned_names:
+                        self.send_room_text(room, f"🚫 [حماية الفلود] تم حظر IP للنكات التالية لدخولها المتزامن: {' '.join(banned_names[:5])}")
+
+            # --- حماية الدخول والخروج: كشف تكرار الدخول والخروج لنفس النك وحظره ---
+            if pcfg.get("joinleave") and norm_u != _norm_user(BOT_ID) and not _is_master_name(username):
+                st = self._joinleave_state[norm_r][norm_u]
+                evs = st.setdefault("events", [])
+                evs[:] = [x for x in evs if now - float(x[0]) <= 300]
+                evs.append((now, event_type))
+                # 3 حركات دخول/خروج خلال 5 دقائق
+                if len(evs) >= 3 and now >= float(st.get("banned_until", 0) or 0):
                     try:
-                        self.send_admin(room,username,"ban")
-                        st["banned_until"]=now+120
-                        _record_filter_ban(username,room,"حماية الدخول والخروج", "دخول/خروج متكرر")
-                        self.send_room_text(room,f"🚫 تم حظر @{username} لمدة دقيقتين بسبب تكرار الدخول والخروج.")
-                        threading.Timer(120.0, lambda r=room,u=username: self._auto_unban(r,u)).start()
-                    except Exception as exc: self.log("[JOINLEAVE] ban failed",repr(exc))
+                        self.send_admin(room, username, "ban_ip")
+                        st["banned_until"] = now + 180
+                        _record_filter_ban(username, room, "حماية الدخول والخروج", "تكرار الدخول والخروج (حظر IP)")
+                        self.send_room_text(room, f"🚫 تم حظر @{username} (حظر IP) بسبب تكرار الدخول والخروج.")
+                        threading.Timer(180.0, lambda r=room, u=username: self._auto_unban(r, u)).start()
+                    except Exception as exc:
+                        self.log("[JOINLEAVE] ban failed", repr(exc))
         
         if event_type == "user_joined" and username:
             self.room_users[room][username] = role or "none"
@@ -10655,11 +11788,26 @@ class TalkinBot:
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
-        if body.strip().casefold() in ("صعود", "اصعد", "إصعد", "صعدني", "صعدني للبث", ".صعود", "live", "join live"):
+        # Live-seat commands:
+        #   اصعد  -> send the native invitation to the bot itself.
+        #   صعدني -> send the native invitation to the user who issued the command.
+        # Keep the existing verification requirement and native invitation flow.
+        live_command = body.strip().casefold()
+        if live_command in ("صعود", "اصعد", "إصعد", ".صعود", "live", "join live", "صعدني", "صعدني للبث"):
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام البث.\n{_verification_notice()}")
                 return
-            self.request_live_room(room)
+
+            if live_command in ("صعدني", "صعدني للبث"):
+                # إذا كان صاحب الأمر هو الماستر أو تم استخدام الأمر بهدف صعود البوت
+                target = str(frm or "").strip().lstrip("@")
+                # طلب صعود البوت نفسه للبث
+                self.request_live_room(room)
+                if target and target != BOT_ID:
+                    # وأيضاً إرسال دعوة للمستخدم لضمان صعود الطرفين
+                    self.send_live_invitation_to_user(target, room)
+            else:
+                self.request_live_room(room)
             return
         m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)\s+@?([^\s@]+)", body.strip(), re.I)
         if m_share_ar:
@@ -10802,6 +11950,13 @@ class TalkinBot:
                     if isinstance(x, dict)):
                 self.log("[STREAM]", stream_event)
                 self._handle_stream_event(stream_event)
+            # The native app sends publish_stream after the invitation is
+            # accepted. It is the authoritative success signal and may be
+            # direct or nested inside a StreamEvent/CallInfo/RoomEvent.
+            publish_handled = self._handle_publish_stream_confirmation(result)
+            if not publish_handled:
+                self._handle_stream_result_ack(result)
+
             top_type = str(result.get("type", "") or "").strip().casefold()
             if "invite" in top_type or "invited" in top_type:
                 self.log("[STREAM] top-level invitation", result)
@@ -10819,6 +11974,8 @@ class TalkinBot:
                          if str(cm.get(key, "") or "").strip().startswith(("http://", "https://"))),
                         "",
                     ) or first_http_url(cm)
+                    if body and self._handle_telegram_log_command(body, frm):
+                        return
                     # Every NS is a fresh navigation request. Do not suppress
                     # rapid NS commands with the normal transport de-dup cache.
                     # Direct private message is a user command, not an admin
@@ -11258,6 +12415,10 @@ class TalkinBot:
                 "Missing required deployment variables: " + ", ".join(missing) + ". "
                 "Add them to Railway Variables (not the source code) and redeploy."
             )
+        if TELEGRAM_BOT_TOKEN:
+            threading.Thread(target=self._telegram_poll_loop, name="telegram-poll", daemon=True).start()
+        else:
+            self.log("[TELEGRAM] TELEGRAM_BOT_TOKEN is not configured; Telegram log upload disabled")
         self.asset_server = start_asset_server()
         while not self.stop_event.is_set():
             try:
