@@ -512,7 +512,20 @@ AUTH_VER = "444"
 AUTH_METHOD = "1"
 
 # Keep these enabled for easy troubleshooting.
-DEBUG = os.getenv("DEBUG", "1") == "1"
+DEBUG = os.getenv("DEBUG", "0") == "1"
+# Quiet hosting mode: do not continuously write diagnostics to Railway stdout
+# or to the persistent runtime log. Set QUIET_MODE=0 and DEBUG=1 temporarily
+# only when troubleshooting is needed.
+QUIET_MODE = os.getenv("QUIET_MODE", "1").strip() == "1"
+
+# Automatic runtime cleanup. This never touches DATA_DIR/persistent JSON state.
+CLEANUP_INTERVAL_SECONDS = max(300, int(os.getenv("CLEANUP_INTERVAL_SECONDS", "3600")))
+CLEANUP_MAX_AGE_SECONDS = max(3600, int(os.getenv("CLEANUP_MAX_AGE_SECONDS", "3600")))
+CLEANUP_AUDIO_ENABLED = os.getenv("CLEANUP_AUDIO_ENABLED", "1").strip() == "1"
+CLEANUP_CACHE_ENABLED = os.getenv("CLEANUP_CACHE_ENABLED", "1").strip() == "1"
+CLEANUP_LOG_ENABLED = os.getenv("CLEANUP_LOG_ENABLED", "1").strip() == "1"
+CLEANUP_TMP_ENABLED = os.getenv("CLEANUP_TMP_ENABLED", "1").strip() == "1"
+
 RAW_DIAGNOSTIC = os.getenv("RAW_DIAGNOSTIC", "0") == "1"
 ACK_ROOM_EVENTS = os.getenv("ACK_ROOM_EVENTS", "1") == "1"
 AUTO_HELP = os.getenv("AUTO_HELP", "1") == "1"
@@ -3444,6 +3457,147 @@ def _download_lookalike_image(image_url, target_name):
     except Exception:
         return None
 
+# ------------------------- Runtime cleanup -------------------------
+_CLEANUP_LOCK = threading.Lock()
+_CLEANUP_SUFFIXES = {
+    ".mp3", ".m4a", ".webm", ".ogg", ".wav", ".aac", ".flac",
+    ".part", ".ytdl", ".temp", ".tmp", ".cache",
+}
+_CLEANUP_DIR_NAMES = {
+    "__pycache__", ".cache", "cache", ".yt-dlp", ".ytdlp", ".pytest_cache",
+}
+
+
+def _safe_remove_file(path):
+    try:
+        p = Path(path)
+        if p.is_file() or p.is_symlink():
+            p.unlink(missing_ok=True)
+            return 1
+    except Exception:
+        pass
+    return 0
+
+
+def _safe_remove_tree(path):
+    try:
+        p = Path(path)
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+            return 1
+    except Exception:
+        pass
+    return 0
+
+
+def _cleanup_runtime_files():
+    """Delete old transient media/cache files without touching persistent bot data."""
+    if not _CLEANUP_LOCK.acquire(blocking=False):
+        return
+    try:
+        now = time.time()
+        removed_files = 0
+        removed_dirs = 0
+
+        # Generated music is disposable: songs are recreated when requested.
+        if CLEANUP_AUDIO_ENABLED:
+            music_dir = BASE_DIR / "generated_music"
+            if music_dir.exists():
+                for item in list(music_dir.iterdir()):
+                    try:
+                        # Keep files created during the current cleanup window.
+                        age = now - item.stat().st_mtime
+                    except Exception:
+                        age = CLEANUP_MAX_AGE_SECONDS + 1
+                    if age < CLEANUP_MAX_AGE_SECONDS:
+                        continue
+                    if item.is_dir():
+                        removed_dirs += _safe_remove_tree(item)
+                    elif item.suffix.lower() in _CLEANUP_SUFFIXES or item.name.startswith("."):
+                        removed_files += _safe_remove_file(item)
+
+        # Remove generic runtime caches and Python bytecode outside DATA_DIR.
+        if CLEANUP_CACHE_ENABLED:
+            roots = [BASE_DIR]
+            for root in roots:
+                try:
+                    for item in root.rglob("*"):
+                        # Never descend/delete the persistent data directory.
+                        try:
+                            item.relative_to(DATA_DIR)
+                            continue
+                        except ValueError:
+                            pass
+                        if item.is_dir() and item.name in _CLEANUP_DIR_NAMES:
+                            try:
+                                age = now - item.stat().st_mtime
+                            except Exception:
+                                age = CLEANUP_MAX_AGE_SECONDS + 1
+                            if age >= CLEANUP_MAX_AGE_SECONDS:
+                                removed_dirs += _safe_remove_tree(item)
+                        elif item.is_file() and item.suffix.lower() in {".pyc", ".pyo"}:
+                            try:
+                                age = now - item.stat().st_mtime
+                            except Exception:
+                                age = CLEANUP_MAX_AGE_SECONDS + 1
+                            if age >= CLEANUP_MAX_AGE_SECONDS:
+                                removed_files += _safe_remove_file(item)
+                except Exception:
+                    pass
+
+        # Remove the temporary YouTube cookies file when it is old.
+        if YOUTUBE_COOKIE_FILE and CLEANUP_TMP_ENABLED:
+            try:
+                cookie_path = Path(YOUTUBE_COOKIE_FILE)
+                if cookie_path.exists() and now - cookie_path.stat().st_mtime >= CLEANUP_MAX_AGE_SECONDS:
+                    removed_files += _safe_remove_file(cookie_path)
+            except Exception:
+                pass
+
+        # Do not allow the persistent runtime log to grow indefinitely.
+        if CLEANUP_LOG_ENABLED:
+            try:
+                log_path = Path(TELEGRAM_LOG_FILE)
+                if log_path.exists() and log_path.is_file():
+                    # In quiet mode the file is unnecessary; remove it entirely.
+                    if QUIET_MODE:
+                        removed_files += _safe_remove_file(log_path)
+                    elif now - log_path.stat().st_mtime >= CLEANUP_MAX_AGE_SECONDS:
+                        removed_files += _safe_remove_file(log_path)
+            except Exception:
+                pass
+
+        if DEBUG and not QUIET_MODE:
+            print(f"[CLEANUP] removed files={removed_files} dirs={removed_dirs}", flush=True)
+    finally:
+        _CLEANUP_LOCK.release()
+
+
+def _runtime_cleanup_worker(stop_event=None):
+    """Run cleanup once at startup and then every hour."""
+    while stop_event is None or not stop_event.is_set():
+        try:
+            _cleanup_runtime_files()
+        except Exception:
+            pass
+        if stop_event is not None:
+            if stop_event.wait(CLEANUP_INTERVAL_SECONDS):
+                break
+        else:
+            time.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+def start_runtime_cleanup(stop_event=None):
+    t = threading.Thread(
+        target=_runtime_cleanup_worker,
+        args=(stop_event,),
+        name="runtime-cleanup",
+        daemon=True,
+    )
+    t.start()
+    return t
+
+
 class _MediaHandler(SimpleHTTPRequestHandler):
     def _resolve_target(self):
         path=unquote(urlparse(self.path).path)
@@ -3511,7 +3665,8 @@ class _MediaHandler(SimpleHTTPRequestHandler):
     def do_HEAD(self): self._serve(True)
     def do_GET(self): self._serve(False)
     def log_message(self,fmt,*args):
-        if DEBUG: print("[MEDIA] "+(fmt%args),flush=True)
+        if DEBUG and not QUIET_MODE:
+            print("[MEDIA] "+(fmt%args),flush=True)
 
 
 def start_asset_server():
@@ -3520,10 +3675,13 @@ def start_asset_server():
         (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
-        print(f"[MEDIA] HTTP server listening on :{ASSET_HTTP_PORT}",flush=True)
+        if DEBUG and not QUIET_MODE:
+            print(f"[MEDIA] HTTP server listening on :{ASSET_HTTP_PORT}",flush=True)
         return server
     except Exception as e:
-        print("[MEDIA] HTTP server failed:",repr(e),flush=True); return None
+        if DEBUG and not QUIET_MODE:
+            print("[MEDIA] HTTP server failed:",repr(e),flush=True)
+        return None
 
 class TalkinBot:
     def __init__(self):
@@ -3807,7 +3965,9 @@ class TalkinBot:
         return self._render_auto_reply(reply, username, room)
 
     def log(self, *args):
-        """Write diagnostics to Railway stdout and to a persistent local log file."""
+        """Optional diagnostics. Quiet mode avoids stdout and persistent log growth."""
+        if QUIET_MODE and not DEBUG:
+            return
         try:
             line = " ".join(str(x) for x in args)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -3991,9 +4151,8 @@ class TalkinBot:
         location = f" | الغرفة: {room}" if room else ""
         message = f"❌ خطأ {context}{location}\nالتفاصيل: {detail}"
         self.log(f"[{context}]", repr(error))
-        # Music/gift failures must remain visible in Railway Logs even when
-        # DEBUG=0; the master also receives the complete diagnostic privately.
-        print(f"[{context}] {detail}", flush=True)
+        if DEBUG and not QUIET_MODE:
+            print(f"[{context}] {detail}", flush=True)
         if BOT_MASTER and _norm_user(BOT_MASTER) != _norm_user(BOT_ID):
             try:
                 self.send_private_text(BOT_MASTER, message)
@@ -12880,7 +13039,8 @@ class TalkinBot:
         raise last_error
 
     def start(self):
-        print("=== Talkinchat Bot V22 - Talkin + YouTube Cookies + Giant Gift Cards ===", flush=True)
+        if DEBUG and not QUIET_MODE:
+            print("=== Talkinchat Bot V22 - Talkin + YouTube Cookies + Giant Gift Cards ===", flush=True)
         missing = []
         if not BOT_ID:
             missing.append("BOT_ID (or BOT_USERNAME)")
@@ -12897,6 +13057,7 @@ class TalkinBot:
             threading.Thread(target=self._telegram_poll_loop, name="telegram-poll", daemon=True).start()
         else:
             self.log("[TELEGRAM] TELEGRAM_BOT_TOKEN is not configured; Telegram log upload disabled")
+        self._cleanup_thread = start_runtime_cleanup(self.stop_event)
         self.asset_server = start_asset_server()
         while not self.stop_event.is_set():
             try:
@@ -12915,10 +13076,12 @@ class TalkinBot:
                     elif self.room:
                         raw_reason = f"{raw_reason[:850]} | آخر غرفة: {self.room}"
                     self._pending_reconnect_reason = raw_reason[:1200]
-                print("[BOT] error:", repr(e), flush=True)
+                if DEBUG and not QUIET_MODE:
+                    print("[BOT] error:", repr(e), flush=True)
             if not self.stop_event.is_set():
                 delay = self._reconnect_delay
-                print(f"[BOT] reconnecting in {int(delay)}s...", flush=True)
+                if DEBUG and not QUIET_MODE:
+                    print(f"[BOT] reconnecting in {int(delay)}s...", flush=True)
                 if self.stop_event.wait(delay):
                     break
                 self._reconnect_delay = min(self._reconnect_delay * 2.0, self._reconnect_delay_max)
