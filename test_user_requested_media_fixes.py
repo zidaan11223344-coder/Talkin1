@@ -77,7 +77,7 @@ route_obj.handle_music_command(
 assert route_obj.last_call[3]["live_stream"] is True
 assert route_obj.last_call[3]["room_output"] is False
 
-# 4) The experimental live flow emits invite -> accept -> audio in order.
+# 4) The experimental live flow emits invite -> stream_accept -> audio.
 payloads = []
 stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
@@ -100,6 +100,8 @@ assert len(check_fields[9][0].decode()) == 17
 # 4b) اصعد uses the real self-invitation packet, not the old generic query.
 old_bot_id = bot.BOT_ID
 bot.BOT_ID = old_bot_id or "s-boot"
+old_manual_mode = bot.STREAM_MANUAL_ACCEPT_ONLY
+bot.STREAM_MANUAL_ACCEPT_ONLY = True
 join_payloads = []
 join_obj = object.__new__(bot.TalkinBot)
 join_obj._live_ready_rooms = set()
@@ -111,8 +113,9 @@ join_obj.send_private_text = lambda *args: None
 join_obj.send_room_text = lambda *args: None
 assert join_obj.request_live_room("main") is True
 assert not join_payloads
-assert join_obj.live_invites == [(bot.BOT_ID, "main")]
+assert join_obj.live_invites == []
 bot.BOT_ID = old_bot_id
+bot.STREAM_MANUAL_ACCEPT_ONLY = old_manual_mode
 
 # Older gateway builds use an equivalent invitation name and string fields.
 stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "duration": 9, "room_id": "room-2"}
