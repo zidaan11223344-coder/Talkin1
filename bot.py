@@ -4722,31 +4722,19 @@ class TalkinBot:
                 "room_id": room_id, "session_id": stream_id,
                 "sent_at": time.time(),
             }
-            # The app treats the local stream_accept dispatch as the seat
-            # acceptance path. Do not block the next بث command on a separate
-            # result/ack frame from the gateway.
-            self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
-            self._live_ready_rooms.add(room_name)
             try:
                 self.send_private_text(
                     BOT_MASTER,
-                    f"✅ تم قبول دعوة البث وإرسال stream_accept في {room_name}\n"
+                    f"📤 أرسلت حزمة stream_accept في {room_name}\n"
                     f"📌 room_id={room_id} | session_id={stream_id}\n"
-                    "🎙️ البوت جاهز للبث بدون انتظار رد تأكيد من الخادم.",
+                    "⏳ لن يعلن البوت الصعود حتى يؤكده الخادم فعليًا.",
                 )
             except Exception as exc:
                 self.log("[STREAM] acceptance report failed:", repr(exc))
             if not pending:
                 self.log("[STREAM] accepted seat invitation; waiting for بث command", room_name)
                 return True
-            time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
-            self.log("[STREAM] publish queued audio", STREAM_AUDIO_ACTION, room_id)
-            self.send_query(encode_query(
-                STREAM_AUDIO_ACTION, type_="audio", room=room_id, id_=stream_id,
-                url=str(pending["url"]),
-                length=str(max(0, int(pending.get("duration") or 0))),
-            ))
-            self._pending_live_tracks.pop(room_name, None)
+            self.log("[STREAM] audio queued until server confirms live seat", room_name)
             return True
         except Exception as exc:
             self._log_stream_accept_error(
@@ -4771,10 +4759,27 @@ class TalkinBot:
         positive = any(word in kind for word in ("started", "accepted", "accept", "streaming", "live_ok", "success", "ok", "تم"))
         negative = any(word in kind for word in ("reject", "رفض", "failed", "فشل", "denied", "error"))
         if positive and not negative:
-            pending.pop(room, None)
+            accepted = pending.pop(room, None) or {}
             self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
             self._live_ready_rooms.add(room)
             self.send_private_text(BOT_MASTER, f"✅ أكد الخادم صعود البوت للبث في الغرفة: {room}")
+            track = getattr(self, "_pending_live_tracks", {}).pop(room, None)
+            if track:
+                try:
+                    time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
+                    self.log("[STREAM] publish queued audio", STREAM_AUDIO_ACTION, accepted.get("room_id", ""))
+                    self.send_query(encode_query(
+                        STREAM_AUDIO_ACTION,
+                        type_="audio",
+                        room=str(accepted.get("room_id", "") or ""),
+                        id_=str(accepted.get("session_id", "") or ""),
+                        url=str(track["url"]),
+                        length=str(max(0, int(track.get("duration") or 0))),
+                    ))
+                except Exception as exc:
+                    self._log_stream_accept_error(
+                        "audio_after_accept", exc, room, accepted.get("room_id", ""), ""
+                    )
             return True
         if negative:
             detail = str(result.get("value", "") or result.get("type", "") or "غير معروف")[:180]

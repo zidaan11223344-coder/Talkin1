@@ -82,6 +82,7 @@ payloads = []
 stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
 stream_obj.log = lambda *args: None
+stream_obj.send_private_text = lambda *args: None
 stream_obj._pending_live_tracks = {}
 stream_obj._live_room_ids = {"main": "700978564"}
 stream_obj.send_live_invitation_to_user = lambda target, room: True
@@ -90,6 +91,10 @@ bot.STREAM_ACCEPT_DELAY = 0
 bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
 stream_obj._handle_stream_event({1: "you_invited", 5: "78993070543988401", 6: "room-1", 8: "main", 9: "2586245694009091"})
+assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+assert "main" not in getattr(stream_obj, "_live_ready_rooms", set())
+assert "main" in stream_obj._pending_live_accepts
+assert stream_obj._handle_stream_result_ack({"type": "accepted", "room": "main"}) is True
 assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
 assert "main" in stream_obj._live_ready_rooms
 check_fields = payloads[-2]
@@ -138,6 +143,8 @@ bot.STREAM_MANUAL_ACCEPT_ONLY = old_manual_mode
 # Older gateway builds use an equivalent invitation name and string fields.
 stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "duration": 9, "room_id": "room-2"}
 stream_obj._handle_stream_event({"type": "invited", "invite_id": "invite-2", "room_id": "room-2", "room": ""})
+assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+assert stream_obj._handle_stream_result_ack({"type": "accepted", "room": "main"}) is True
 assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
 
 # A seat invitation may omit its id; the room-based accept path must still run.
