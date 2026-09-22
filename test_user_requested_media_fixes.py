@@ -2,6 +2,8 @@ import threading
 import bot
 
 assert bot.first_http_url({99: ["not-url", {77: "https://cdn/image-hidden.jpg"}]}) == "https://cdn/image-hidden.jpg"
+invite_fields = bot.decode_message(bot.encode_live_invitation("bot", "target", "tok", "985009014", "مشاعر", "12345678901234567"))
+assert [invite_fields[k][0].decode() for k in (1, 2, 3, 5, 6, 8, 9)] == ["sent_invitation", "bot", "target", "tok", "985009014", "مشاعر", "12345678901234567"]
 
 
 # 1) A photo event whose author is in field 22 must complete a pending publish.

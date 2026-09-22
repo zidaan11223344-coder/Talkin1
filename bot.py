@@ -591,6 +591,24 @@ def encode_query(action: str, *, type_: str = None, length: str = None,
     return bytes(out)
 
 
+def encode_live_invitation(inviter: str, target: str, token: str,
+                           room_id: str, room_name: str, invitation_id: str) -> bytes:
+    """Encode the manual Talkin live invitation packet captured from the app.
+
+    Unlike the generic Query schema used by chat messages, this action was
+    observed with username fields 2 and 3 followed by token/room/session
+    fields 5/6/8/9.
+    """
+    values = {
+        1: "sent_invitation", 2: inviter, 3: target, 5: token,
+        6: room_id, 8: room_name, 9: invitation_id,
+    }
+    out = bytearray()
+    for field in (1, 2, 3, 5, 6, 8, 9):
+        out += _field_string(field, str(values.get(field, "")), True)
+    return bytes(out)
+
+
 def read_varint(data: bytes, pos: int):
     value = 0
     shift = 0
@@ -3722,6 +3740,13 @@ class TalkinBot:
         if not _is_primary_master(sender):
             return False
         raw = str(text or "").strip()
+        match = re.fullmatch(r"(?:دعوة|دعوه)\s+(?:بث|للبث)\s*@?([^\s@]+)(?:\s+في\s+(.+))?", raw, re.I)
+        if match:
+            target = match.group(1).strip().lstrip("@")
+            room = str(match.group(2) or self.last_joined_room or self.room or "").strip()
+            if self.send_live_invitation_to_user(target, room):
+                self.send_private_text(sender, f"✅ تم إرسال دعوة البث اليدوية إلى @{target} في {room}.")
+            return True
         match = re.fullmatch(r"(?:مراقبه|مراقبة|راقب)\s*@?([^\s@]+)", raw, re.I)
         if match:
             username = match.group(1).strip().lstrip("@")
@@ -3770,6 +3795,33 @@ class TalkinBot:
             except Exception as exc:
                 self.log("[MONITOR] invite failed:", repr(exc))
                 self.send_private_text(BOT_MASTER, f"❌ تعذر دعوة @{username} من غرفة {room}: {str(exc)[:180]}")
+        if str(detail or "").strip().casefold() in {"صعدني", "ارفعني", "ارفعني للبث", "صعدني للبث"}:
+            self.send_live_invitation_to_user(username, room)
+
+    def send_live_invitation_to_user(self, target, room):
+        """Send the captured manual live invitation packet to a target."""
+        target = str(target or "").strip().lstrip("@")
+        room = str(room or "").strip()
+        if not target or not room:
+            return False
+        room_id = ""
+        try:
+            room_id = str(self.db.room_id(room) or "").strip() if getattr(self, "db", None) else ""
+        except Exception as exc:
+            self.log("[STREAM] room id lookup failed:", repr(exc))
+        if not room_id:
+            room_id = room
+        inviter = str(BOT_ID or "").strip()
+        token = str((getattr(self, "auth", {}) or {}).get("id") or "").strip()
+        invitation_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
+        try:
+            self.send_query(encode_live_invitation(inviter, target, token, room_id, room, invitation_id))
+            self.send_private_text(BOT_MASTER, f"📨 أرسلت دعوة بث يدوية إلى @{target} في {room}\n📌 room_id={room_id}")
+            return True
+        except Exception as exc:
+            self.log("[STREAM] manual invitation failed:", repr(exc))
+            self.send_private_text(BOT_MASTER, f"❌ فشل إرسال دعوة البث إلى @{target}: {str(exc)[:180]}")
+            return False
 
     def authenticate(self):
         body = encode_auth_request(BOT_ID, BOT_PWD)
