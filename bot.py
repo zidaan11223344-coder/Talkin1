@@ -10660,7 +10660,7 @@ class TalkinBot:
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
-        if body.strip().casefold() in ("صعود", "اصعد", "إصعد", ".صعود", "live", "join live"):
+        if body.strip().casefold() in ("صعود", "اصعد", "إصعد", "صعدني", "صعدني للبث", ".صعود", "live", "join live"):
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام البث.\n{_verification_notice()}")
                 return
