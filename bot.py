@@ -163,14 +163,16 @@ STREAM_EXPERIMENTAL_ENABLED = os.getenv("STREAM_EXPERIMENTAL_ENABLED", "1") == "
 STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "sent_invitation").strip() or "sent_invitation"
 STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip() or "stream_accept"
 STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip() or "stream_audio"
+STREAM_ROOM_ACTION = os.getenv("STREAM_ROOM_ACTION", "room_stream").strip() or "room_stream"
+STREAM_ROOM_TYPE = os.getenv("STREAM_ROOM_TYPE", "publish").strip() or "publish"
 STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip()
 STREAM_INVITE_TOKEN = os.getenv("STREAM_INVITE_TOKEN", "Token").strip() or "Token"
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
 # The app sends the native seat invitation. The bot listens for you_invited and
-# performs the same stream_accept flow automatically. Set this to 0 only when
-# the deployment has a working native self-invitation RPC.
-STREAM_MANUAL_ACCEPT_ONLY = os.getenv("STREAM_MANUAL_ACCEPT_ONLY", "1").strip() == "1"
+# performs the same room_stream/publish flow automatically. Set this to 1 only
+# when the deployment requires the official app to send the invitation.
+STREAM_MANUAL_ACCEPT_ONLY = os.getenv("STREAM_MANUAL_ACCEPT_ONLY", "0").strip() == "1"
 # The current Talkin private-chat gateway displays type=audio as a text-only
 # message.  type=file delivers the actual downloadable MP3 to the recipient.
 PRIVATE_AUDIO_TYPE = os.getenv("PRIVATE_AUDIO_TYPE", "file").strip().lower() or "file"
@@ -4657,10 +4659,6 @@ class TalkinBot:
         room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
         if room_name and room_id.isdigit():
             getattr(self, "_live_room_ids", {}).update({room_name: room_id})
-        # Field 5 of `you_invited` is an incoming invitation/session id. It is
-        # not the token used by the acceptance packet; the app uses the
-        # protocol marker `Token` in field 5 of stream_accept.
-        stream_token = STREAM_INVITE_TOKEN
         invitation_stream_id = str(event.get(9, "") or event.get("stream_id", "") or event.get("id", "") or "").strip()
         invite_id = invitation_stream_id
         if event_type in {"sent_invitation", "invitation_sent", "sent_invite", "دعوة_مرسلة", "دعوه_مرسله"}:
@@ -4673,6 +4671,15 @@ class TalkinBot:
             except Exception as exc:
                 self.log("[STREAM] sent-invitation report failed:", repr(exc))
             self.log("[STREAM] sent_invitation is not an incoming seat invitation", room_name)
+            return False
+        # The app-compatible acceptance packet is the room_stream query, not
+        # the older stream_accept query. It echoes field 5 of you_invited as
+        # query field 4 (to), and carries field 8 as query field 8 (uid).
+        stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
+        if not stream_token:
+            self._log_stream_accept_error(
+                "missing_invite_token", "you_invited has no field-5 token", room_name, room_id, invite_id
+            )
             return False
         try:
             if BOT_MASTER and _norm_user(BOT_MASTER) != _norm_user(BOT_ID):
@@ -4697,20 +4704,16 @@ class TalkinBot:
             # The gateway may repeat the same invitation while the client is
             # reconnecting or while the seat transition is being propagated.
             # Match the app's idempotent behaviour: one invitation produces
-            # one stream_accept packet and one client session.
+            # one room_stream/publish packet.
             accepted_invites = getattr(self, "_accepted_live_invites", set())
             invitation_key = (room_name, invitation_stream_id or room_id)
             if invitation_key in accepted_invites:
                 self.log("[STREAM] duplicate invitation ignored", room_name)
                 return True
-            # The app's acceptance action is stream_accept. Field 9 changes
-            # between the invitation and the acceptance packet, so it is a
-            # fresh client-side session id.
-            stream_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
-            self.log("[STREAM] accept invitation", STREAM_ACCEPT_ACTION)
+            self.log("[STREAM] publish invitation", STREAM_ROOM_ACTION, STREAM_ROOM_TYPE)
             self.send_query(encode_query(
-                STREAM_ACCEPT_ACTION, body=stream_token, room=room_id,
-                uid=room_name, password=stream_id,
+                STREAM_ROOM_ACTION, type_=STREAM_ROOM_TYPE, to=stream_token,
+                uid=room_name,
             ))
             accepted_invites.add(invitation_key)
             self._accepted_live_invites = accepted_invites
@@ -4719,15 +4722,15 @@ class TalkinBot:
                 pending_accepts = {}
                 self._pending_live_accepts = pending_accepts
             pending_accepts[room_name] = {
-                "room_id": room_id, "session_id": stream_id,
+                "room_id": room_id, "session_id": "",
                 "sent_at": time.time(),
             }
             try:
                 self.send_private_text(
                     BOT_MASTER,
-                    f"📤 أرسلت حزمة stream_accept في {room_name}\n"
-                    f"📌 room_id={room_id} | session_id={stream_id}\n"
-                    "⏳ لن يعلن البوت الصعود حتى يؤكده الخادم فعليًا.",
+                    f"📤 أرسلت حزمة {STREAM_ROOM_ACTION} type={STREAM_ROOM_TYPE} في {room_name}\n"
+                    f"📌 token field5={stream_token} | room field8={room_name}\n"
+                    "⏳ بانتظار تأكيد الخادم.",
                 )
             except Exception as exc:
                 self.log("[STREAM] acceptance report failed:", repr(exc))

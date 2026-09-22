@@ -77,7 +77,7 @@ route_obj.handle_music_command(
 assert route_obj.last_call[3]["live_stream"] is True
 assert route_obj.last_call[3]["room_output"] is False
 
-# 4) The experimental live flow emits invite -> stream_accept -> audio.
+# 4) The experimental live flow emits invite -> room_stream/publish -> audio.
 payloads = []
 stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
@@ -91,17 +91,16 @@ bot.STREAM_ACCEPT_DELAY = 0
 bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
 stream_obj._handle_stream_event({1: "you_invited", 5: "78993070543988401", 6: "room-1", 8: "main", 9: "2586245694009091"})
-assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+assert payloads[-1][1][0].decode() == bot.STREAM_ROOM_ACTION
 assert "main" not in getattr(stream_obj, "_live_ready_rooms", set())
 assert "main" in stream_obj._pending_live_accepts
 assert stream_obj._handle_stream_result_ack({"type": "accepted", "room": "main"}) is True
-assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
+assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ROOM_ACTION, bot.STREAM_AUDIO_ACTION]
 assert "main" in stream_obj._live_ready_rooms
 check_fields = payloads[-2]
-assert check_fields[5][0].decode() == bot.STREAM_INVITE_TOKEN == "Token"
-assert check_fields[6][0].decode() == "room-1"
+assert check_fields[2][0].decode() == bot.STREAM_ROOM_TYPE == "publish"
+assert check_fields[4][0].decode() == "78993070543988401"
 assert check_fields[8][0].decode() == "main"
-assert len(check_fields[9][0].decode()) == 17
 
 # Incoming invitations must still be accepted if the legacy experimental flag
 # is disabled in an old deployment.
@@ -116,8 +115,8 @@ fallback_obj._pending_live_accepts = {}
 fallback_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
 fallback_obj.send_private_text = lambda *args: None
 fallback_obj.log = lambda *args: None
-assert fallback_obj._handle_stream_event({1: "you_invited", 6: "room-fallback", 8: "fallback", 9: "invite-fallback"}) is True
-assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+assert fallback_obj._handle_stream_event({1: "you_invited", 5: "fallback-token", 6: "room-fallback", 8: "fallback", 9: "invite-fallback"}) is True
+assert payloads[-1][1][0].decode() == bot.STREAM_ROOM_ACTION
 bot.STREAM_EXPERIMENTAL_ENABLED = old_experimental
 
 # 4b) اصعد uses the real self-invitation packet, not the old generic query.
@@ -142,18 +141,18 @@ bot.STREAM_MANUAL_ACCEPT_ONLY = old_manual_mode
 
 # Older gateway builds use an equivalent invitation name and string fields.
 stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "duration": 9, "room_id": "room-2"}
-stream_obj._handle_stream_event({"type": "invited", "invite_id": "invite-2", "room_id": "room-2", "room": ""})
-assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+stream_obj._handle_stream_event({"type": "invited", "token": "token-2", "invite_id": "invite-2", "room_id": "room-2", "room": ""})
+assert payloads[-1][1][0].decode() == bot.STREAM_ROOM_ACTION
 assert stream_obj._handle_stream_result_ack({"type": "accepted", "room": "main"}) is True
-assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
+assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ROOM_ACTION, bot.STREAM_AUDIO_ACTION]
 
 # A seat invitation may omit its id; the room-based accept path must still run.
-stream_obj._handle_stream_event({1: "room_invitation", 6: "room-3", 8: "main"})
-assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+stream_obj._handle_stream_event({1: "room_invitation", 5: "token-3", 6: "room-3", 8: "main"})
+assert payloads[-1][1][0].decode() == bot.STREAM_ROOM_ACTION
 
 # A repeated invitation must not create a second client session or acceptance.
 before_duplicate = len(payloads)
-assert stream_obj._handle_stream_event({1: "room_invitation", 6: "room-3", 8: "main"}) is True
+assert stream_obj._handle_stream_event({1: "room_invitation", 5: "token-3", 6: "room-3", 8: "main"}) is True
 assert len(payloads) == before_duplicate
 
 # sent_invitation confirms only that an invitation was sent; it must not
@@ -173,7 +172,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     error_obj._stream_error_log_lock = threading.Lock()
     error_obj.log = lambda *args: None
     error_obj.send_query = lambda payload: (_ for _ in ()).throw(ConnectionError("gateway unavailable"))
-    assert error_obj._handle_stream_event({1: "you_invited", 6: "room-5", 8: "main", 9: "invite-5"}) is False
+    assert error_obj._handle_stream_event({1: "you_invited", 5: "token-5", 6: "room-5", 8: "main", 9: "invite-5"}) is False
     error_record = json.loads(error_obj._stream_error_log_file.read_text(encoding="utf-8"))
     assert error_record["stage"] == "accept_or_audio"
     assert error_record["room"] == "main"
