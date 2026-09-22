@@ -160,9 +160,10 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # older APK/server builds use different Query action strings.  The defaults
 # match the action family observed by the current bot transport.
 STREAM_EXPERIMENTAL_ENABLED = os.getenv("STREAM_EXPERIMENTAL_ENABLED", "1") == "1"
-STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "stream_invite").strip()
-STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip()
+STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "sent_invitation").strip()
+STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "check_streaming").strip()
 STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip()
+STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip()
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
 # The current Talkin private-chat gateway displays type=audio as a text-only
@@ -4570,7 +4571,9 @@ class TalkinBot:
             return False
         room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or getattr(self, "room", "") or "").strip()
         room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
-        invite_id = str(event.get(5, "") or event.get(4, "") or event.get("invite_id", "") or event.get("id", "") or "").strip()
+        stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
+        stream_id = str(event.get(9, "") or event.get("stream_id", "") or event.get("id", "") or "").strip()
+        invite_id = stream_id
         if event_type in {"sent_invitation", "invitation_sent", "sent_invite", "دعوة_مرسلة", "دعوه_مرسله"}:
             try:
                 self.send_private_text(
@@ -4598,30 +4601,22 @@ class TalkinBot:
         if not room_id:
             self.log("[STREAM] no queued track for invitation", room_name)
             return False
-        if not pending:
-            try:
-                self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
-                self._live_ready_rooms.add(room_name)
-                self.send_query(encode_query(
-                    STREAM_ACCEPT_ACTION, room=room_id, id_=invite_id, to=BOT_ID,
-                    value=STREAM_ACCEPT_STATE, state=STREAM_ACCEPT_STATE,
-                ))
-                self.log("[STREAM] accepted seat invitation; waiting for بث command", room_name)
-                return True
-            except Exception as exc:
-                self.log("[STREAM] seat invitation accept failed:", repr(exc))
-                return False
         try:
             getattr(self, "_live_ready_rooms", set()).add(room_name)
-            self.log("[STREAM] accept invitation", STREAM_ACCEPT_ACTION)
+            # Manual capture proved the accept packet is:
+            # 1=check_streaming, 5=token, 6=room_id, 8=room_name, 9=stream_id.
+            self.log("[STREAM] accept invitation", STREAM_CHECK_ACTION)
             self.send_query(encode_query(
-                STREAM_ACCEPT_ACTION, room=room_id, id_=invite_id, to=BOT_ID,
-                value=STREAM_ACCEPT_STATE, state=STREAM_ACCEPT_STATE,
+                STREAM_CHECK_ACTION, body=stream_token, room=room_id,
+                uid=room_name, password=stream_id,
             ))
+            if not pending:
+                self.log("[STREAM] accepted seat invitation; waiting for بث command", room_name)
+                return True
             time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
             self.log("[STREAM] publish queued audio", STREAM_AUDIO_ACTION, room_id)
             self.send_query(encode_query(
-                STREAM_AUDIO_ACTION, type_="audio", room=room_id, id_=invite_id,
+                STREAM_AUDIO_ACTION, type_="audio", room=room_id, id_=stream_id,
                 url=str(pending["url"]),
                 length=str(max(0, int(pending.get("duration") or 0))),
             ))
