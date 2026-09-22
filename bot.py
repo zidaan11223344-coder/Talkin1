@@ -3510,6 +3510,7 @@ class TalkinBot:
         }
         self._monitor_invited = set()
         self._pending_live_accepts = {}
+        self._live_room_ids = {}
         self.invite_pending = False
         self.invites_enabled = True
         self.invite_silent_master = False
@@ -3804,13 +3805,15 @@ class TalkinBot:
         room = str(room or "").strip()
         if not target or not room:
             return False
-        room_id = ""
+        room_id = str(getattr(self, "_live_room_ids", {}).get(room, "") or "").strip()
         try:
-            room_id = str(self.db.room_id(room) or "").strip() if getattr(self, "db", None) else ""
+            if not room_id:
+                room_id = str(self.db.room_id(room) or "").strip() if getattr(self, "db", None) else ""
         except Exception as exc:
             self.log("[STREAM] room id lookup failed:", repr(exc))
-        if not room_id:
-            room_id = room
+        if not room_id or not room_id.isdigit():
+            self.send_private_text(BOT_MASTER, f"❌ لم أرسل دعوة البث إلى @{target}: لا يوجد room_id رقمي للغرفة {room}. أرسل دعوة يدوية للبوت أولاً أو فعّل Supabase.")
+            return False
         inviter = str(BOT_ID or "").strip()
         token = str((getattr(self, "auth", {}) or {}).get("id") or "").strip()
         invitation_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
@@ -4601,6 +4604,8 @@ class TalkinBot:
             return False
         room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or getattr(self, "room", "") or "").strip()
         room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
+        if room_name and room_id.isdigit():
+            getattr(self, "_live_room_ids", {}).update({room_name: room_id})
         stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
         invitation_stream_id = str(event.get(9, "") or event.get("stream_id", "") or event.get("id", "") or "").strip()
         invite_id = invitation_stream_id
