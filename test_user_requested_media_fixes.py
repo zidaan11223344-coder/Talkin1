@@ -89,4 +89,8 @@ stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "dura
 stream_obj._handle_stream_event({"type": "invited", "invite_id": "invite-2", "room_id": "room-2", "room": ""})
 assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
 
+# A seat invitation may omit its id; the room-based accept path must still run.
+stream_obj._handle_stream_event({1: "room_invitation", 6: "room-3", 8: "main"})
+assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+
 print("user requested media fixes: PASS")

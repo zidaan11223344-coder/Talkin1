@@ -4555,11 +4555,16 @@ class TalkinBot:
         if not STREAM_EXPERIMENTAL_ENABLED or not isinstance(event, dict):
             return False
         event_type = str(event.get(1, "") or event.get("type", "") or "").strip().casefold()
-        if event_type not in {"you_invited", "invited", "stream_invite", "live_invite"}:
+        if event_type not in {"you_invited", "invited", "stream_invite", "live_invite"} and not any(token in event_type for token in ("invite", "invitation", "دعوه", "دعوة")):
             return False
-        room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or "").strip()
-        room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or "").strip()
+        room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or getattr(self, "room", "") or "").strip()
+        room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
         invite_id = str(event.get(5, "") or event.get(4, "") or event.get("invite_id", "") or event.get("id", "") or "").strip()
+        try:
+            if BOT_MASTER and _norm_user(BOT_MASTER) != _norm_user(BOT_ID):
+                self.send_private_text(BOT_MASTER, f"📡 وصل حدث دعوة بث: {event_type} | الغرفة: {room_name}")
+        except Exception as exc:
+            self.log("[STREAM] invite event report failed:", repr(exc))
         pending_tracks = getattr(self, "_pending_live_tracks", {})
         pending = pending_tracks.get(room_name)
         if not pending and room_id:
@@ -4568,7 +4573,7 @@ class TalkinBot:
             pending = pending_tracks.get(pending_key) if pending_key else None
             room_name = pending_key or room_name
         self.log("[STREAM] you_invited", room_name, "room_id=", room_id, "invite_id=", invite_id)
-        if not room_id or not invite_id:
+        if not room_id:
             self.log("[STREAM] no queued track for invitation", room_name)
             return False
         if not pending:
@@ -10626,6 +10631,10 @@ class TalkinBot:
                     if isinstance(x, dict)):
                 self.log("[STREAM]", stream_event)
                 self._handle_stream_event(stream_event)
+            top_type = str(result.get("type", "") or "").strip().casefold()
+            if "invite" in top_type or "invited" in top_type:
+                self.log("[STREAM] top-level invitation", result)
+                self._handle_stream_event(result)
             if result.get("room_admin"):
                 self.log("[ROOM_ADMIN]", result["room_admin"])
             if result.get("chat_message"):
