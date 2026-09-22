@@ -3846,6 +3846,17 @@ class TalkinBot:
     def send_query(self, payload: bytes):
         if not self.ws:
             raise RuntimeError("WebSocket is not connected")
+        # Keep a compact trace of the live protocol. This is intentionally
+        # limited to stream actions and never logs credentials or media URLs.
+        try:
+            fields = decode_message(payload)
+            action = str((fields.get(1) or [b""])[0], "utf-8", "ignore")
+            if action in {STREAM_INVITE_ACTION, STREAM_ACCEPT_ACTION, STREAM_AUDIO_ACTION}:
+                safe = {key: (str(values[0], "utf-8", "ignore")[:120] if isinstance(values[0], bytes) else str(values[0])[:120])
+                        for key, values in fields.items() if key in {1, 2, 4, 6, 8, 10, 11, 13, 18}}
+                self.log("[STREAM_OUT]", safe)
+        except Exception as exc:
+            self.log("[STREAM_OUT] decode failed:", repr(exc))
         self.ws.send_binary(payload)
 
     def _start_heartbeat(self):
