@@ -98,6 +98,22 @@ assert check_fields[6][0].decode() == "room-1"
 assert check_fields[8][0].decode() == "main"
 assert len(check_fields[9][0].decode()) == 17
 
+# 4b) اصعد uses the real self-invitation packet, not the old generic query.
+old_bot_id = bot.BOT_ID
+bot.BOT_ID = old_bot_id or "s-boot"
+join_payloads = []
+join_obj = object.__new__(bot.TalkinBot)
+join_obj._live_ready_rooms = set()
+join_obj._live_room_ids = {"main": "700978564"}
+join_obj.send_query = lambda payload: join_payloads.append(bot.decode_message(payload)) or True
+join_obj.send_private_text = lambda *args: None
+join_obj.send_room_text = lambda *args: None
+assert join_obj.request_live_room("main") is True
+assert join_payloads[-1][1][0].decode() == "sent_invitation"
+assert join_payloads[-1][5][0].decode() == bot.STREAM_INVITE_TOKEN
+assert join_payloads[-1][6][0].decode() == "700978564"
+bot.BOT_ID = old_bot_id
+
 # Older gateway builds use an equivalent invitation name and string fields.
 stream_obj._pending_live_tracks["main"] = {"url": "https://cdn/song2.mp3", "duration": 9, "room_id": "room-2"}
 stream_obj._handle_stream_event({"type": "invited", "invite_id": "invite-2", "room_id": "room-2", "room": ""})

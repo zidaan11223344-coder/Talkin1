@@ -4592,17 +4592,15 @@ class TalkinBot:
             self._live_ready_rooms.discard(room)
             self.log("[STREAM] request live seat", room, STREAM_INVITE_ACTION)
 
-            # Some Talkin builds accept a self seat request directly using the
-            # room name. Newer builds answer with a live-invite callback; the
-            # callback handler below remains enabled for those builds.
-            self.send_query(encode_query(
-                STREAM_INVITE_ACTION, room=room, to=BOT_ID,
-            ))
+            # A self-seat request must use the same real invitation packet as
+            # the manual flow: room_id, room name, Token, and invitation_id.
+            # The old generic sent_invitation(room/to) packet was ignored by
+            # the gateway and never produced a usable you_invited callback.
+            if not self.send_live_invitation_to_user(BOT_ID, room):
+                raise RuntimeError("تعذر إرسال دعوة البث الفعلية إلى البوت")
             # Do not send a guessed accept packet here. The real acceptance
             # requires token/room_id/room_name/session_id from `you_invited`.
-            # Sending the old room-name fallback made the server ignore the
-            # request while the bot falsely reported that it had joined.
-            self.send_room_text(room, "📡 تم إرسال طلب الدعوة. لن يعلن البوت الصعود حتى يصل حدث you_invited ويقبل الحزمة الصحيحة.")
+            self.send_room_text(room, "📡 أرسلت دعوة بث فعلية إلى البوت؛ بانتظار حدث you_invited ثم قبول الخادم.")
         except Exception as exc:
             self._live_ready_rooms.discard(room)
             self.log("[STREAM] manual live join failed:", repr(exc))
