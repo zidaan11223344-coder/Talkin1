@@ -167,6 +167,9 @@ STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip(
 STREAM_INVITE_TOKEN = os.getenv("STREAM_INVITE_TOKEN", "Token").strip() or "Token"
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
+# Invitations are sent manually from the Talkin app. The bot only listens for
+# you_invited and performs the same acceptance flow as the app.
+STREAM_MANUAL_ACCEPT_ONLY = os.getenv("STREAM_MANUAL_ACCEPT_ONLY", "1").strip() == "1"
 # The current Talkin private-chat gateway displays type=audio as a text-only
 # message.  type=file delivers the actual downloadable MP3 to the recipient.
 PRIVATE_AUDIO_TYPE = os.getenv("PRIVATE_AUDIO_TYPE", "file").strip().lower() or "file"
@@ -4542,7 +4545,7 @@ class TalkinBot:
         raise last_error
 
     def _play_music_in_live_room(self, room: str, media_url: str, duration: int = 0):
-        """Send a real seat invitation, then accept and publish audio live."""
+        """Queue audio and wait for a manually sent invitation."""
         if not STREAM_EXPERIMENTAL_ENABLED:
             return False
         room = str(room or "").strip()
@@ -4561,6 +4564,8 @@ class TalkinBot:
             ready_rooms = getattr(self, "_live_ready_rooms", set())
             if room in ready_rooms:
                 ready_rooms.discard(room)
+            elif STREAM_MANUAL_ACCEPT_ONLY:
+                self.log("[STREAM] manual invitation mode: waiting for you_invited", room)
             else:
                 room_id = str(getattr(self, "_live_room_ids", {}).get(room, "") or "").strip()
                 if not room_id:
@@ -4584,7 +4589,7 @@ class TalkinBot:
             return False
 
     def request_live_room(self, room: str):
-        """Join the live seat immediately, with callback support as a fallback."""
+        """Arm manual live-seat acceptance; the invitation comes from the app."""
         room = str(room or "").strip()
         if not STREAM_EXPERIMENTAL_ENABLED:
             self.send_room_text(room, "❌ البث الحي غير مفعّل في إعدادات البوت.")
@@ -4595,6 +4600,10 @@ class TalkinBot:
             self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
             self._live_ready_rooms.discard(room)
             self.log("[STREAM] request live seat", room, STREAM_INVITE_ACTION)
+
+            if STREAM_MANUAL_ACCEPT_ONLY:
+                self.send_room_text(room, "📡 وضع القبول اليدوي مفعّل. أرسل دعوة البث من تطبيق Talkin إلى البوت، وسأقبلها تلقائيًا عند وصول you_invited.")
+                return True
 
             # A self-seat request must use the same real invitation packet as
             # the manual flow: room_id, room name, Token, and invitation_id.
