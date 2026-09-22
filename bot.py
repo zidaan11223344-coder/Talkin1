@@ -3801,7 +3801,12 @@ class TalkinBot:
             self.send_live_invitation_to_user(username, room)
 
     def send_live_invitation_to_user(self, target, room):
-        """Send the captured manual live invitation packet to a target."""
+        """Send the platform-native live invitation to a target.
+
+        The `sent_invitation` frame is a server event emitted after the native
+        room invitation is created; sending that frame over WebSocket does not
+        create an invitation or the green system message in the room.
+        """
         target = str(target or "").strip().lstrip("@")
         room = str(room or "").strip()
         if not target or not room:
@@ -3815,14 +3820,15 @@ class TalkinBot:
         if not room_id or not room_id.isdigit():
             self.send_private_text(BOT_MASTER, f"❌ لم أرسل دعوة البث إلى @{target}: لا يوجد room_id رقمي للغرفة {room}. أرسل دعوة يدوية للبوت أولاً أو فعّل Supabase.")
             return False
-        inviter = str(BOT_ID or "").strip()
-        # The captured manual packet uses the literal protocol token marker
-        # in field 5. Allow a deployment-specific value without hard-coding a
-        # credential into the repository.
-        token = STREAM_INVITE_TOKEN
-        invitation_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
         try:
-            self.send_query(encode_live_invitation(inviter, target, token, room_id, room, invitation_id))
+            ok, detail = self.send_native_system_invite(target, room)
+            if not ok:
+                self.log("[STREAM] native invitation rejected:", target, room, detail)
+                self.send_private_text(
+                    BOT_MASTER,
+                    f"❌ لم تُنشأ دعوة بث فعلية إلى @{target} في {room}: {detail}",
+                )
+                return False
             self.send_private_text(BOT_MASTER, f"📨 أرسلت دعوة بث يدوية إلى @{target} في {room}\n📌 room_id={room_id}")
             return True
         except Exception as exc:
@@ -4566,12 +4572,10 @@ class TalkinBot:
                     self._pending_live_tracks.pop(room, None)
                     self.log("[STREAM] live invitation skipped: numeric room_id unavailable", room)
                     return False
-                invitation_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
-                self.log("[STREAM] send real live invitation", room, "room_id=", room_id)
-                self.send_query(encode_live_invitation(
-                    str(BOT_ID or "").strip(), str(BOT_ID or "").strip(),
-                    STREAM_INVITE_TOKEN, room_id, room, invitation_id,
-                ))
+                self.log("[STREAM] send native live invitation", room, "room_id=", room_id)
+                if not self.send_live_invitation_to_user(BOT_ID, room):
+                    self._pending_live_tracks.pop(room, None)
+                    return False
             # Never publish audio before the server sends `you_invited` and
             # the exact check_streaming acceptance has been sent.
             return True
