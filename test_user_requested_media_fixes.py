@@ -98,6 +98,23 @@ assert check_fields[6][0].decode() == "room-1"
 assert check_fields[8][0].decode() == "main"
 assert len(check_fields[9][0].decode()) == 17
 
+# Incoming invitations must still be accepted if the legacy experimental flag
+# is disabled in an old deployment.
+old_experimental = bot.STREAM_EXPERIMENTAL_ENABLED
+bot.STREAM_EXPERIMENTAL_ENABLED = False
+fallback_obj = object.__new__(bot.TalkinBot)
+fallback_obj._pending_live_tracks = {}
+fallback_obj._live_room_ids = {}
+fallback_obj._live_ready_rooms = set()
+fallback_obj._accepted_live_invites = set()
+fallback_obj._pending_live_accepts = {}
+fallback_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
+fallback_obj.send_private_text = lambda *args: None
+fallback_obj.log = lambda *args: None
+assert fallback_obj._handle_stream_event({1: "you_invited", 6: "room-fallback", 8: "fallback", 9: "invite-fallback"}) is True
+assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
+bot.STREAM_EXPERIMENTAL_ENABLED = old_experimental
+
 # 4b) اصعد uses the real self-invitation packet, not the old generic query.
 old_bot_id = bot.BOT_ID
 bot.BOT_ID = old_bot_id or "s-boot"

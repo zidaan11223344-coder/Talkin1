@@ -160,9 +160,9 @@ MASTER_SERVICE_ENABLED = os.getenv("MASTER_SERVICE_ENABLED", "0") == "1"
 # older APK/server builds use different Query action strings.  The defaults
 # match the action family observed by the current bot transport.
 STREAM_EXPERIMENTAL_ENABLED = os.getenv("STREAM_EXPERIMENTAL_ENABLED", "1") == "1"
-STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "sent_invitation").strip()
-STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip()
-STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip()
+STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "sent_invitation").strip() or "sent_invitation"
+STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "stream_accept").strip() or "stream_accept"
+STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip() or "stream_audio"
 STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip()
 STREAM_INVITE_TOKEN = os.getenv("STREAM_INVITE_TOKEN", "Token").strip() or "Token"
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
@@ -4573,8 +4573,6 @@ class TalkinBot:
 
     def _play_music_in_live_room(self, room: str, media_url: str, duration: int = 0):
         """Queue audio and wait for a manually sent invitation."""
-        if not STREAM_EXPERIMENTAL_ENABLED:
-            return False
         room = str(room or "").strip()
         if not room or not media_url:
             return False
@@ -4618,9 +4616,6 @@ class TalkinBot:
     def request_live_room(self, room: str):
         """Request a live seat using the app-compatible native invitation flow."""
         room = str(room or "").strip()
-        if not STREAM_EXPERIMENTAL_ENABLED:
-            self.send_room_text(room, "❌ البث الحي غير مفعّل في إعدادات البوت.")
-            return True
         if not room:
             return False
         try:
@@ -4653,7 +4648,7 @@ class TalkinBot:
 
     def _handle_stream_event(self, event):
         """Accept a real you_invited event, then publish the queued track."""
-        if not STREAM_EXPERIMENTAL_ENABLED or not isinstance(event, dict):
+        if not isinstance(event, dict):
             return False
         event_type = str(event.get(1, "") or event.get("type", "") or "").strip().casefold()
         if event_type not in {"you_invited", "invited", "stream_invite", "live_invite"} and not any(token in event_type for token in ("invite", "invitation", "دعوه", "دعوة")):
