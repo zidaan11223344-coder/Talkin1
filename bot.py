@@ -4496,27 +4496,8 @@ class TalkinBot:
             else:
                 self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
                 self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
-            # Older servers do not emit a you_invited callback for a self
-            # invitation. Keep the legacy room-based accept/audio fallback;
-            # newer servers will consume the callback path below instead.
-            if STREAM_AUTO_ACCEPT:
-                time.sleep(float(os.getenv("STREAM_ACCEPT_DELAY", "0.8")))
-                if room in self._pending_live_tracks:
-                    self.log("[STREAM] legacy accept self", room, STREAM_ACCEPT_ACTION)
-                    self.send_query(encode_query(
-                        STREAM_ACCEPT_ACTION, room=room, to=BOT_ID,
-                        value=BOT_ID, state=STREAM_ACCEPT_STATE,
-                    ))
-                    time.sleep(float(os.getenv("STREAM_AUDIO_DELAY", "0.8")))
-                pending = self._pending_live_tracks.get(room)
-                if pending:
-                    self.log("[STREAM] legacy publish audio", room, STREAM_AUDIO_ACTION)
-                    self.send_query(encode_query(
-                        STREAM_AUDIO_ACTION, type_="audio", room=room,
-                        url=str(pending["url"]),
-                        length=str(max(0, int(pending.get("duration") or 0))),
-                    ))
-                    self._pending_live_tracks.pop(room, None)
+            # Never publish audio before the server sends `you_invited` and
+            # the exact check_streaming acceptance has been sent.
             return True
         except Exception as exc:
             self.log("[STREAM] experimental live flow failed:", repr(exc))
@@ -4541,17 +4522,11 @@ class TalkinBot:
             self.send_query(encode_query(
                 STREAM_INVITE_ACTION, room=room, to=BOT_ID,
             ))
-            time.sleep(float(os.getenv("STREAM_ACCEPT_DELAY", "0.8")))
-
-            # Legacy/current fallback: accept the seat without waiting for a
-            # you_invited event. This is important for builds that silently
-            # accept the invite but never emit a callback to the bot.
-            self.send_query(encode_query(
-                STREAM_ACCEPT_ACTION, room=room, to=BOT_ID,
-                value=BOT_ID, state=STREAM_ACCEPT_STATE,
-            ))
-            self._live_ready_rooms.add(room)
-            self.send_room_text(room, "🎙️✅ تم طلب صعود البوت للبث الحي. يمكنك الآن استخدام: بث اسم الأغنية")
+            # Do not send a guessed accept packet here. The real acceptance
+            # requires token/room_id/room_name/session_id from `you_invited`.
+            # Sending the old room-name fallback made the server ignore the
+            # request while the bot falsely reported that it had joined.
+            self.send_room_text(room, "📡 تم إرسال طلب الدعوة. لن يعلن البوت الصعود حتى يصل حدث you_invited ويقبل الحزمة الصحيحة.")
         except Exception as exc:
             self._live_ready_rooms.discard(room)
             self.log("[STREAM] manual live join failed:", repr(exc))
@@ -4572,8 +4547,8 @@ class TalkinBot:
         room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or getattr(self, "room", "") or "").strip()
         room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
         stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
-        stream_id = str(event.get(9, "") or event.get("stream_id", "") or event.get("id", "") or "").strip()
-        invite_id = stream_id
+        invitation_stream_id = str(event.get(9, "") or event.get("stream_id", "") or event.get("id", "") or "").strip()
+        invite_id = invitation_stream_id
         if event_type in {"sent_invitation", "invitation_sent", "sent_invite", "دعوة_مرسلة", "دعوه_مرسله"}:
             try:
                 self.send_private_text(
@@ -4605,11 +4580,22 @@ class TalkinBot:
             getattr(self, "_live_ready_rooms", set()).add(room_name)
             # Manual capture proved the accept packet is:
             # 1=check_streaming, 5=token, 6=room_id, 8=room_name, 9=stream_id.
+            # The captured field 9 changes between the invitation and the
+            # acceptance packet, so it is a fresh client-side session id.
+            stream_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
             self.log("[STREAM] accept invitation", STREAM_CHECK_ACTION)
             self.send_query(encode_query(
                 STREAM_CHECK_ACTION, body=stream_token, room=room_id,
                 uid=room_name, password=stream_id,
             ))
+            try:
+                self.send_private_text(
+                    BOT_MASTER,
+                    f"✅ أرسلت قبول بث check_streaming في {room_name}\n"
+                    f"📌 room_id={room_id} | session_id={stream_id}",
+                )
+            except Exception as exc:
+                self.log("[STREAM] acceptance report failed:", repr(exc))
             if not pending:
                 self.log("[STREAM] accepted seat invitation; waiting for بث command", room_name)
                 return True
