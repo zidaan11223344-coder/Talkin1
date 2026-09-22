@@ -3843,15 +3843,6 @@ class TalkinBot:
         room = str(room or "").strip()
         if not target or not room:
             return False
-        room_id = str(getattr(self, "_live_room_ids", {}).get(room, "") or "").strip()
-        try:
-            if not room_id:
-                room_id = str(self.db.room_id(room) or "").strip() if getattr(self, "db", None) else ""
-        except Exception as exc:
-            self.log("[STREAM] room id lookup failed:", repr(exc))
-        if not room_id or not room_id.isdigit():
-            self.send_private_text(BOT_MASTER, f"❌ لم أرسل دعوة البث إلى @{target}: لا يوجد room_id رقمي للغرفة {room}. أرسل دعوة يدوية للبوت أولاً أو فعّل Supabase.")
-            return False
         try:
             ok, detail = self.send_native_system_invite(target, room)
             if not ok:
@@ -3861,7 +3852,7 @@ class TalkinBot:
                     f"❌ لم تُنشأ دعوة بث فعلية إلى @{target} في {room}: {detail}",
                 )
                 return False
-            self.send_private_text(BOT_MASTER, f"📨 أرسلت دعوة بث يدوية إلى @{target} في {room}\n📌 room_id={room_id}")
+            self.send_private_text(BOT_MASTER, f"📨 أرسلت دعوة بث إلى @{target} في {room}\n📌 action={STREAM_ROOM_ACTION} type=invite")
             return True
         except Exception as exc:
             self.log("[STREAM] manual invitation failed:", repr(exc))
@@ -4674,7 +4665,7 @@ class TalkinBot:
             return False
         # The app-compatible acceptance packet is the room_stream query, not
         # the older stream_accept query. It echoes field 5 of you_invited as
-        # query field 4 (to), and carries field 8 as query field 8 (uid).
+        # query field 4 (to), and carries field 8 as query field 6 (room).
         stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
         if not stream_token:
             self._log_stream_accept_error(
@@ -4713,7 +4704,7 @@ class TalkinBot:
             self.log("[STREAM] publish invitation", STREAM_ROOM_ACTION, STREAM_ROOM_TYPE)
             self.send_query(encode_query(
                 STREAM_ROOM_ACTION, type_=STREAM_ROOM_TYPE, to=stream_token,
-                uid=room_name,
+                room=room_name,
             ))
             accepted_invites.add(invitation_key)
             self._accepted_live_invites = accepted_invites
@@ -5276,32 +5267,29 @@ class TalkinBot:
                 self.invite_silent_master = False
 
     def send_native_system_invite(self, username: str, room: str):
-        """Send the platform's native room invitation through its Supabase RPC.
+        """Send the same live-seat invitation query as Talkinchat 5.8.3.
 
-        The supplied web/admin source calls room_invite_username with:
-            {"_room": <room UUID>, "_username": <username>}
-        This is different from chat_message: it creates the same invitation flow
-        used by the official system, subject to the bot's authenticated account
-        having permission to invite in that room.
+        The APK's ``C2523c.m3253q`` builds a Query with:
+            action=room_stream, type=invite, to=<username>, room=<room name>
+        It is not the generic ``sent_invitation`` event and does not require a
+        Supabase RPC or a numeric room id.
         """
-        if not self.db.client:
-            return False, "Supabase client غير متاح"
-        rid = self.db.room_id(room)
-        if not rid:
-            return False, "لم أجد room_id للغرفة في قاعدة البيانات"
+        username = str(username or "").strip().lstrip("@")
+        room = str(room or "").strip()
+        if not username or not room:
+            return False, "username و room مطلوبان"
         try:
-            res = self.db.client.rpc("room_invite_username", {"_room": rid, "_username": str(username).strip()}).execute()
-            err = getattr(res, "error", None)
-            data = getattr(res, "data", None)
-            if err:
-                detail = str(getattr(err, "message", err))
-                self.log("[INV] RPC error:", username, detail)
-                return False, detail
-            self.log("[INV] RPC OK:", username, "data=", repr(data)[:300])
+            self.send_query(encode_query(
+                STREAM_ROOM_ACTION,
+                type_="invite",
+                to=username,
+                room=room,
+            ))
+            self.log("[STREAM] app-compatible invitation sent:", username, room)
             return True, "ok"
         except Exception as e:
             detail = repr(e)
-            self.log("[INV] RPC exception:", username, detail)
+            self.log("[STREAM] invitation exception:", username, detail)
             return False, detail
 
     def send_private_invite(self, username: str, room: str, inviter: str = ""):

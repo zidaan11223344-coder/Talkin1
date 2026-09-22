@@ -100,7 +100,21 @@ assert "main" in stream_obj._live_ready_rooms
 check_fields = payloads[-2]
 assert check_fields[2][0].decode() == bot.STREAM_ROOM_TYPE == "publish"
 assert check_fields[4][0].decode() == "78993070543988401"
-assert check_fields[8][0].decode() == "main"
+assert check_fields[6][0].decode() == "main"
+
+# The APK sends the self-seat invitation with room_stream/invite, without a
+# numeric room id or a Supabase RPC.
+invite_payloads = []
+invite_obj = object.__new__(bot.TalkinBot)
+invite_obj.send_query = lambda payload: invite_payloads.append(bot.decode_message(payload)) or True
+invite_obj.log = lambda *args: None
+invite_obj.send_private_text = lambda *args: None
+assert invite_obj.send_native_system_invite("s-boot", "main")[0] is True
+invite_fields = invite_payloads[-1]
+assert invite_fields[1][0].decode() == bot.STREAM_ROOM_ACTION == "room_stream"
+assert invite_fields[2][0].decode() == "invite"
+assert invite_fields[4][0].decode() == "s-boot"
+assert invite_fields[6][0].decode() == "main"
 
 # Incoming invitations must still be accepted if the legacy experimental flag
 # is disabled in an old deployment.
