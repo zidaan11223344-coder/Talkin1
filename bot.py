@@ -4610,7 +4610,11 @@ class TalkinBot:
         room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
         if room_name and room_id.isdigit():
             getattr(self, "_live_room_ids", {}).update({room_name: room_id})
-        stream_token = str(event.get(5, "") or event.get("token", "") or "").strip()
+        # Field 5 of `you_invited` is an incoming invitation/session id. It
+        # is not the token used by the acceptance packet. Manual wire capture
+        # confirms that check_streaming uses the protocol marker `Token` in
+        # field 5, matching the outgoing sent_invitation packet.
+        stream_token = STREAM_INVITE_TOKEN
         invitation_stream_id = str(event.get(9, "") or event.get("stream_id", "") or event.get("id", "") or "").strip()
         invite_id = invitation_stream_id
         if event_type in {"sent_invitation", "invitation_sent", "sent_invite", "دعوة_مرسلة", "دعوه_مرسله"}:
