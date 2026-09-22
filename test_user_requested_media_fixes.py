@@ -80,12 +80,18 @@ stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
 stream_obj.log = lambda *args: None
 stream_obj._pending_live_tracks = {}
+stream_obj._live_room_ids = {"main": "700978564"}
 bot.STREAM_EXPERIMENTAL_ENABLED = True
 bot.STREAM_ACCEPT_DELAY = 0
 bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
 stream_obj._handle_stream_event({1: "you_invited", 5: "78993070543988401", 6: "room-1", 8: "main", 9: "2586245694009091"})
 assert [item[1][0].decode() for item in payloads[-3:]] == [bot.STREAM_INVITE_ACTION, bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
+invite_fields = payloads[-3]
+assert [invite_fields[k][0].decode() for k in (1, 2, 3, 5, 6, 8)] == [
+    "sent_invitation", bot.BOT_ID, bot.BOT_ID, bot.STREAM_INVITE_TOKEN, "700978564", "main"
+]
+assert len(invite_fields[9][0].decode()) == 17
 check_fields = payloads[-2]
 assert check_fields[5][0].decode() == bot.STREAM_INVITE_TOKEN == "Token"
 assert check_fields[6][0].decode() == "room-1"

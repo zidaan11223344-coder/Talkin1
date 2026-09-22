@@ -4536,7 +4536,7 @@ class TalkinBot:
         raise last_error
 
     def _play_music_in_live_room(self, room: str, media_url: str, duration: int = 0):
-        """Experimental flow: invite self, accept, then publish audio live."""
+        """Send a real seat invitation, then accept and publish audio live."""
         if not STREAM_EXPERIMENTAL_ENABLED:
             return False
         room = str(room or "").strip()
@@ -4556,8 +4556,22 @@ class TalkinBot:
             if room in ready_rooms:
                 ready_rooms.discard(room)
             else:
-                self.log("[STREAM] invite self", room, STREAM_INVITE_ACTION)
-                self.send_query(encode_query(STREAM_INVITE_ACTION, room=room, to=BOT_ID))
+                room_id = str(getattr(self, "_live_room_ids", {}).get(room, "") or "").strip()
+                if not room_id:
+                    try:
+                        room_id = str(self.db.room_id(room) or "").strip() if getattr(self, "db", None) else ""
+                    except Exception as exc:
+                        self.log("[STREAM] live room id lookup failed:", room, repr(exc))
+                if not room_id.isdigit():
+                    self._pending_live_tracks.pop(room, None)
+                    self.log("[STREAM] live invitation skipped: numeric room_id unavailable", room)
+                    return False
+                invitation_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
+                self.log("[STREAM] send real live invitation", room, "room_id=", room_id)
+                self.send_query(encode_live_invitation(
+                    str(BOT_ID or "").strip(), str(BOT_ID or "").strip(),
+                    STREAM_INVITE_TOKEN, room_id, room, invitation_id,
+                ))
             # Never publish audio before the server sends `you_invited` and
             # the exact check_streaming acceptance has been sent.
             return True
