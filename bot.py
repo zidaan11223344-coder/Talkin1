@@ -167,9 +167,10 @@ STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip(
 STREAM_INVITE_TOKEN = os.getenv("STREAM_INVITE_TOKEN", "Token").strip() or "Token"
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
-# Invitations are sent manually from the Talkin app. The bot only listens for
-# you_invited and performs the same acceptance flow as the app.
-STREAM_MANUAL_ACCEPT_ONLY = os.getenv("STREAM_MANUAL_ACCEPT_ONLY", "1").strip() == "1"
+# The bot sends the native self-invitation by default, then listens for
+# you_invited and performs the same acceptance flow as the app. Set this to 1
+# only to restore the legacy mode where the app sends the invitation manually.
+STREAM_MANUAL_ACCEPT_ONLY = os.getenv("STREAM_MANUAL_ACCEPT_ONLY", "0").strip() == "1"
 # The current Talkin private-chat gateway displays type=audio as a text-only
 # message.  type=file delivers the actual downloadable MP3 to the recipient.
 PRIVATE_AUDIO_TYPE = os.getenv("PRIVATE_AUDIO_TYPE", "file").strip().lower() or "file"
@@ -4615,7 +4616,7 @@ class TalkinBot:
             return False
 
     def request_live_room(self, room: str):
-        """Arm manual live-seat acceptance; the invitation comes from the app."""
+        """Request a live seat using the app-compatible native invitation flow."""
         room = str(room or "").strip()
         if not STREAM_EXPERIMENTAL_ENABLED:
             self.send_room_text(room, "❌ البث الحي غير مفعّل في إعدادات البوت.")

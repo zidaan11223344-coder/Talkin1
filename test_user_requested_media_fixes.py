@@ -104,12 +104,14 @@ join_payloads = []
 join_obj = object.__new__(bot.TalkinBot)
 join_obj._live_ready_rooms = set()
 join_obj._live_room_ids = {"main": "700978564"}
-join_obj.send_native_system_invite = lambda target, room: (True, "ok")
+join_obj.live_invites = []
+join_obj.send_live_invitation_to_user = lambda target, room: join_obj.live_invites.append((target, room)) or True
 join_obj.send_query = lambda payload: join_payloads.append(bot.decode_message(payload)) or True
 join_obj.send_private_text = lambda *args: None
 join_obj.send_room_text = lambda *args: None
 assert join_obj.request_live_room("main") is True
 assert not join_payloads
+assert join_obj.live_invites == [(bot.BOT_ID, "main")]
 bot.BOT_ID = old_bot_id
 
 # Older gateway builds use an equivalent invitation name and string fields.
