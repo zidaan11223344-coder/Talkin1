@@ -3491,6 +3491,7 @@ class TalkinBot:
             if _norm_user(item)
         }
         self._monitor_invited = set()
+        self._pending_live_accepts = {}
         self.invite_pending = False
         self.invites_enabled = True
         self.invite_silent_master = False
@@ -3854,7 +3855,9 @@ class TalkinBot:
             action = str((fields.get(1) or [b""])[0], "utf-8", "ignore")
             if action in {STREAM_INVITE_ACTION, STREAM_ACCEPT_ACTION, STREAM_AUDIO_ACTION}:
                 safe = {key: (str(values[0], "utf-8", "ignore")[:120] if isinstance(values[0], bytes) else str(values[0])[:120])
-                        for key, values in fields.items() if key in {1, 2, 4, 6, 8, 10, 11, 13, 18}}
+                        for key, values in fields.items() if key in {1, 2, 4, 6, 8, 9, 10, 11, 13, 18}}
+                if 5 in fields:
+                    safe[5] = f"<token:{len(fields[5][0]) if isinstance(fields[5][0], bytes) else len(str(fields[5][0]))}>"
                 self.log("[STREAM_OUT]", safe)
         except Exception as exc:
             self.log("[STREAM_OUT] decode failed:", repr(exc))
@@ -4577,7 +4580,6 @@ class TalkinBot:
             self.log("[STREAM] no queued track for invitation", room_name)
             return False
         try:
-            getattr(self, "_live_ready_rooms", set()).add(room_name)
             # Manual capture proved the accept packet is:
             # 1=check_streaming, 5=token, 6=room_id, 8=room_name, 9=stream_id.
             # The captured field 9 changes between the invitation and the
@@ -4588,11 +4590,20 @@ class TalkinBot:
                 STREAM_CHECK_ACTION, body=stream_token, room=room_id,
                 uid=room_name, password=stream_id,
             ))
+            pending_accepts = getattr(self, "_pending_live_accepts", None)
+            if not isinstance(pending_accepts, dict):
+                pending_accepts = {}
+                self._pending_live_accepts = pending_accepts
+            pending_accepts[room_name] = {
+                "room_id": room_id, "session_id": stream_id,
+                "sent_at": time.time(),
+            }
             try:
                 self.send_private_text(
                     BOT_MASTER,
-                    f"✅ أرسلت قبول بث check_streaming في {room_name}\n"
-                    f"📌 room_id={room_id} | session_id={stream_id}",
+                    f"📤 أرسلت حزمة check_streaming، بانتظار قبول الخادم في {room_name}\n"
+                    f"📌 room_id={room_id} | session_id={stream_id}\n"
+                    "⚠️ هذا إرسال للحزمة وليس تأكيد صعود نهائي.",
                 )
             except Exception as exc:
                 self.log("[STREAM] acceptance report failed:", repr(exc))
@@ -4611,6 +4622,34 @@ class TalkinBot:
         except Exception as exc:
             self.log("[STREAM] invitation accept/audio failed:", repr(exc))
             return False
+
+    def _handle_stream_result_ack(self, result):
+        """Report the server's acceptance/failure after check_streaming."""
+        if not isinstance(result, dict):
+            return False
+        kind = str(result.get("type", "") or result.get("value", "") or "").strip().casefold()
+        if not any(word in kind for word in ("stream", "live", "check", "accept", "رفض", "فشل")):
+            return False
+        pending = getattr(self, "_pending_live_accepts", {})
+        room = str(result.get("room", "") or result.get(8, "") or "").strip()
+        if not room and len(pending) == 1:
+            room = next(iter(pending))
+        if not room or room not in pending:
+            return False
+        positive = any(word in kind for word in ("started", "accepted", "accept", "streaming", "live_ok", "success", "ok", "تم"))
+        negative = any(word in kind for word in ("reject", "رفض", "failed", "فشل", "denied", "error"))
+        if positive and not negative:
+            pending.pop(room, None)
+            self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
+            self._live_ready_rooms.add(room)
+            self.send_private_text(BOT_MASTER, f"✅ أكد الخادم صعود البوت للبث في الغرفة: {room}")
+            return True
+        if negative:
+            detail = str(result.get("value", "") or result.get("type", "") or "غير معروف")[:180]
+            pending.pop(room, None)
+            self.send_private_text(BOT_MASTER, f"❌ رفض الخادم صعود البوت في {room}: {detail}")
+            return True
+        return False
 
     def _master_service_menu(self, username: str):
         """Greeting/menu shown once per private conversation with the master."""
@@ -10584,6 +10623,7 @@ class TalkinBot:
                 self.log("[WS] unexpected text frame received")
                 return
             result = decode_result_message(message)
+            self._handle_stream_result_ack(result)
             self._cache_user_photos_from_result(result)
             # Room join outcomes are emitted as top-level ResultMessage types
             # by some TalkinChat builds, not as nested RoomEvent packets.

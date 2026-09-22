@@ -73,6 +73,7 @@ assert route_obj.last_call[3]["live_stream"] is True
 assert route_obj.last_call[3]["room_output"] is False
 
 # 4) The experimental live flow emits invite -> accept -> audio in order.
+payloads = []
 stream_obj = object.__new__(bot.TalkinBot)
 stream_obj.send_query = lambda payload: payloads.append(bot.decode_message(payload)) or True
 stream_obj.log = lambda *args: None
