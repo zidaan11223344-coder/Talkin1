@@ -164,6 +164,7 @@ STREAM_INVITE_ACTION = os.getenv("STREAM_INVITE_ACTION", "sent_invitation").stri
 STREAM_ACCEPT_ACTION = os.getenv("STREAM_ACCEPT_ACTION", "check_streaming").strip()
 STREAM_AUDIO_ACTION = os.getenv("STREAM_AUDIO_ACTION", "stream_audio").strip()
 STREAM_CHECK_ACTION = os.getenv("STREAM_CHECK_ACTION", "check_streaming").strip()
+STREAM_INVITE_TOKEN = os.getenv("STREAM_INVITE_TOKEN", "Token").strip() or "Token"
 STREAM_ACCEPT_STATE = os.getenv("STREAM_ACCEPT_STATE", "accept").strip() or "accept"
 STREAM_AUTO_ACCEPT = os.getenv("STREAM_AUTO_ACCEPT", "1").strip() == "1"
 # The current Talkin private-chat gateway displays type=audio as a text-only
@@ -3815,7 +3816,10 @@ class TalkinBot:
             self.send_private_text(BOT_MASTER, f"❌ لم أرسل دعوة البث إلى @{target}: لا يوجد room_id رقمي للغرفة {room}. أرسل دعوة يدوية للبوت أولاً أو فعّل Supabase.")
             return False
         inviter = str(BOT_ID or "").strip()
-        token = str((getattr(self, "auth", {}) or {}).get("id") or "").strip()
+        # The captured manual packet uses the literal protocol token marker
+        # in field 5. Allow a deployment-specific value without hard-coding a
+        # credential into the repository.
+        token = STREAM_INVITE_TOKEN
         invitation_id = str(secrets.randbelow(90000000000000000) + 10000000000000000)
         try:
             self.send_query(encode_live_invitation(inviter, target, token, room_id, room, invitation_id))
@@ -3908,7 +3912,7 @@ class TalkinBot:
         try:
             fields = decode_message(payload)
             action = str((fields.get(1) or [b""])[0], "utf-8", "ignore")
-            if action in {STREAM_INVITE_ACTION, STREAM_ACCEPT_ACTION, STREAM_AUDIO_ACTION}:
+            if action in {STREAM_INVITE_ACTION, STREAM_ACCEPT_ACTION, STREAM_AUDIO_ACTION, "sent_invitation", "check_streaming"}:
                 safe = {key: (str(values[0], "utf-8", "ignore")[:120] if isinstance(values[0], bytes) else str(values[0])[:120])
                         for key, values in fields.items() if key in {1, 2, 4, 6, 8, 9, 10, 11, 13, 18}}
                 if 5 in fields:
