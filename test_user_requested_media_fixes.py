@@ -1,4 +1,7 @@
 import threading
+import json
+import tempfile
+from pathlib import Path
 import bot
 
 assert bot.first_http_url({99: ["not-url", {77: "https://cdn/image-hidden.jpg"}]}) == "https://cdn/image-hidden.jpg"
@@ -118,10 +121,34 @@ assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACT
 stream_obj._handle_stream_event({1: "room_invitation", 6: "room-3", 8: "main"})
 assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
 
+# A repeated invitation must not create a second client session or acceptance.
+before_duplicate = len(payloads)
+assert stream_obj._handle_stream_event({1: "room_invitation", 6: "room-3", 8: "main"}) is True
+assert len(payloads) == before_duplicate
+
 # sent_invitation confirms only that an invitation was sent; it must not
 # trigger a false stream acceptance.
 before_sent = len(payloads)
 assert stream_obj._handle_stream_event({1: "sent_invitation", 6: "room-4", 8: "main"}) is False
 assert len(payloads) == before_sent
+
+# A failed acceptance must be persisted as a safe JSONL diagnostic.
+with tempfile.TemporaryDirectory() as temp_dir:
+    error_obj = object.__new__(bot.TalkinBot)
+    error_obj._pending_live_tracks = {
+        "main": {"url": "https://cdn/song3.mp3", "duration": 7, "room_id": "room-5"}
+    }
+    error_obj._live_room_ids = {"main": "700978564"}
+    error_obj._stream_error_log_file = Path(temp_dir) / "stream-errors.log"
+    error_obj._stream_error_log_lock = threading.Lock()
+    error_obj.log = lambda *args: None
+    error_obj.send_query = lambda payload: (_ for _ in ()).throw(ConnectionError("gateway unavailable"))
+    assert error_obj._handle_stream_event({1: "you_invited", 6: "room-5", 8: "main", 9: "invite-5"}) is False
+    error_record = json.loads(error_obj._stream_error_log_file.read_text(encoding="utf-8"))
+    assert error_record["stage"] == "accept_or_audio"
+    assert error_record["room"] == "main"
+    assert error_record["room_id"] == "room-5"
+    assert error_record["invite_id"] == "invite-5"
+    assert "gateway unavailable" in error_record["error"]
 
 print("user requested media fixes: PASS")

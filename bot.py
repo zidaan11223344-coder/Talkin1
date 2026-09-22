@@ -3514,6 +3514,10 @@ class TalkinBot:
         }
         self._monitor_invited = set()
         self._pending_live_accepts = {}
+        self._stream_error_log_lock = threading.Lock()
+        self._stream_error_log_file = Path(
+            os.getenv("STREAM_ERROR_LOG_FILE", str(DATA_DIR / "stream_accept_errors.log"))
+        ).expanduser()
         self._live_room_ids = {}
         self.invite_pending = False
         self.invites_enabled = True
@@ -3724,6 +3728,28 @@ class TalkinBot:
     def log(self, *args):
         if DEBUG:
             print(*args, flush=True)
+
+    def _log_stream_accept_error(self, stage, error, room="", room_id="", invite_id=""):
+        """Persist a safe diagnostic when accepting a live-seat invitation fails."""
+        record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "stage": str(stage or "accept"),
+            "room": str(room or "")[:120],
+            "room_id": str(room_id or "")[:120],
+            "invite_id": str(invite_id or "")[:120],
+            "error": " ".join(str(error or "خطأ غير معروف").split())[:500],
+        }
+        self.log("[STREAM_ACCEPT_ERROR]", record)
+        try:
+            path = Path(getattr(self, "_stream_error_log_file", DATA_DIR / "stream_accept_errors.log"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lock = getattr(self, "_stream_error_log_lock", threading.Lock())
+            with lock:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as log_error:
+            # Never hide the original stream failure because diagnostics failed.
+            self.log("[STREAM_ACCEPT_ERROR] log write failed:", repr(log_error))
 
     def report_master_error(self, context: str, error, room: str = ""):
         """Send the real diagnostic privately without exceeding Talkin's limit."""
@@ -4667,9 +4693,21 @@ class TalkinBot:
             room_name = pending_key or room_name
         self.log("[STREAM] you_invited", room_name, "room_id=", room_id, "invite_id=", invite_id)
         if not room_id:
+            self._log_stream_accept_error(
+                "missing_room_id", "دعوة البث لا تحتوي على room_id", room_name, room_id, invite_id
+            )
             self.log("[STREAM] no queued track for invitation", room_name)
             return False
         try:
+            # The gateway may repeat the same invitation while the client is
+            # reconnecting or while the seat transition is being propagated.
+            # Match the app's idempotent behaviour: one invitation produces
+            # one check_streaming packet and one client session.
+            accepted_invites = getattr(self, "_accepted_live_invites", set())
+            invitation_key = (room_name, invitation_stream_id or room_id)
+            if invitation_key in accepted_invites:
+                self.log("[STREAM] duplicate invitation ignored", room_name)
+                return True
             # Manual capture proved the accept packet is:
             # 1=check_streaming, 5=token, 6=room_id, 8=room_name, 9=stream_id.
             # The captured field 9 changes between the invitation and the
@@ -4680,6 +4718,8 @@ class TalkinBot:
                 STREAM_CHECK_ACTION, body=stream_token, room=room_id,
                 uid=room_name, password=stream_id,
             ))
+            accepted_invites.add(invitation_key)
+            self._accepted_live_invites = accepted_invites
             pending_accepts = getattr(self, "_pending_live_accepts", None)
             if not isinstance(pending_accepts, dict):
                 pending_accepts = {}
@@ -4710,6 +4750,9 @@ class TalkinBot:
             self._pending_live_tracks.pop(room_name, None)
             return True
         except Exception as exc:
+            self._log_stream_accept_error(
+                "accept_or_audio", exc, room_name, room_id, invite_id
+            )
             self.log("[STREAM] invitation accept/audio failed:", repr(exc))
             return False
 
