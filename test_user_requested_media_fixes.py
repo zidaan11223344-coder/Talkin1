@@ -93,4 +93,10 @@ assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACT
 stream_obj._handle_stream_event({1: "room_invitation", 6: "room-3", 8: "main"})
 assert payloads[-1][1][0].decode() == bot.STREAM_ACCEPT_ACTION
 
+# sent_invitation confirms only that an invitation was sent; it must not
+# trigger a false stream acceptance.
+before_sent = len(payloads)
+assert stream_obj._handle_stream_event({1: "sent_invitation", 6: "room-4", 8: "main"}) is False
+assert len(payloads) == before_sent
+
 print("user requested media fixes: PASS")

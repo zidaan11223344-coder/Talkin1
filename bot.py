@@ -4571,6 +4571,17 @@ class TalkinBot:
         room_name = str(event.get(8, "") or event.get(2, "") or event.get("room", "") or getattr(self, "room", "") or "").strip()
         room_id = str(event.get(6, "") or event.get(3, "") or event.get("room_id", "") or room_name).strip()
         invite_id = str(event.get(5, "") or event.get(4, "") or event.get("invite_id", "") or event.get("id", "") or "").strip()
+        if event_type in {"sent_invitation", "invitation_sent", "sent_invite", "دعوة_مرسلة", "دعوه_مرسله"}:
+            try:
+                self.send_private_text(
+                    BOT_MASTER,
+                    f"📨 تم إرسال دعوة بث فقط في الغرفة: {room_name}\n"
+                    "⚠️ هذا ليس حدث دعوة واردة للبوت؛ لم يتم قبول البث بعد.",
+                )
+            except Exception as exc:
+                self.log("[STREAM] sent-invitation report failed:", repr(exc))
+            self.log("[STREAM] sent_invitation is not an incoming seat invitation", room_name)
+            return False
         try:
             if BOT_MASTER and _norm_user(BOT_MASTER) != _norm_user(BOT_ID):
                 self.send_private_text(BOT_MASTER, f"📡 وصل حدث دعوة بث: {event_type} | الغرفة: {room_name}")
