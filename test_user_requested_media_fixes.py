@@ -91,6 +91,7 @@ bot.STREAM_AUDIO_DELAY = 0
 stream_obj._play_music_in_live_room("main", "https://cdn/song.mp3", 12)
 stream_obj._handle_stream_event({1: "you_invited", 5: "78993070543988401", 6: "room-1", 8: "main", 9: "2586245694009091"})
 assert [item[1][0].decode() for item in payloads[-2:]] == [bot.STREAM_ACCEPT_ACTION, bot.STREAM_AUDIO_ACTION]
+assert "main" in stream_obj._live_ready_rooms
 check_fields = payloads[-2]
 assert check_fields[5][0].decode() == bot.STREAM_INVITE_TOKEN == "Token"
 assert check_fields[6][0].decode() == "room-1"

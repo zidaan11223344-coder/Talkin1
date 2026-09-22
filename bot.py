@@ -4727,12 +4727,17 @@ class TalkinBot:
                 "room_id": room_id, "session_id": stream_id,
                 "sent_at": time.time(),
             }
+            # The app treats the local stream_accept dispatch as the seat
+            # acceptance path. Do not block the next بث command on a separate
+            # result/ack frame from the gateway.
+            self._live_ready_rooms = getattr(self, "_live_ready_rooms", set())
+            self._live_ready_rooms.add(room_name)
             try:
                 self.send_private_text(
                     BOT_MASTER,
-                    f"📤 أرسلت حزمة stream_accept، بانتظار قبول الخادم في {room_name}\n"
+                    f"✅ تم قبول دعوة البث وإرسال stream_accept في {room_name}\n"
                     f"📌 room_id={room_id} | session_id={stream_id}\n"
-                    "⚠️ هذا إرسال للحزمة وليس تأكيد صعود نهائي.",
+                    "🎙️ البوت جاهز للبث بدون انتظار رد تأكيد من الخادم.",
                 )
             except Exception as exc:
                 self.log("[STREAM] acceptance report failed:", repr(exc))
