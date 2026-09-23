@@ -1548,6 +1548,13 @@ def _request_github_full_backup(bot, sender):
     """Queue a full backup and remember who should receive its result."""
     queued = _queue_github_full_backup()
     if queued:
+        # Environment variables go to Telegram only, never to Talkin4.
+        threading.Thread(
+            target=bot._send_variables_to_telegram,
+            args=(str(sender or "").strip(),),
+            daemon=True,
+            name="telegram-variables-backup",
+        ).start()
         with _GITHUB_PENDING_CONDITION:
             _GITHUB_BACKUP_REQUESTS.append((bot, str(sender or "").strip()))
             _GITHUB_PENDING_CONDITION.notify()
@@ -4110,7 +4117,7 @@ class TalkinBot:
             return False
 
     def _send_variables_to_telegram(self, requester=""):
-        """Send a Railway variable inventory with secret values masked."""
+        """Send the exact current Railway environment as a private file."""
         if not TELEGRAM_BOT_TOKEN:
             if requester:
                 self.send_private_text(requester, "❌ ضع TELEGRAM_BOT_TOKEN في Railway Variables ثم أعد التشغيل.")
@@ -4120,25 +4127,21 @@ class TalkinBot:
             if requester:
                 self.send_private_text(requester, "📨 أرسل رسالة إلى بوت Telegram أولاً ثم أعد أمر نسخ المتغيرات.")
             return False
-        secret_markers = ("TOKEN", "PASSWORD", "PWD", "SECRET", "API_KEY", "PRIVATE", "COOKIE", "AUTH", "DATABASE_URL")
-        lines = ["# Talkin/Railway variables (secret values masked)", f"# generated_at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"]
+        lines = ["# Talkin/Railway variables", "# Keep this file private.", f"# generated_at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"]
         for key in sorted(os.environ):
-            value = os.environ.get(key, "")
-            if any(marker in key.upper() for marker in secret_markers):
-                value = "***MASKED***" if value else ""
-            lines.append(f"{key}={value}")
-        path = DATA_DIR / "railway_variables_safe.txt"
+            lines.append(f"{key}={os.environ.get(key, '')}")
+        path = DATA_DIR / "railway_variables.env"
         try:
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             with path.open("rb") as fh:
                 response = requests.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
-                    data={"chat_id": chat_id, "caption": "📦 متغيرات Railway الآمنة (القيم السرية مخفية)"},
+                    data={"chat_id": chat_id, "caption": "📦 ملف متغيرات Railway الأصلي — حافظ عليه سريًا"},
                     files={"document": (path.name, fh, "text/plain")}, timeout=60,
                 )
             ok = bool(response.json().get("ok"))
             if requester:
-                self.send_private_text(requester, "✅ تم إرسال ملف المتغيرات الآمن إلى Telegram." if ok else "❌ تعذر إرسال ملف المتغيرات إلى Telegram.")
+                self.send_private_text(requester, "✅ تم إرسال ملف المتغيرات الأصلي إلى Telegram." if ok else "❌ تعذر إرسال ملف المتغيرات إلى Telegram.")
             return ok
         except Exception as exc:
             self.log("[TELEGRAM] variables upload failed:", repr(exc))
