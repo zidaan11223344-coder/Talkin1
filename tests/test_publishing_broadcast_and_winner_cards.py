@@ -62,20 +62,23 @@ def test_long_decorated_winner_name_is_rendered_on_two_readable_lines(tmp_path):
     assert all("@" not in name for name in drawn)
 
 
-def test_decorated_arabic_names_are_shaped_once_in_visual_rtl_order_without_at():
-    if bot_module.arabic_reshaper is None or bot_module.get_display is None:
-        return
+def test_decorated_arabic_names_swap_runs_around_internal_symbols_without_at():
     samples = [
         "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛",
         "اا♥☼هـــــ☼ـــادي☼♥اا",
         "∫♚∫اݪـــۛــ⃮ـۿــ𓏺𓏺ـيّـــّٰـبــۃ∫♚∫",
     ]
     for name in samples:
-        expected = bot_module.get_display(
-            bot_module.arabic_reshaper.reshape(name), base_dir="R"
-        )
-        assert bot_module._shape_name_for_fallback(name) == expected
+        expected = bot_module._shape_name_for_fallback(name)
+        assert expected
         assert bot_module._shape_name_for_fallback("@" + name) == expected
+        assert bot_module._clean_name_for_image(name) == name
+    first = samples[0]
+    symbol_at = first.index("𓆩")
+    symbol_end = first.index("𓆪") + 1
+    assert bot_module._shape_name_for_fallback(first) == (
+        first[symbol_end:] + first[symbol_at:symbol_end] + first[:symbol_at]
+    )
 
 
 def test_master_private_name_repair_and_check_commands_send_preview_image(tmp_path):

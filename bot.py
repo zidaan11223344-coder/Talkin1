@@ -5221,14 +5221,27 @@ def _shape_name_for_fallback(text):
         for ch in raw
     )
     if has_decoration:
-        # Mixed names need bidi once, after Arabic shaping, just like a normal
-        # RTL chat renderer. Never use the embedded approximator here: it
-        # reverses neutral ornaments and is the source of the flipped names.
-        if arabic_reshaper is not None and get_display is not None:
-            try:
-                return get_display(arabic_reshaper.reshape(raw), base_dir="R")
-            except Exception:
-                pass
+        # Talkin renders an ornamented username as two visual runs around the
+        # ornament: the run after the symbol is placed before it, and the run
+        # before it is placed after it. Apply this rule only to names that
+        # really contain an internal ornament; ordinary Arabic stays on the
+        # normal bidi path below.
+        def is_ornament(ch):
+            return (
+                unicodedata.category(ch) in {"So", "Sk", "Sm"}
+                or 0x13000 <= ord(ch) <= 0x1342F
+                or 0x1D100 <= ord(ch) <= 0x1D1FF
+            )
+        internal = next(
+            (index for index, ch in enumerate(raw)
+             if is_ornament(ch) and index > 0 and index < len(raw) - 1),
+            None,
+        )
+        if internal is not None:
+            end = internal + 1
+            while end < len(raw) and is_ornament(raw[end]):
+                end += 1
+            return raw[end:] + raw[internal:end] + raw[:internal]
         return raw
     if arabic_reshaper is not None and get_display is not None:
         try:
