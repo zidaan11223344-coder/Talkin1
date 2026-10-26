@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import queue
 import subprocess
 import tempfile
 import sys
@@ -5392,38 +5393,23 @@ class MessageBackgroundDeliveryRegressions(unittest.TestCase):
         bot._room_list_commands = lambda *_args: False
         bot._active_rooms = lambda: ["Room A", "Room B"]
         bot._broadcast_room_message_worker = lambda *_args: self.fail("worker ran synchronously")
+        bot._room_broadcast_queue = queue.Queue(maxsize=2)
         sent = []
         bot.send_private_text = lambda user, text: sent.append((user, text)) or True
         bot.log = lambda *_args: None
-        threads = []
-
-        class DeferredThread:
-            def __init__(self, target=None, args=(), **kwargs):
-                self.target, self.args, self.kwargs = target, args, kwargs
-                self.started = False
-                threads.append(self)
-
-            def start(self):
-                self.started = True
-
-        with patch.object(bot_module, "_is_primary_master", return_value=True), patch.object(
-            bot_module.threading, "Thread", DeferredThread
-        ):
+        with patch.object(bot_module, "_is_primary_master", return_value=True):
             handled = bot._handle_management_command_impl(
                 "", "رساله غرفه@تنبيه", "Master", is_private=True
             )
         self.assertTrue(handled)
-        self.assertEqual(len(threads), 1)
-        self.assertTrue(threads[0].started)
+        self.assertEqual(bot._room_broadcast_queue.get_nowait(), ("Master", "تنبيه"))
         self.assertIn("الخلفية", sent[-1][1])
-        with patch.object(bot_module, "_is_primary_master", return_value=True), patch.object(
-            bot_module.threading, "Thread", DeferredThread
-        ):
+        with patch.object(bot_module, "_is_primary_master", return_value=True):
             handled = bot._handle_management_command_impl(
                 "", "room message@Hello all", "Master", is_private=True
             )
         self.assertTrue(handled)
-        self.assertEqual(len(threads), 2)
+        self.assertEqual(bot._room_broadcast_queue.get_nowait(), ("Master", "Hello all"))
         self.assertIn("Background broadcast started", sent[-1][1])
 
     def test_room_broadcast_worker_reports_per_room_send_results(self):

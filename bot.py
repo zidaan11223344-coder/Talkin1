@@ -3077,6 +3077,8 @@ def _looks_like_bot_command(text):
         "سجل التحويل", "سجل تحويلاتي", "سجل المليار", "سجل مليار", "سجل المليون", "سجل مليون",
         "transfer history", "transfer log", "billion record", "billion history", "million record", "million history",
         "top b", "topb", "top m", "topm",
+        "room message@",
+        "فحص صورة المليون", "فحص صوره المليون", "فحص_صورة_المليون",
     )
     normalized_low = low.replace("ة", "ه")
     normalized_prefixes = tuple(str(x).casefold().replace("ة", "ه") for x in prefixes)
@@ -3170,6 +3172,7 @@ def _looks_like_admin_command(text):
         "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "protection", "enable protection", "disable protection", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "بوست", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "l@a", "l@m", "l@o", "l@b", "is@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "دخول الكل", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "s@", "توثيق الكل", "وثق الكل", "verify", "سجل الغرفه", "سجل الغرفة",
     )
+    prefixes = prefixes + ("room message@",)
     return low.startswith(prefixes)
 
 def _verified_data():
@@ -4732,12 +4735,19 @@ def _record_publish_ban(username, room, word=""):
     return True
 
 def _remove_publish_ban(username):
-    data=_publish_bans_data(); rows=data.get("users",[])
-    if not isinstance(rows,list): rows=[]
-    key=_norm_user(username)
-    data["users"]=[row for row in rows if _norm_user(row.get("username") if isinstance(row,dict) else row)!=key]
-    _save_local_json(PUBLISH_BANS_FILE,data)
-    return True
+    data = _publish_bans_data()
+    rows = data.get("users", [])
+    if not isinstance(rows, list):
+        rows = []
+    key = _norm_user(username)
+    kept = [
+        row for row in rows
+        if _norm_user(row.get("username") if isinstance(row, dict) else row) != key
+    ]
+    removed = len(rows) - len(kept)
+    data["users"] = kept
+    _save_local_json(PUBLISH_BANS_FILE, data)
+    return removed
 
 def _publish_ban_rows():
     data=_publish_bans_data(); rows=data.get("users",[])
@@ -4991,7 +5001,7 @@ def _default_help_sections():
             '📋 أوامر الإدارة — 3 | التوثيق وVIP\n━━━━━━━━━━━━\nvi@اسم — توثيق مستخدم\nuns@اسم — سحب التوثيق\nسحب التوثيق@اسم — سحب التوثيق\nإزالة توثيق@اسم — سحب التوثيق\nتوثيق الكل — توثيق كل الأعضاء\nvi — عدد الموثقين\nvip@اسم — منح VIP\nunvip@اسم — سحب VIP\nvip — عدد أعضاء VIP\nmvip@اسم — إضافة ماستر توثيق\numvip@اسم — سحب ماستر توثيق\nl@mvip — عرض ماسترات التوثيق',
             '📋 أوامر الإدارة — 4 | التوثيق والحماية\n━━━━━━━━━━━━\nتشغيل التوثيق — تشغيل نظام التوثيق\nإيقاف التوثيق — إيقاف نظام التوثيق\nحماية@اسم_الغرفة — قائمة الحماية الخاصة بالماستر\nتشغيل/إيقاف الحماية — إعداد عام للغرفة\nحالة الحماية — عرض الحالة\nحمايه البوت — حماية داخلية للبوت\nالمحظورين — المحظورون داخل البوت',
             '📋 أوامر الإدارة — 5 | الفلتر والنشر\n━━━━━━━━━━━━\nmf@on — تشغيل فلتر الكلمات\nmf@off — إيقاف فلتر الكلمات\n+mf@كلمة — إضافة كلمة للفلتر\n-mf@كلمة — حذف كلمة من الفلتر\nl@mf — عرض كلمات الفلتر\nclear@mf — مسح كلمات الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmbp@اسم — فك منع النشر\namf@اسم — استثناء مستخدم من حظر الفلتر',
-            '📋 أوامر الإدارة — 6 | أوامر متقدمة\n━━━━━━━━━━━━\nحالة البوت — حالة الاتصال\nرام / cpu — الموارد\nتنظيف — حذف الملفات المؤقتة\nنسخ احتياطي — إنشاء نسخة\nإعادة تشغيل البوت — إعادة تشغيل الخدمة\nتشغيل/إيقاف الدعوات\nتشغيل/إيقاف الألعاب\nغرفي / myrooms — الغرف المتصلة\nدخول الكل / دخولكل / .دخول غرفي — دخول الغرف المحفوظة\nاضف لملف الغرف — حفظ الغرف\ninv / دعوات / invite — جلب أعضاء الغرفة\ns@اسم / is@اسم — البحث عن مستخدم\nl@a / l@m / l@o / l@b — قوائم الرتب',
+            '📋 أوامر الإدارة — 6 | أوامر متقدمة\n━━━━━━━━━━━━\nحالة البوت — حالة الاتصال\nرام / cpu — الموارد\nتنظيف — حذف الملفات المؤقتة\nنسخ احتياطي — إنشاء نسخة\nإعادة تشغيل البوت — إعادة تشغيل الخدمة\nتشغيل/إيقاف الدعوات\nتشغيل/إيقاف الألعاب\nفحص صورة المليون / فحص صورة المليار — معاينة باسم BOT_MASTER داخل الغرفة\nغرفي / myrooms — الغرف المتصلة\nدخول الكل / دخولكل / .دخول غرفي — دخول الغرف المحفوظة\nاضف لملف الغرف — حفظ الغرف\ninv / دعوات / invite — جلب أعضاء الغرفة\ns@اسم / is@اسم — البحث عن مستخدم\nl@a / l@m / l@o / l@b — قوائم الرتب',
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
@@ -5846,7 +5856,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     w, h = image.size
     gold = (244, 196, 92, 255)
     panel = (3, 28, 31, 235)
-    panel_box = (int(w * .07), int(h * .785), int(w * .93), int(h * .94))
+    panel_box = (int(w * .07), int(h * .745), int(w * .93), int(h * .965))
     draw.rounded_rectangle(
         panel_box, radius=max(20, int(w * .025)), fill=panel,
         outline=gold, width=max(3, int(w * .004)),
@@ -5871,12 +5881,29 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     title = ("Million winner" if game_key == "million" else "Billion winner") if english else (
         "الفائز بالمليون" if game_key == "million" else "الفائز بالمليار"
     )
-    text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .34)
+    text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .22)
     _draw_centered(draw, text_center, "🏆 " + title, max(28, int(h * .038)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
-    name_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .70)
-    _draw_name_centered(draw, name_center, "@" + str(winner_name or ""), max(34, int(h * .044)),
-                        (255, 255, 255, 255), max(80, text_right - text_left))
+    raw_name = str(winner_name or "").strip().lstrip("@")
+    clusters = []
+    for char in raw_name:
+        is_mark = unicodedata.category(char).startswith("M") or char in {"\u200d", "\ufe0e", "\ufe0f"}
+        if clusters and (is_mark or clusters[-1].endswith("\u200d")):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    if len(clusters) > 24:
+        split_at = len(clusters) // 2
+        name_lines = ["@" + "".join(clusters[:split_at]), "".join(clusters[split_at:])]
+        line_ys = (.59, .82)
+    else:
+        name_lines = ["@" + raw_name]
+        line_ys = (.68,)
+    for line, y_ratio in zip(name_lines, line_ys):
+        name_center = ((text_left + text_right) / 2,
+                       panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
+        _draw_name_centered(draw, name_center, line, max(32, int(h * .042)),
+                            (255, 255, 255, 255), max(80, text_right - text_left))
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
@@ -6737,6 +6764,7 @@ def _cleanup_runtime_files(bot=None):
                 BASE_DIR / "generated_billion",
                 BASE_DIR / "generated_games",
                 BASE_DIR / "generated_publish",
+                BASE_DIR / "generated_welcomes",
                 BASE_DIR / "generated_lookalikes",
             )
             for generated_dir in generated_dirs:
@@ -6865,6 +6893,8 @@ class _MediaHandler(SimpleHTTPRequestHandler):
             rel=path[len("/billion/"):].lstrip("/"); root=(BASE_DIR/"generated_billion").resolve(); target=(BASE_DIR/"generated_billion"/rel).resolve()
         elif path.startswith("/games/"):
             rel=path[len("/games/"):].lstrip("/"); root=(BASE_DIR/"generated_games").resolve(); target=(BASE_DIR/"generated_games"/rel).resolve()
+        elif path.startswith("/welcomes/"):
+            rel=path[len("/welcomes/"):].lstrip("/"); root=(BASE_DIR/"generated_welcomes").resolve(); target=(BASE_DIR/"generated_welcomes"/rel).resolve()
         elif path.startswith("/publish/"):
             rel=path[len("/publish/"):].lstrip("/"); root=(BASE_DIR/"generated_publish").resolve(); target=(BASE_DIR/"generated_publish"/rel).resolve()
         elif path.startswith("/media/"):
@@ -6928,7 +6958,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
 def start_asset_server():
     if not ASSET_HTTP_ENABLED: return None
     try:
-        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); (DATA_DIR/"cricket_media").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
+        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_welcomes").mkdir(parents=True,exist_ok=True); (DATA_DIR/"cricket_media").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
         if DEBUG and not QUIET_MODE:
@@ -6953,6 +6983,12 @@ class TalkinBot:
             target=self._event_worker_loop, name="ws-event-worker", daemon=True
         )
         self._event_worker.start()
+        self._room_broadcast_queue = queue.Queue(maxsize=20)
+        self._room_broadcast_worker = threading.Thread(
+            target=self._room_broadcast_worker_loop,
+            name="room-broadcast-worker", daemon=True,
+        )
+        self._room_broadcast_worker.start()
         self._silent_master_local = threading.local()
         self._master_reply_local = threading.local()
         self.http = requests.Session()
@@ -8813,20 +8849,65 @@ class TalkinBot:
         )
         return sorted(rooms)
 
+    def _room_broadcast_worker_loop(self):
+        """Deliver admin broadcasts off the realtime event/command worker."""
+        work_queue = self._room_broadcast_queue
+        while True:
+            requester, text = work_queue.get()
+            try:
+                self._broadcast_room_message_worker(requester, text)
+            except Exception as exc:
+                self.log("[BROADCAST] background delivery failed:", repr(exc))
+                if requester:
+                    try:
+                        self.send_private_text(requester, "❌ تعذر إكمال بث الرسالة؛ راجع سجل البوت.")
+                    except Exception:
+                        pass
+            finally:
+                work_queue.task_done()
+
+    def _queue_room_broadcast(self, text: str, requester: str):
+        work_queue = getattr(self, "_room_broadcast_queue", None)
+        if work_queue is None:
+            # Supports test-created/legacy instances while keeping one bounded
+            # worker rather than creating a thread for each broadcast command.
+            work_queue = self._room_broadcast_queue = queue.Queue(maxsize=20)
+            self._room_broadcast_worker = threading.Thread(
+                target=self._room_broadcast_worker_loop,
+                name="room-broadcast-worker", daemon=True,
+            )
+            self._room_broadcast_worker.start()
+        try:
+            work_queue.put_nowait((str(requester or "").strip(), str(text or "")))
+            return True
+        except queue.Full:
+            return False
+
     def broadcast_all_rooms(self, text: str):
         """Send a room-wide announcement serially without disturbing joins."""
+        return self._broadcast_room_message_worker("", text)
+
+    def _broadcast_room_message_worker(self, requester: str, text: str):
+        """Send an admin notice in the background and report per-room outcomes."""
+        rooms = self._active_rooms()
         sent = 0
-        rooms=self._active_rooms()
         delay=max(0.25, float(os.getenv("ROOM_BULK_DELAY_SECONDS", "1.5") or 1.5))
         with self._room_bulk_lock:
             for index, target_room in enumerate(rooms):
                 try:
-                    self.send_room_text(target_room, text)
-                    sent += 1
+                    if self.send_room_text(target_room, text) is not False:
+                        sent += 1
                 except Exception as exc:
                     self.log("[BROADCAST] failed", target_room, repr(exc))
                 if index+1 < len(rooms):
                     time.sleep(delay)
+        if requester:
+            failed = len(rooms) - sent
+            if failed:
+                result = f"⚠️ وصلت إلى {sent} غرفة، وفشل {failed} من {len(rooms)} غرفة."
+            else:
+                result = f"✅ اكتمل البث في الخلفية ووصلت الرسالة إلى {sent} غرفة."
+            self.send_private_text(requester, result)
         return sent
 
     def broadcast_game_rooms(self, text: str, first_room: str = ""):
@@ -18850,41 +18931,39 @@ class TalkinBot:
         # for commands that contain user arguments.
         game_low = low.replace("ة", "ه")
 
-        # Master-only diagnostic: send the current billion-game image privately
-        # to the master, without publishing it in the room.
-        if low in ("فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار"):
-            if not _is_master_name(sender_name):
-                self.send_room_text(room, "🔒 هذا الأمر مخصص للماستر فقط.")
+        # Primary-master diagnostics render the real winner template with the
+        # configured master name and post it in the room where the command ran.
+        image_check = {
+            "فحص صورة المليون": "million", "فحص صوره المليون": "million",
+            "فحص_صورة_المليون": "million",
+            "فحص صورة المليار": "billion", "فحص صوره المليار": "billion",
+            "فحص_صورة_المليار": "billion",
+        }.get(low)
+        if image_check:
+            if not _is_primary_master(sender_name):
+                self.send_room_text(room, "🔒 فحص صور الجوائز مخصص للماستر الموجود في متغير BOT_MASTER.")
                 return True
-            recipient = sender_name if sender_name else BOT_MASTER
-            if not recipient:
-                self.log("[GAME] billion image check skipped: master recipient is not configured")
-                return True
-            image = ASSETS_DIR / GAME_IMAGE_FILES.get("billion", "game_billion.jpg")
-            if not image.is_file():
-                self.send_private_text(recipient, "❌ صورة المليار غير موجودة في مجلد assets.")
+            if not room:
+                self.send_private_text(sender_name, "⚠️ أرسل أمر الفحص داخل الغرفة التي تريد عرض الصورة فيها.")
                 return True
             base = _public_base_url()
             if not base:
-                self.send_private_text(recipient, "❌ لا يوجد رابط عام لصورة المليار. تأكد من PUBLIC_BASE_URL أو Railway Domain.")
+                self.send_private_text(sender_name, "❌ لا يوجد رابط عام للوسائط؛ تحقق من PUBLIC_BASE_URL أو Railway Domain.")
                 return True
             try:
-                # Create a fresh JPEG copy for every inspection. This avoids
-                # client/CDN caching of the original assets URL and sends the
-                # actual billion template through the same media route used by
-                # the bot's private gift images.
                 if not PIL_AVAILABLE:
                     raise RuntimeError("Pillow غير مثبت")
-                check_dir = BASE_DIR / "generated_billion"
-                check_dir.mkdir(parents=True, exist_ok=True)
-                check_path = check_dir / f"billion_check_{uuid.uuid4().hex}.jpg"
-                Image.open(image).convert("RGB").save(check_path, "JPEG", quality=94, optimize=True)
-                url = f"{base}/billion/{check_path.name}"
+                winner_name = str(BOT_MASTER or sender_name).strip().lstrip("@")
+                card = render_money_game_winner_card(image_check, winner_name)
+                url = f"{base}/games/{card.name}"
                 self._verify_public_media_url(url, "image")
-                self.send_private_media(recipient, url, "image")
-                self.send_private_text(recipient, "✅ تم إرسال صورة المليار بالقالب في الخاص.")
+                label = "المليون" if image_check == "million" else "المليار"
+                self.send_room_text(room, f"🧪 اختبار صورة {label} — اسم الماستر: @{winner_name}")
+                if self.send_room_media(room, url, "image") is False:
+                    raise RuntimeError("تعذر إرسال الصورة إلى الغرفة")
+                self.send_private_text(sender_name, f"✅ أُرسلت صورة فحص {label} إلى الغرفة {room} باسم @{winner_name}.")
             except Exception as exc:
-                self.send_private_text(recipient, f"❌ تعذر إرسال صورة المليار: {exc}")
+                self.send_private_text(sender_name, f"❌ تعذر إنشاء/إرسال صورة الفحص: {exc}")
             return True
 
         # All games are available to verified accounts (including VIP).
@@ -19439,6 +19518,7 @@ class TalkinBot:
             return True
 
         is_publish = _is_publish_command(body)
+        is_publish_unban = bool(re.fullmatch(r"mbp@.+", str(body or "").strip(), re.I))
         repeat_last_command = str(body or "").strip().casefold() == ".u"
         security_command = bool(
             re.match(r"^(?:تشغيل|إيقاف) الحماية$", str(body or "").strip(), re.I)
@@ -19566,6 +19646,7 @@ class TalkinBot:
                 and not (is_publish and _is_verified_user(sender))
                 and not (points_transfer_command and _is_verified_user(sender))
                 and not (member_shop_command and _is_verified_user(sender))
+                and not is_publish_unban
                 and not join_command
                 and not join_all_command
                 and not repeat_last_command
@@ -20784,7 +20865,7 @@ class TalkinBot:
             return True
 
         # Master-only room broadcast: رسالهغرف@النص / رسالةغرف@النص.
-        m_room_broadcast = re.fullmatch(r"(?:رسالهغرف|رسالةغرف|رساله\s+غرفه|رسالة\s+غرفه)@(.+)", text, re.I | re.S)
+        m_room_broadcast = re.fullmatch(r"(?:رسالهغرف|رسالةغرف|رساله\s+غرفه|رسالة\s+غرفه|room\s+message)@(.+)", text, re.I | re.S)
         if m_room_broadcast:
             if not _is_primary_master(sender):
                 self.send_private_text(sender, "🔒 هذا الأمر مخصص للماستر الأساسي فقط.")
@@ -20793,8 +20874,15 @@ class TalkinBot:
             if not message_text:
                 self.send_private_text(sender, "❌ الصيغة: رساله غرفه@نص الرسالة")
                 return True
-            count=self.broadcast_all_rooms(message_text)
-            self.send_private_text(sender, f"📣 تم إرسال الرسالة إلى {count} غرفة.")
+            english = text.casefold().startswith("room message@")
+            if self._queue_room_broadcast(message_text, sender):
+                ack = ("📨 Background broadcast started in the background queue; a delivery report will follow."
+                       if english else "📨 وُضعت الرسالة في طابور الخلفية؛ سيصلك تقرير بعد الإرسال إلى الغرف.")
+                self.send_private_text(sender, ack)
+            else:
+                busy = ("⏳ The room broadcast queue is full; please retry shortly."
+                        if english else "⏳ طابور بث الغرف ممتلئ حاليًا؛ أعد الأمر بعد قليل.")
+                self.send_private_text(sender, busy)
             return True
 
         # Ordinary-user private message: رساله@اسم_المستخدم نص الرسالة
@@ -22502,7 +22590,7 @@ class TalkinBot:
                 if not isinstance(getattr(self, "custom_welcome_image_pending", None), dict):
                     self.custom_welcome_image_pending = {}
                 self.custom_welcome_image_pending[_norm_user(sender)] = {"username": sender, "created_at": time.time()}
-                extra = "\n🖼️ أرسل صورة الترحيب الآن (خلال دقيقتين)."
+                extra = "\n🖼️ أرسل صورة الترحيب الآن (خلال دقيقتين)؛ سيُكتب اسمك عليها عند الترحيب بك."
             else:
                 extra = "\n⏱️ تنتهي الحماية بعد ساعة."
             self.send_private_text(sender, f"✅ تم شراء {item['icon']} {item['name']} مقابل {item['cost']:,} نقطة.{extra}")
@@ -22539,7 +22627,7 @@ class TalkinBot:
             if not isinstance(getattr(self, "custom_welcome_image_pending", None), dict):
                 self.custom_welcome_image_pending = {}
             self.custom_welcome_image_pending[_norm_user(sender)] = {"username": sender, "created_at": time.time()}
-            self.send_private_text(sender, "🖼️ أرسل صورة الترحيب الآن في الخاص أو أي غرفة خلال دقيقتين.")
+            self.send_private_text(sender, "🖼️ أرسل صورة الترحيب الآن في الخاص أو أي غرفة خلال دقيقتين؛ سيُكتب اسمك عليها عند الترحيب بك.")
             return True
 
         # Custom welcome: swc+@اسم@الترحيب and on/off.
@@ -22577,14 +22665,20 @@ class TalkinBot:
         m_unpublish_ban=re.fullmatch(r"mbp@(.+)",text.strip(),re.I)
         if m_unpublish_ban:
             if not _is_master_name(sender):
+                if is_private:
+                    self.send_private_text(sender, "🔒 فك منع النشر متاح للماستر فقط. أرسل الأمر من حساب الماستر المسجل.")
                 return True
             target=m_unpublish_ban.group(1).strip().lstrip("@")
             if not target:
                 self.send_private_text(sender,"❌ الصيغة: mbp@اسم المستخدم")
                 return True
-            was=_is_publish_banned(target)
-            _remove_publish_ban(target)
-            self.send_private_text(sender, f"✅ تم فك منع النشر عن {target}." if was else "ℹ️ المستخدم غير موجود في قائمة منع النشر.")
+            removed = _remove_publish_ban(target)
+            if _is_publish_banned(target):
+                self.send_private_text(sender, f"❌ تعذر فك منع النشر عن {target}; بقي الحظر فعالًا. تحقق من صلاحية الكتابة على ملف بيانات البوت.")
+            elif removed:
+                self.send_private_text(sender, f"✅ تم فك منع النشر عن {target} وإزالة {removed} سجل(ات).")
+            else:
+                self.send_private_text(sender, f"ℹ️ {target} غير موجود في قائمة منع النشر.")
             return True
 
         # Publishing: master or verified user says نشر / انشر (optionally @description), then sends an image.
@@ -22972,11 +23066,70 @@ class TalkinBot:
         image_url = str(custom_welcome.get("image_url") or "").strip()
         if not image_url.startswith(("http://", "https://")):
             return False
+        threading.Thread(
+            target=self._render_and_send_personal_welcome_image,
+            args=(str(room or ""), str(username or ""), image_url),
+            daemon=True,
+            name="personal-welcome-image",
+        ).start()
+        return True
+
+    def _render_and_send_personal_welcome_image(self, room, username, image_url):
+        """Download the user's chosen art, stamp their exact username, and send it."""
         try:
-            return self.send_room_media(room, image_url, "image") is not False
+            if not PIL_AVAILABLE:
+                raise RuntimeError("Pillow غير مثبت")
+            response = requests.get(image_url, timeout=(5, 15), stream=True)
+            response.raise_for_status()
+            chunks, size = [], 0
+            for chunk in response.iter_content(64 * 1024):
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > 8 * 1024 * 1024:
+                    raise ValueError("صورة الترحيب أكبر من 8 MB")
+                chunks.append(chunk)
+            if not chunks:
+                raise ValueError("ملف صورة الترحيب فارغ")
+            raw = b"".join(chunks)
+            with Image.open(io.BytesIO(raw)) as probe:
+                width, height = probe.size
+                if width < 1 or height < 1 or width * height > 24_000_000:
+                    raise ValueError("أبعاد صورة الترحيب غير مناسبة")
+                image = probe.convert("RGBA")
+            target_w = min(1200, image.width)
+            if image.width > target_w:
+                target_h = max(1, round(image.height * target_w / image.width))
+                image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            w, h = image.size
+            banner_h = max(112, int(h * 0.20))
+            banner_y = h - banner_h
+            overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay)
+            draw.rectangle((0, banner_y, w, h), fill=(4, 20, 30, 225))
+            draw.line((int(w * .06), banner_y + 2, int(w * .94), banner_y + 2),
+                      fill=(244, 196, 92, 255), width=max(2, int(w * .004)))
+            _draw_centered(
+                draw, (w / 2, banner_y + banner_h * .34), "أهلاً وسهلاً",
+                max(20, int(banner_h * .23)), (255, 224, 145, 255), int(w * .88),
+            )
+            _draw_name_centered(
+                draw, (w / 2, banner_y + banner_h * .70), "@" + str(username or "").lstrip("@"),
+                max(22, int(banner_h * .29)), (255, 255, 255, 255), int(w * .88),
+            )
+            image = Image.alpha_composite(image, overlay).convert("RGB")
+            out_dir = BASE_DIR / "generated_welcomes"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out = out_dir / f"welcome_{uuid.uuid4().hex}.jpg"
+            image.save(out, "JPEG", quality=88, optimize=True)
+            base = _public_base_url()
+            if not base:
+                raise RuntimeError("رابط الوسائط العامة غير مضبوط")
+            url = f"{base}/welcomes/{out.name}"
+            self._verify_public_media_url(url, "image")
+            self.send_room_media(room, url, "image")
         except Exception as exc:
-            self.log("[WELCOME] custom image send failed:", username, repr(exc))
-            return False
+            self.log("[WELCOME] personalized image send failed:", username, repr(exc))
 
     def _try_custom_gift_media(self, room, media_url, candidates=()):
         media_url = str(media_url or "").strip()

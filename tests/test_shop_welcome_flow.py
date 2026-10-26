@@ -1,4 +1,7 @@
+import io
 import threading
+from pathlib import Path
+from unittest.mock import patch
 
 import bot as bot_module
 import shop
@@ -45,6 +48,38 @@ def test_member_can_buy_and_activate_text_and_image_welcome(tmp_path, monkeypatc
     sent_images = []
     bot.send_room_media = lambda room, url, media_type: sent_images.append((room, url, media_type)) or True
     saved_welcome = bot.custom_welcomes[bot_module._norm_user("Player")]
-    assert bot._send_saved_custom_welcome_image("Hall", "Player", saved_welcome, fresh_join=True) is True
     assert bot._send_saved_custom_welcome_image("Hall", "Player", saved_welcome, fresh_join=False) is False
-    assert sent_images == [("Hall", image_url, "image")]
+
+    image_buffer = io.BytesIO()
+    bot_module.Image.new("RGB", (320, 180), "navy").save(image_buffer, format="PNG")
+    payload = image_buffer.getvalue()
+    drawn_names = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, _size):
+            yield payload
+
+    class InlineThread:
+        def __init__(self, target, args, **_kwargs):
+            self.target, self.args = target, args
+
+        def start(self):
+            self.target(*self.args)
+
+    with patch.object(bot_module.threading, "Thread", InlineThread), patch.object(
+        bot_module.requests, "get", return_value=Response()
+    ), patch.object(bot_module, "BASE_DIR", Path(tmp_path)), patch.object(
+        bot_module, "_public_base_url", return_value="https://bot.example"
+    ), patch.object(bot, "_verify_public_media_url", return_value=True), patch.object(
+        bot_module, "_draw_centered", lambda *_args, **_kwargs: None
+    ), patch.object(
+        bot_module, "_draw_name_centered", lambda _draw, _center, name, *_args, **_kwargs: drawn_names.append(name)
+    ):
+        assert bot._send_saved_custom_welcome_image("Hall", "Player", saved_welcome, fresh_join=True) is True
+
+    assert len(sent_images) == 1 and sent_images[0][0] == "Hall" and sent_images[0][2] == "image"
+    assert sent_images[0][1].startswith("https://bot.example/welcomes/welcome_")
+    assert "@Player" in drawn_names
