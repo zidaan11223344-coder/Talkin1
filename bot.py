@@ -5209,14 +5209,29 @@ def _shape_name(text):
 
 def _shape_name_for_fallback(text):
     """Shape Arabic and resolve mixed-direction runs for manual font fallback.
-
     This path is used only when no single font has every decoration/glyph.
-    The returned string is already in visual order, so its runs must be drawn
-    left-to-right and must not be manually reversed a second time.
+    Plain Arabic names are returned in visual order. For decorated names we
+    intentionally preserve the user's token order: applying bidi to the whole
+    string moves the final ornament to the beginning and makes names such as
+    ``ۦاݪ...𓆩♛𓆪...𝃛`` appear backwards in the image.
     """
     raw = _clean_name_for_image(text)
     if not raw or not _has_arabic(raw):
         return raw
+    has_decoration = any(
+        unicodedata.category(ch) in {"So", "Sk", "Sm"}
+        or 0x13000 <= ord(ch) <= 0x1342F  # Egyptian hieroglyphs
+        or 0x1D100 <= ord(ch) <= 0x1D1FF  # musical symbols
+        for ch in raw
+    )
+    if has_decoration:
+        # Shape Arabic letters but do not reorder the complete mixed string.
+        # The renderer draws this result left-to-right with the exact symbol
+        # sequence supplied by the user.
+        try:
+            return _embedded_reshape(raw)
+        except Exception:
+            return raw
     if arabic_reshaper is not None and get_display is not None:
         try:
             return get_display(arabic_reshaper.reshape(raw), base_dir="R")
