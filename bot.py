@@ -5210,10 +5210,9 @@ def _shape_name(text):
 def _shape_name_for_fallback(text):
     """Shape Arabic and resolve mixed-direction runs for manual font fallback.
     This path is used only when no single font has every decoration/glyph.
-    Plain Arabic names are returned in visual order. For decorated names we
-    intentionally preserve the user's token order: applying bidi to the whole
-    string moves the final ornament to the beginning and makes names such as
-    ``ۦاݪ...𓆩♛𓆪...𝃛`` appear backwards in the image.
+    Plain and decorated names are returned in the same visual order used by
+    the room client. The original logical name is never modified in storage or
+    in chat messages; this function only prepares a temporary drawing string.
     """
     raw = _clean_name_for_image(text)
     if not raw or not _has_arabic(raw):
@@ -5225,19 +5224,15 @@ def _shape_name_for_fallback(text):
         for ch in raw
     )
     if has_decoration:
-        # Decorated names are entered in the chat's logical order, while the
-        # image renderer lays mixed runs out from left to right. Move the run
-        # before the first ornament to the end, so the text after the ornament
-        # becomes the first run and the ornament remains attached to the name.
-        # Do not reshape or replace any code point while doing so.
-        decoration_at = next(
-            (index for index, ch in enumerate(raw)
-             if unicodedata.category(ch) in {"So", "Sk", "Sm"}
-             or 0x13000 <= ord(ch) <= 0x1342F
-             or 0x1D100 <= ord(ch) <= 0x1D1FF),
-            None,
-        )
-        return raw if decoration_at in (None, 0) else raw[decoration_at:] + raw[:decoration_at]
+        # Mixed names need bidi once, after Arabic shaping, just like a normal
+        # RTL chat renderer. Never use the embedded approximator here: it
+        # reverses neutral ornaments and is the source of the flipped names.
+        if arabic_reshaper is not None and get_display is not None:
+            try:
+                return get_display(arabic_reshaper.reshape(raw), base_dir="R")
+            except Exception:
+                pass
+        return raw
     if arabic_reshaper is not None and get_display is not None:
         try:
             return get_display(arabic_reshaper.reshape(raw), base_dir="R")
@@ -5253,6 +5248,11 @@ def _clean_name_for_image(text):
     """Remove a mention prefix and invisible bidi overrides from image text."""
     raw = str(text or "").lstrip("@")
     return "".join(ch for ch in raw if ch not in _NAME_BIDI_CONTROLS)
+
+def _name_for_chat_text(text):
+    """Isolate a decorated username inside mixed Arabic chat sentences."""
+    raw = str(text or "")
+    return f"\u2068{raw}\u2069" if raw else raw
 
 def _image_name_key(text):
     value = _clean_name_for_image(text).strip()
@@ -23173,7 +23173,7 @@ class TalkinBot:
         caption=_message_template(
             "publish", "broadcast",
             "🖼️ منشور صورة\n👤 {publisher}\n📝 {description}\n━━━━━━━━━━━━━\n👍 lk@{like}\n❤️ lv@{love}\n👎 dl@{dislike}\n💬 cm@{comment} msg\n🚨 report@{report} msg",
-            publisher=sender, description=desc or "بدون وصف",
+            publisher=_name_for_chat_text(sender), description=desc or "بدون وصف",
             source_label=source_room, code=base_code,
             like=reaction_codes["like"], love=reaction_codes["love"], dislike=reaction_codes["dislike"],
             comment=reaction_codes["comment"], report=reaction_codes["report"], room=source_room
@@ -23320,7 +23320,7 @@ class TalkinBot:
         caption=_message_template(
             "publish", "broadcast",
             "🖼️ منشور صورة\n👤 {publisher}\n📝 {description}\n━━━━━━━━━━━━━\n👍 lk@{like}\n❤️ lv@{love}\n👎 dl@{dislike}\n💬 cm@{comment} msg\n🚨 report@{report} msg",
-            publisher=sender, description=desc or "بدون وصف",
+            publisher=_name_for_chat_text(sender), description=desc or "بدون وصف",
             source_label=source_room, code=base_code,
             like=reaction_codes["like"], love=reaction_codes["love"], dislike=reaction_codes["dislike"],
             comment=reaction_codes["comment"], report=reaction_codes["report"], room=source_room
