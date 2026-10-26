@@ -6,6 +6,20 @@ from unittest.mock import patch
 import bot as bot_module
 
 
+def test_unconfirmed_bot_user_left_keeps_room_presence_and_does_not_rejoin():
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.connected_rooms = {"BlueBird"}
+    bot._intentional_leaves = set()
+    logs = []
+    bot.log = lambda *args: logs.append(args)
+
+    with patch.object(bot_module, "BOT_ID", "test-bot"):
+        bot._handle_unconfirmed_bot_user_left("BlueBird")
+
+    assert bot.connected_rooms == {"BlueBird"}
+    assert any("USER_LEFT_IGNORED" in str(part) for row in logs for part in row)
+
+
 def test_la_room_roster_requests_live_occupants_and_replies_in_public_or_private():
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot.ws = object()

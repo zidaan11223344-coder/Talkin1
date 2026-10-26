@@ -1153,7 +1153,7 @@ class CricketIntegrationRegressions(unittest.TestCase):
             integration.handle("North", "N1", "1")
 
             started = [(room, text) for room, text in room_messages if "بدأت مباراة الكريكيت" in text]
-            self.assertEqual({room for room, _ in started}, {"North", "South", "Lobby"})
+            self.assertEqual({room for room, _ in started}, {"North", "South"})
             for _, text in started:
                 self.assertIn("North (2 لاعبين): @N1، @N2", text)
                 self.assertIn("South (2 لاعبين): @S1، @S2", text)
@@ -1203,6 +1203,8 @@ class CricketIntegrationRegressions(unittest.TestCase):
             for _ in range(9):
                 play_delivery(6, 1)
             self.assertIsNone(integration.game.current())
+            results = [(room, text) for room, text in room_messages if "انتهت مباراة الكركيت" in text]
+            self.assertEqual({room for room, _ in results}, {"North", "South"})
             # The batter remains at the crease until OUT, even for all 12
             # team balls; the defender changes after six consecutive balls.
             self.assertEqual(batting_counts[(1, "N1")], 12)

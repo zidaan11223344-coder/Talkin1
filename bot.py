@@ -7931,15 +7931,29 @@ class TalkinBot:
     def authenticate(self):
         body = encode_auth_request(BOT_ID, BOT_PWD)
         url = API_BASE_URL + "auth_new"
-        self.log("[AUTH] POST", url)
-        r = self.http.post(
-            url,
-            data=body,
-            headers={"Content-Type": "application/octet-stream", "User-Agent": "Talkinchat/1.0 (Android 12; net.chatp)"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        self.auth = decode_auth_result(r.content)
+        transient_auth_messages = {
+            "unknown error occurred. try again!",
+            "unknown error occurred. try again",
+        }
+        for attempt in range(3):
+            self.log("[AUTH] POST", url, "attempt=", attempt + 1)
+            r = self.http.post(
+                url,
+                data=body,
+                headers={"Content-Type": "application/octet-stream", "User-Agent": "Talkinchat/1.0 (Android 12; net.chatp)"},
+                timeout=15,
+            )
+            r.raise_for_status()
+            self.auth = decode_auth_result(r.content)
+            message = str(self.auth.get("message") or "").strip()
+            if (self.auth.get("result", "").lower() not in ("ok", "success", "true", "1")
+                    and message.casefold() in transient_auth_messages
+                    and attempt < 2):
+                delay = 1.0 + attempt * 2.0
+                self.log("[AUTH] temporary generic rejection; retrying in", delay, "seconds")
+                time.sleep(delay)
+                continue
+            break
         self.log("[AUTH] result=", self.auth["result"], "user_id=", self.auth["user_id"], "server=", self.auth["server"])
         if self.auth["message"]:
             self.log("[AUTH] message=", self.auth["message"])
@@ -8190,6 +8204,22 @@ class TalkinBot:
                 f"❌ لم يتم دخول البوت إلى الغرفة: {room}. "
                 "انتهت مهلة التأكيد ولم يظهر اتصال البوت بها؛ تحقق من صلاحياته ثم أعد المحاولة.",
             )
+
+    def _handle_unconfirmed_bot_user_left(self, room):
+        """Do not treat an ambiguous user_left as a kick or room disconnect."""
+        room_key = _norm_room(room)
+        pending_leaves = getattr(self, "_pending_room_leaves", {})
+        for pending_room, leave_ack in tuple(pending_leaves.items()):
+            if _norm_room(pending_room).casefold() == room_key.casefold():
+                pending_leaves.pop(pending_room, None)
+                leave_ack.set()
+                break
+        if room_key in getattr(self, "_intentional_leaves", set()):
+            self.log(f"[USER_LEFT_DETECTED] Bot left {room} intentionally; skipping auto-rejoin.")
+        else:
+            # Only the explicit role_changed:kicked event is authoritative
+            # enough to clear room presence and trigger automatic re-entry.
+            self.log(f"[USER_LEFT_IGNORED] No confirmed kick for {room}; waiting for role_changed:kicked.")
 
     def _send_master_room_departure_notice(self, room, event_type, reason="", actor=""):
         """Rate-limit private notices for unexpected room departures."""
@@ -23411,34 +23441,14 @@ class TalkinBot:
                 getattr(self, "_room_entry_users", {}).pop(entry_room, None)
 
         elif event_type == "user_left" and username:
-            self.room_users.get(room, {}).pop(username, None)
-            departed = getattr(self, "_last_departed_user_by_room", None)
-            if departed is None:
-                departed = self._last_departed_user_by_room = {}
-            departed[_norm_room(room)] = username
             if _norm_user(username) == _norm_user(BOT_ID):
-                self.connected_rooms = {
-                    connected for connected in self.connected_rooms
-                    if _norm_room(connected) != _norm_room(room)
-                }
-                pending_leaves = getattr(self, "_pending_room_leaves", {})
-                for pending_room, leave_ack in tuple(pending_leaves.items()):
-                    if _norm_room(pending_room).casefold() == _norm_room(room).casefold():
-                        pending_leaves.pop(pending_room, None)
-                        leave_ack.set()
-                        break
-                if getattr(self, "_intentional_leaves", None) and _norm_room(room) in self._intentional_leaves:
-                    self.log(f"[USER_LEFT_DETECTED] Bot left {room} intentionally; skipping auto-rejoin.")
-                else:
-                    # A user_left event can be echoed during a reconnect or after
-                    # a bot-issued leave. Only an explicit kick event below may
-                    # schedule the automatic leave/wait/rejoin cycle.
-                    self.log(f"[USER_LEFT_DETECTED] Bot left {room} without a confirmed kick; no auto-rejoin.")
-                    self._send_master_room_departure_notice(
-                        room, event_type,
-                        str(event.get("reason", "") or event.get("message", "") or ""),
-                        str(event.get(22, "") or event.get("actor", "") or ""),
-                    )
+                self._handle_unconfirmed_bot_user_left(room)
+            else:
+                self.room_users.get(room, {}).pop(username, None)
+                departed = getattr(self, "_last_departed_user_by_room", None)
+                if departed is None:
+                    departed = self._last_departed_user_by_room = {}
+                departed[_norm_room(room)] = username
             if _norm_user(username) == _norm_user(BOT_MASTER):
                 self._master_online_rooms.discard(_norm_room(room))
                 self.master_online = bool(self._master_online_rooms)

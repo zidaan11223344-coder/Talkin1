@@ -747,7 +747,10 @@ class CricketGame:
             + self._team_summary(match, "defense") + "\n"
             + f"🎯 يبدأ الهجوم: {self._team_label(match['batting_team'])}. لكل لاعب 6 كرات في كل دور."
         )
-        self._emit(data, participants, start_text, broadcast=True)
+        # The live-start notice contains team rosters and belongs only in the
+        # participating rooms. The earlier lobby/Join notice is the one global
+        # announcement used to find an opposing room.
+        self._emit(data, participants, start_text)
         self._emit_room_messages(data, self._turn_messages(match))
 
     def _team_player_count(self, match: dict[str, Any], team: str) -> int:
