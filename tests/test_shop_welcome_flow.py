@@ -82,4 +82,5 @@ def test_member_can_buy_and_activate_text_and_image_welcome(tmp_path, monkeypatc
 
     assert len(sent_images) == 1 and sent_images[0][0] == "Hall" and sent_images[0][2] == "image"
     assert sent_images[0][1].startswith("https://bot.example/welcomes/welcome_")
-    assert "@Player" in drawn_names
+    assert "Player" in drawn_names
+    assert all("@" not in name for name in drawn_names)

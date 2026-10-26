@@ -56,6 +56,7 @@ from treasure_mining import DIAMOND_KEYS, ITEMS as MINING_ITEMS, MiningStore, fo
 # ignored so required secrets must come from Railway Variables, while an
 # explicitly injected Railway value always wins over the repository defaults.
 _ENV_BASE_DIR = Path(__file__).resolve().parent
+_EXTERNAL_ENV_KEYS = frozenset(os.environ)
 for _key, _value in dotenv_values(_ENV_BASE_DIR / ".env.example").items():
     if _key and _value not in (None, "") and _key not in os.environ:
         os.environ[_key] = _value
@@ -820,9 +821,11 @@ def _select_persistent_data_dir():
 
 DATA_DIR = _select_persistent_data_dir()
 
-# Telegram diagnostics: only the bot token is required. The first incoming
-# Telegram message is used to learn and persist the chat_id automatically.
+# Telegram diagnostics may learn a general notice destination; secret export
+# uses a separate fixed private-chat ID and a master-entered password.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_SECRET_CHAT_ID = os.getenv("TELEGRAM_SECRET_CHAT_ID", "").strip()
+TELEGRAM_SECRET_AUTH_FILE = DATA_DIR / "telegram_secret_export_auth.auth"
 TELEGRAM_LOG_COMMANDS = {
     x.strip().casefold() for x in os.getenv(
         "TELEGRAM_LOG_COMMANDS",
@@ -835,6 +838,10 @@ TELEGRAM_VARIABLE_COMMANDS = {
         "نسخ المتغيرات,نسخه المتغيرات,متغيرات,variables,send variables",
     ).split(",") if x.strip()
 }
+TELEGRAM_VARIABLE_COMMANDS.update({
+    "ارسل المتغيرات السرية", "أرسل المتغيرات السرية",
+    "ارسل المتغيرات السريه", "أرسل المتغيرات السريه",
+})
 TELEGRAM_POLL_SECONDS = max(1.0, float(os.getenv("TELEGRAM_POLL_SECONDS", "2")))
 TELEGRAM_POLL_ENABLED = os.getenv("TELEGRAM_POLL_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 TELEGRAM_LOG_FILE = Path(os.getenv("TELEGRAM_LOG_FILE", str(DATA_DIR / "bot_runtime.log"))).expanduser()
@@ -894,6 +901,7 @@ SNAKE_FILE = DATA_DIR / "snake_games.json"
 LUDO_FILE = DATA_DIR / "ludo_games.json"
 # Dedicated persistent file for accounts allowed to manage VIP verification.
 MVIP_MASTERS_FILE = DATA_DIR / "mvip_masters.json"
+NAME_IMAGE_CORRECTIONS_FILE = DATA_DIR / "name_image_corrections.json"
 
 # Known legacy state files used by older releases. This migration runs once and
 # NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
@@ -3079,6 +3087,7 @@ def _looks_like_bot_command(text):
         "top b", "topb", "top m", "topm",
         "room message@",
         "فحص صورة المليون", "فحص صوره المليون", "فحص_صورة_المليون",
+        "فحص اسم", "اصلاح اسم", "إصلاح اسم",
     )
     normalized_low = low.replace("ة", "ه")
     normalized_prefixes = tuple(str(x).casefold().replace("ة", "ه") for x in prefixes)
@@ -3172,7 +3181,7 @@ def _looks_like_admin_command(text):
         "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "protection", "enable protection", "disable protection", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "بوست", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "l@a", "l@m", "l@o", "l@b", "is@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "دخول الكل", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "s@", "توثيق الكل", "وثق الكل", "verify", "سجل الغرفه", "سجل الغرفة",
     )
-    prefixes = prefixes + ("room message@",)
+    prefixes = prefixes + ("room message@", "فحص اسم", "اصلاح اسم", "إصلاح اسم")
     return low.startswith(prefixes)
 
 def _verified_data():
@@ -5197,6 +5206,111 @@ def _shape_name(text):
             pass
     return raw
 
+def _shape_name_for_fallback(text):
+    """Shape Arabic and resolve mixed-direction runs for manual font fallback.
+
+    This path is used only when no single font has every decoration/glyph.
+    The returned string is already in visual order, so its runs must be drawn
+    left-to-right and must not be manually reversed a second time.
+    """
+    raw = _clean_name_for_image(text)
+    if not raw or not _has_arabic(raw):
+        return raw
+    if arabic_reshaper is not None and get_display is not None:
+        try:
+            return get_display(arabic_reshaper.reshape(raw), base_dir="R")
+        except Exception:
+            pass
+    return _embedded_bidi(raw)
+
+_NAME_BIDI_CONTROLS = frozenset(
+    "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+)
+
+def _clean_name_for_image(text):
+    """Remove a mention prefix and invisible bidi overrides from image text."""
+    raw = str(text or "").lstrip("@")
+    return "".join(ch for ch in raw if ch not in _NAME_BIDI_CONTROLS)
+
+def _image_name_key(text):
+    value = _clean_name_for_image(text).strip()
+    return unicodedata.normalize("NFC", value).casefold()
+
+def _display_name_for_image(text):
+    """Return the master-approved image spelling for this exact username."""
+    source = _clean_name_for_image(text)
+    key = _image_name_key(source)
+    if not key:
+        return source
+    records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
+    record = records.get(key) if isinstance(records, dict) else None
+    corrected = record.get("display_name") if isinstance(record, dict) else record
+    return _clean_name_for_image(corrected) if isinstance(corrected, str) and corrected else source
+
+def _save_image_name_correction(source_name, display_name):
+    source = _clean_name_for_image(source_name).strip()
+    display = _clean_name_for_image(display_name).strip()
+    key = _image_name_key(source)
+    if not key or not display:
+        raise ValueError("اسم المصدر أو الاسم المصحح فارغ")
+    records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
+    if not isinstance(records, dict):
+        records = {}
+    records[key] = {
+        "source_name": source,
+        "display_name": display,
+        "updated_at": time.time(),
+    }
+    _save_local_json(NAME_IMAGE_CORRECTIONS_FILE, records)
+    return display
+
+_SECRET_EXPORT_PASSWORD_ITERATIONS = 390000
+_SECRET_EXPORT_PASSWORD_LOCK = threading.RLock()
+
+def _set_secret_export_password(password):
+    password = str(password or "")
+    if not 8 <= len(password) <= 256:
+        raise ValueError("يجب أن تتكون كلمة المرور من 8 إلى 256 حرفًا")
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _SECRET_EXPORT_PASSWORD_ITERATIONS
+    )
+    path = Path(TELEGRAM_SECRET_AUTH_FILE)
+    payload = json.dumps({
+        "scheme": "pbkdf2_sha256",
+        "iterations": _SECRET_EXPORT_PASSWORD_ITERATIONS,
+        "salt": salt.hex(),
+        "digest": digest.hex(),
+    }, separators=(",", ":"))
+    with _SECRET_EXPORT_PASSWORD_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(payload, encoding="utf-8")
+            temporary.chmod(0o600)
+            temporary.replace(path)
+            path.chmod(0o600)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+def _verify_secret_export_password(password):
+    with _SECRET_EXPORT_PASSWORD_LOCK:
+        record = _load_local_json(TELEGRAM_SECRET_AUTH_FILE, None)
+    if not isinstance(record, dict) or record.get("scheme") != "pbkdf2_sha256":
+        return False
+    try:
+        iterations = int(record.get("iterations", 0))
+        salt = bytes.fromhex(str(record.get("salt", "")))
+        expected = str(record.get("digest", ""))
+        if not 100000 <= iterations <= 1000000 or len(salt) != 16 or len(expected) != 64:
+            return False
+        actual = hashlib.pbkdf2_hmac(
+            "sha256", str(password or "").encode("utf-8"), salt, iterations
+        ).hex()
+        return secrets.compare_digest(actual, expected)
+    except (TypeError, ValueError):
+        return False
+
 _GIFT_FONT_CACHE = {}
 _GLYPH_CACHE = {}
 _FONT_CMAP_CACHE = {}
@@ -5323,7 +5437,9 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
     rendered with a font that genuinely contains that code point.  This is
     what prevents boxes for names containing 𓆩♛𓆪 and musical symbols.
     """
-    raw_text = str(raw_text or "")
+    raw_text = _clean_name_for_image(raw_text)
+    if not raw_text:
+        return xy[0]
     try:
         native_rtl = bool(PIL_AVAILABLE and features.check("raqm") and _has_arabic(raw_text))
     except Exception:
@@ -5350,12 +5466,9 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
             return xy[0] + base_font.getlength(raw_text)
 
     # Decorative names often mix Arabic with Egyptian glyphs, chess symbols,
-    # musical symbols, and tatweel.  No single font contains all of them, so
-    # shape/bidi the complete logical string once, then draw visual runs with
-    # real fallback fonts. This avoids tofu squares without reversing twice.
-    # Without Raqm the runs path must draw the already-shaped visual string
-    # (reshaped + bidi-ordered once by _shape_name) or Arabic renders reversed.
-    visual = _shape_name(raw_text) if not native_rtl else raw_text
+    # musical symbols, and tatweel. No single font contains all of them. Shape
+    # and resolve the complete bidi string once before splitting it by font.
+    visual = _shape_name_for_fallback(raw_text)
     if not visual:
         return xy[0]
     base=_gift_font(visual,int(size))
@@ -5383,31 +5496,6 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
         cur_font=font; prev_font=font
     if cur:
         runs.append((cur_font,''.join(cur)))
-
-    # Mixed decorative names need RTL run placement. Arabic runs are shaped
-    # natively by Raqm; symbol runs use their fallback font and retain order.
-    if _has_arabic(raw_text) and native_rtl:
-        y = xy[1]
-        widths=[]
-        for font,run in runs:
-            try:
-                direction = "rtl" if _has_arabic(run) else "ltr"
-                width = draw.textlength(run, font=font, direction=direction, language="ar" if direction == "rtl" else None)
-            except Exception:
-                width = font.getlength(run)
-            widths.append(width)
-        x_right = xy[0] + sum(widths)
-        for (font,run), width in reversed(list(zip(runs, widths))):
-            x_right -= width
-            direction = "rtl" if _has_arabic(run) else "ltr"
-            try:
-                draw.text((x_right,y),run,font=font,fill=fill,stroke_width=stroke_width,
-                          stroke_fill=stroke_fill,direction=direction,
-                          language="ar" if direction == "rtl" else None)
-            except Exception:
-                draw.text((x_right,y),run,font=font,fill=fill,stroke_width=stroke_width,
-                          stroke_fill=stroke_fill)
-        return xy[0] + sum(widths)
 
     x,y=xy
     for font,run in runs:
@@ -5458,11 +5546,14 @@ def _visual_rtl_text(text):
 def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
-def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
+def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True):
     """Center the username using actual mixed-font glyph widths."""
+    raw_text = _clean_name_for_image(raw_text)
+    if apply_correction:
+        raw_text = _display_name_for_image(raw_text)
     size=int(size)
     while size>14:
-        visual=_shape_name(raw_text)
+        visual=_shape_name_for_fallback(raw_text)
         base=_gift_font(visual,size)
         fallbacks=_fallback_fonts(size)
         width=0
@@ -5475,7 +5566,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
         if width<=max_width:
             break
         size-=2
-    visual=_shape_name(raw_text)
+    visual=_shape_name_for_fallback(raw_text)
     base=_gift_font(visual,size)
     fallbacks=_fallback_fonts(size)
     width=0
@@ -5495,6 +5586,29 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width):
     x=center[0]-width/2
     y=center[1]-(bottom-top)/2-top
     _draw_name_visual(draw,(x,y),raw_text,size,fill,stroke_width=2,stroke_fill=(0,0,0,220))
+
+def render_name_preview_card(name, *, corrected=False):
+    """Create a private visual check using the same username renderer as cards."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+    display_name = _clean_name_for_image(name).strip()
+    if not display_name:
+        raise ValueError("الاسم فارغ")
+    image = Image.new("RGBA", (1600, 560), (8, 14, 30, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((24, 24, 1576, 536), radius=42,
+                           fill=(12, 22, 42, 255), outline=(244, 196, 92, 255), width=6)
+    title = "معاينة الاسم بعد الإصلاح" if corrected else "فحص كتابة الاسم"
+    _draw_centered(draw, (800, 170), title, 54, (255, 224, 145, 255), 1450)
+    draw.line((100, 245, 1500, 245), fill=(244, 196, 92, 220), width=3)
+    _draw_name_centered(draw, (800, 380), display_name, 82,
+                        (255, 255, 255, 255), 1430, apply_correction=False)
+    image = image.convert("RGB")
+    out_dir = BASE_DIR / "generated_welcomes"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"name_check_{uuid.uuid4().hex}.jpg"
+    image.save(out, "JPEG", quality=91, optimize=True)
+    return out
 
 def _visual_runs(text, size):
     # Kept for compatibility with older helpers.
@@ -5814,7 +5928,7 @@ def render_billion_card(winner_name, winner_photo_url=""):
     _draw_centered(d, text_center, "🏆 الفائز بالمليار", max(22, int(h * 0.055)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
-                        "@" + str(winner_name or ""), max(24, int(h * 0.065)),
+                        str(winner_name or "").lstrip("@"), max(24, int(h * 0.065)),
                         (255, 255, 255, 255), max(80, text_right - text_left))
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
@@ -5884,7 +5998,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .22)
     _draw_centered(draw, text_center, "🏆 " + title, max(28, int(h * .038)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
-    raw_name = str(winner_name or "").strip().lstrip("@")
+    raw_name = _display_name_for_image(str(winner_name or "").strip().lstrip("@"))
     clusters = []
     for char in raw_name:
         is_mark = unicodedata.category(char).startswith("M") or char in {"\u200d", "\ufe0e", "\ufe0f"}
@@ -5894,16 +6008,17 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
             clusters.append(char)
     if len(clusters) > 24:
         split_at = len(clusters) // 2
-        name_lines = ["@" + "".join(clusters[:split_at]), "".join(clusters[split_at:])]
+        name_lines = ["".join(clusters[:split_at]), "".join(clusters[split_at:])]
         line_ys = (.59, .82)
     else:
-        name_lines = ["@" + raw_name]
+        name_lines = [raw_name]
         line_ys = (.68,)
     for line, y_ratio in zip(name_lines, line_ys):
         name_center = ((text_left + text_right) / 2,
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
         _draw_name_centered(draw, name_center, line, max(32, int(h * .042)),
-                            (255, 255, 255, 255), max(80, text_right - text_left))
+                            (255, 255, 255, 255), max(80, text_right - text_left),
+                            apply_correction=False)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
@@ -6068,7 +6183,7 @@ def render_rare_diamond_winner_card(winner_name, winner_photo_url="", source_pat
     )
     _draw_name_centered(
         draw, (center_x, panel_box[1] + (panel_box[3] - panel_box[1]) * .70),
-        "@" + str(winner_name or ""), max(34, int(h * .045)),
+        str(winner_name or "").lstrip("@"), max(34, int(h * .045)),
         (255, 255, 255, 255), max(80, text_right - text_left),
     )
     image = Image.alpha_composite(image, overlay).convert("RGB")
@@ -6170,7 +6285,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
     _draw_name_centered(
         d,
         (text_center_x, box_y + box_h * .68),
-        "@" + str(winner_name or ""),
+        str(winner_name or "").lstrip("@"),
         38,
         (126, 226, 255, 255),
         text_max_w,
@@ -7704,47 +7819,147 @@ class TalkinBot:
             return False
 
     def _send_variables_to_telegram(self, requester=""):
-        """Send the exact current Railway environment as a private file."""
+        """Send only project-declared secret variables to a fixed private chat."""
         if not TELEGRAM_BOT_TOKEN:
             if requester:
                 self.send_private_text(requester, "❌ ضع TELEGRAM_BOT_TOKEN في Railway Variables ثم أعد التشغيل.")
             return False
-        chat_id = str(getattr(self, "_telegram_chat_id", "") or "").strip()
-        if not chat_id:
+        chat_id = str(TELEGRAM_SECRET_CHAT_ID or "").strip()
+        if not chat_id.isdigit():
             if requester:
-                self.send_private_text(requester, "📨 أرسل رسالة إلى بوت Telegram أولاً ثم أعد أمر نسخ المتغيرات.")
+                self.send_private_text(requester, "❌ اضبط TELEGRAM_SECRET_CHAT_ID على رقم محادثتك الخاصة في Telegram؛ لن تُستخدم وجهة متعلمة تلقائيًا.")
             return False
-        lines = ["# Talkin/Railway variables", "# Keep this file private.", f"# generated_at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"]
-        for key in sorted(os.environ):
-            lines.append(f"{key}={os.environ.get(key, '')}")
-        path = DATA_DIR / "railway_variables.env"
-        try:
-            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            with path.open("rb") as fh:
-                response = requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
-                    data={"chat_id": chat_id, "caption": "📦 ملف متغيرات Railway الأصلي — حافظ عليه سريًا"},
-                    files={"document": (path.name, fh, "text/plain")}, timeout=60,
-                )
-            ok = bool(response.json().get("ok"))
+        local_env = dotenv_values(_ENV_BASE_DIR / ".env")
+        declared_keys = set(dotenv_values(_ENV_BASE_DIR / ".env.example")) | set(local_env)
+        available_keys = set(_EXTERNAL_ENV_KEYS) | set(local_env)
+        secret_markers = (
+            "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "_KEY",
+            "PRIVATE", "CREDENTIAL", "AUTH", "COOKIE", "WEBHOOK", "SIGNING",
+        )
+        def is_secret_key(key):
+            upper = str(key).upper()
+            if upper == "TELEGRAM_SECRET_CHAT_ID":
+                return False
+            return (
+                any(marker in upper for marker in secret_markers)
+                or upper.endswith("_PWD")
+                or upper == "PWD"
+                or upper in {"DATABASE_URL", "DB_URL"}
+                or upper.endswith("_DATABASE_URL")
+                or upper.endswith("_DB_URL")
+            )
+
+        secret_keys = sorted(key for key in declared_keys & available_keys if is_secret_key(key))
+        lines = [
+            "# Talkin project secrets only; plaintext — keep this file private.",
+            f"# generated_at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
+        ]
+        for key in secret_keys:
+            value = os.environ.get(key)
+            if value is None:
+                value = local_env.get(key)
+            if value not in (None, ""):
+                lines.append(f"{key}={value}")
+        if len(lines) == 2:
             if requester:
-                self.send_private_text(requester, "✅ تم إرسال ملف المتغيرات الأصلي إلى Telegram." if ok else "❌ تعذر إرسال ملف المتغيرات إلى Telegram.")
+                self.send_private_text(requester, "⚠️ لم أجد متغيرات سرية معلنة ومضبوطة في إعدادات المشروع؛ لم يُرسل ملف فارغ.")
+            return False
+        try:
+            document = io.BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
+            response = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
+                data={"chat_id": chat_id, "caption": "🔐 أسرار المشروع فقط بنص واضح — احتفظ بالملف في مكان آمن"},
+                files={"document": ("talkin_secrets.env", document, "text/plain")}, timeout=60,
+            )
+            ok = bool(response.ok and response.json().get("ok"))
+            if requester:
+                self.send_private_text(requester, "✅ تم إرسال ملف الأسرار فقط إلى محادثة Telegram الخاصة المثبتة." if ok else "❌ تعذر إرسال ملف الأسرار إلى Telegram.")
             return ok
         except Exception as exc:
-            self.log("[TELEGRAM] variables upload failed:", repr(exc))
+            self.log("[TELEGRAM] secret variables upload failed:", type(exc).__name__)
             if requester:
-                self.send_private_text(requester, "❌ تعذر إنشاء أو إرسال ملف المتغيرات.")
+                self.send_private_text(requester, "❌ تعذر إنشاء أو إرسال ملف الأسرار.")
             return False
 
-    def _handle_telegram_log_command(self, body, sender=""):
-        if str(body or "").strip().casefold() in TELEGRAM_VARIABLE_COMMANDS:
-            if sender and not _is_master_name(sender):
+    def _handle_telegram_log_command(self, body, sender="", is_private=False):
+        raw_text = str(body or "")
+        text = raw_text.strip().casefold()
+        requester_key = _norm_user(sender)
+        setup_commands = {"ضبط سر متغيرات", "ضبط كلمة سر المتغيرات", "ضبط كلمة مرور المتغيرات"}
+        auth_pending = getattr(self, "_secret_export_auth_pending", None)
+        if not isinstance(auth_pending, dict):
+            auth_pending = self._secret_export_auth_pending = {}
+
+        if text in setup_commands:
+            if not is_private or not sender or not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 نفّذ «ضبط سر متغيرات» من الخاص وبحساب الماستر الأساسي فقط.")
                 return True
-            threading.Thread(target=self._send_variables_to_telegram, args=(sender,), daemon=True, name="telegram-vars-upload").start()
-            if sender:
-                self.send_private_text(sender, "⏳ جاري تجهيز ملف المتغيرات الآمن وإرساله إلى Telegram...")
+            auth_pending[requester_key] = {"mode": "setup", "created_at": time.time()}
+            self.send_private_text(sender, "أرسل كلمة مرور من 8 أحرف على الأقل. لا ترسلها في غرفة عامة؛ سيتم حفظ تجزئتها فقط وليس نصها.")
             return True
-        if str(body or "").strip().casefold() not in TELEGRAM_LOG_COMMANDS:
+
+        pending = auth_pending.get(requester_key)
+        if pending:
+            if not is_private:
+                auth_pending.pop(requester_key, None)
+                if sender:
+                    self.send_private_text(sender, "🔒 أُلغيت العملية لأن كلمة المرور يجب إدخالها في الخاص فقط.")
+                return True
+            if not sender or not _is_primary_master(sender):
+                auth_pending.pop(requester_key, None)
+                return True
+            if time.time() - float(pending.get("created_at") or 0) > 120:
+                auth_pending.pop(requester_key, None)
+                self.send_private_text(sender, "⌛ انتهت مهلة كلمة المرور؛ ابدأ الأمر من جديد عند الحاجة.")
+                return True
+            if text in {"إلغاء", "الغاء", "cancel"}:
+                auth_pending.pop(requester_key, None)
+                self.send_private_text(sender, "تم إلغاء العملية.")
+                return True
+
+            # Consume the one-time password response before doing any expensive
+            # hashing/network work. Never log, echo, or persist the raw value.
+            auth_pending.pop(requester_key, None)
+            password = raw_text.strip()
+            mode = str(pending.get("mode") or "")
+            if mode == "setup":
+                try:
+                    _set_secret_export_password(password)
+                except ValueError as exc:
+                    self.send_private_text(sender, f"❌ {exc}. أعد أمر «ضبط سر متغيرات» للمحاولة.")
+                    return True
+                except Exception:
+                    self.send_private_text(sender, "❌ تعذر حفظ كلمة المرور محليًا؛ لم يتم حفظها كنص مكشوف.")
+                    return True
+                self.send_private_text(sender, "✅ تم ضبط كلمة مرور تصدير الأسرار بأمان. لن تُحفظ الكلمة نفسها.")
+                return True
+            if mode == "export":
+                if not _verify_secret_export_password(password):
+                    self.send_private_text(sender, "❌ كلمة المرور غير صحيحة؛ أُلغيت عملية الإرسال ولم يتم إرسال أي ملف.")
+                    return True
+                threading.Thread(
+                    target=self._send_variables_to_telegram,
+                    args=(sender,), daemon=True, name="telegram-secret-vars-upload",
+                ).start()
+                self.send_private_text(sender, "✅ كلمة المرور صحيحة؛ جارٍ إرسال ملف الأسرار فقط إلى محادثة Telegram الخاصة المثبتة.")
+                return True
+            return True
+
+        if text in TELEGRAM_VARIABLE_COMMANDS:
+            if not is_private or not sender or not _is_primary_master(sender):
+                if sender:
+                    self.send_private_text(sender, "🔒 نفّذ طلب الأسرار من الخاص وبحساب الماستر الأساسي فقط.")
+                return True
+            if not _load_local_json(TELEGRAM_SECRET_AUTH_FILE, None):
+                self.send_private_text(sender, "لم تُضبط كلمة المرور بعد. أرسل «ضبط سر متغيرات» أولًا.")
+                return True
+            if not str(TELEGRAM_SECRET_CHAT_ID or "").isdigit():
+                self.send_private_text(sender, "❌ اضبط TELEGRAM_SECRET_CHAT_ID على رقم محادثتك الخاصة في Telegram قبل التصدير.")
+                return True
+            auth_pending[requester_key] = {"mode": "export", "created_at": time.time()}
+            self.send_private_text(sender, "أرسل كلمة مرور تصدير المتغيرات السرية. إذا كانت صحيحة سيُرسل الملف؛ وإذا أخطأت ستُلغى العملية. أرسل «إلغاء» للتراجع.")
+            return True
+        if text not in TELEGRAM_LOG_COMMANDS:
             return False
         if sender and not _is_master_name(sender):
             return True
@@ -20608,6 +20823,105 @@ class TalkinBot:
         text=str(body or "").strip()
         low=text.casefold()
 
+        name_image_commands = {"فحص اسم": "preview", "اصلاح اسم": "repair", "إصلاح اسم": "repair"}
+        name_image_mode = name_image_commands.get(low)
+        if name_image_mode:
+            if not is_private or not _is_primary_master(sender):
+                message = "🔒 استخدم هذا الأمر من الخاص، وهو مخصص للماستر المحدد في BOT_MASTER."
+                self.send_private_text(sender, message) if sender else None
+                return True
+            requests_by_master = getattr(self, "_master_name_image_requests", None)
+            if not isinstance(requests_by_master, dict):
+                requests_by_master = self._master_name_image_requests = {}
+            requests_by_master[_norm_user(sender)] = {
+                "mode": name_image_mode, "created_at": time.time(),
+            }
+            prompt = (
+                "أرسل الاسم كما يظهر في المحادثة (من دون @). سأعرض معاينة؛ بعد رؤيتها يمكنك اعتمادها "
+                "لتُستخدم في الصور القادمة، أو إرسال «تعديل الاسم: النص الصحيح» ثم اعتماد المعاينة الجديدة."
+                if name_image_mode == "repair" else
+                "أرسل الاسم الذي تريد فحص كتابته في صورة (من دون @)."
+            )
+            self.send_private_text(sender, prompt)
+            return True
+
+        name_requests = getattr(self, "_master_name_image_requests", {})
+        pending_name = name_requests.get(_norm_user(sender)) if isinstance(name_requests, dict) else None
+        if isinstance(pending_name, dict) and is_private and _is_primary_master(sender):
+            if time.time() - float(pending_name.get("created_at") or 0) > 180:
+                name_requests.pop(_norm_user(sender), None)
+                self.send_private_text(sender, "⌛ انتهت مهلة طلب الاسم. أرسل «اصلاح اسم» أو «فحص اسم» للبدء مجددًا.")
+                return True
+            if low in {"إلغاء", "الغاء", "cancel"}:
+                name_requests.pop(_norm_user(sender), None)
+                self.send_private_text(sender, "تم إلغاء طلب فحص الاسم.")
+                return True
+            if pending_name.get("mode") == "awaiting_approval":
+                if low in {"اعتماد الاسم", "اعتمد الاسم", "اعتماد", "نعم", "yes"}:
+                    try:
+                        _save_image_name_correction(
+                            pending_name.get("source_name", ""),
+                            pending_name.get("candidate_name", ""),
+                        )
+                        name_requests.pop(_norm_user(sender), None)
+                        self.send_private_text(sender, "✅ تم اعتماد تصحيح الاسم وحفظه. سيظهر بالصيغة المعتمدة في بطاقات الصور والترحيب القادمة.")
+                    except Exception as exc:
+                        self.send_private_text(sender, f"❌ تعذر حفظ تصحيح الاسم: {exc}")
+                    return True
+                edit_match = re.fullmatch(r"(?:تعديل الاسم|النص الصحيح)\s*[:：]\s*(.+)", text, re.S)
+                if edit_match:
+                    candidate_name = _clean_name_for_image(edit_match.group(1)).strip()
+                    if not candidate_name or len(candidate_name) > 256:
+                        self.send_private_text(sender, "❌ أرسل الاسم المصحح من 1 إلى 256 حرفًا.")
+                        return True
+                    try:
+                        card = render_name_preview_card(candidate_name, corrected=True)
+                        base = _public_base_url()
+                        if not base:
+                            raise RuntimeError("رابط الوسائط العامة غير مضبوط")
+                        url = f"{base}/welcomes/{card.name}"
+                        self._verify_public_media_url(url, "image")
+                        if self.send_private_media(sender, url, "image") is False:
+                            raise RuntimeError("تعذر إرسال صورة المعاينة إلى الخاص")
+                        pending_name["candidate_name"] = candidate_name
+                        pending_name["created_at"] = time.time()
+                        self.send_private_text(sender, "أرسلت معاينة النص البديل. إذا كانت صحيحة أرسل «اعتماد الاسم»، أو أرسل تعديلًا آخر، أو «إلغاء».")
+                    except Exception as exc:
+                        self.send_private_text(sender, f"❌ تعذر إنشاء معاينة الاسم: {exc}")
+                    return True
+                self.send_private_text(sender, "بعد المعاينة أرسل «اعتماد الاسم»، أو «تعديل الاسم: النص الصحيح»، أو «إلغاء».")
+                return True
+            display_name = _clean_name_for_image(text).strip()
+            if not display_name or len(display_name) > 256:
+                self.send_private_text(sender, "❌ أرسل اسمًا من 1 إلى 256 حرفًا، أو اكتب إلغاء.")
+                return True
+            mode = str(pending_name.get("mode") or "preview")
+            name_requests.pop(_norm_user(sender), None)
+            try:
+                card = render_name_preview_card(display_name, corrected=(mode == "repair"))
+                base = _public_base_url()
+                if not base:
+                    raise RuntimeError("رابط الوسائط العامة غير مضبوط")
+                url = f"{base}/welcomes/{card.name}"
+                self._verify_public_media_url(url, "image")
+                if self.send_private_media(sender, url, "image") is False:
+                    raise RuntimeError("تعذر إرسال صورة المعاينة إلى الخاص")
+                if mode == "repair":
+                    name_requests[_norm_user(sender)] = {
+                        "mode": "awaiting_approval",
+                        "source_name": display_name,
+                        "candidate_name": display_name,
+                        "created_at": time.time(),
+                    }
+                self.send_private_text(
+                    sender,
+                    "✅ أرسلت المعاينة. أرسل «اعتماد الاسم» لحفظها واستخدامها في الصور القادمة، أو «تعديل الاسم: النص الصحيح» لإنشاء بديل، أو «إلغاء»."
+                    if mode == "repair" else "✅ أرسلت صورة فحص الاسم.",
+                )
+            except Exception as exc:
+                self.send_private_text(sender, f"❌ تعذر إنشاء صورة الاسم: {exc}")
+            return True
+
         if low in {"فحص زرع", "فحص الزرع", "farm check", "check farm"}:
             return self._farm_check_command(sender, english=low in {"farm check", "check farm"})
 
@@ -23114,7 +23428,7 @@ class TalkinBot:
                 max(20, int(banner_h * .23)), (255, 224, 145, 255), int(w * .88),
             )
             _draw_name_centered(
-                draw, (w / 2, banner_y + banner_h * .70), "@" + str(username or "").lstrip("@"),
+                draw, (w / 2, banner_y + banner_h * .70), str(username or "").lstrip("@"),
                 max(22, int(banner_h * .29)), (255, 255, 255, 255), int(w * .88),
             )
             image = Image.alpha_composite(image, overlay).convert("RGB")
@@ -23411,7 +23725,11 @@ class TalkinBot:
             if not hasattr(self, "connected_rooms") or not isinstance(self.connected_rooms, set):
                 self.connected_rooms = set()
             self.connected_rooms.add(room)
-        if body:
+        secret_pending = getattr(self, "_secret_export_auth_pending", {})
+        is_secret_password_reply = (
+            isinstance(secret_pending, dict) and _norm_user(frm) in secret_pending
+        )
+        if body and not is_secret_password_reply:
             self._remember_inflight_command(room, body, frm, is_private=False)
         if room and room != BOT_MASTER and _norm_room(room) not in getattr(self, "blocked_rooms", set()):
             # This handler runs for every room message.  Rewriting the JSON
@@ -24625,7 +24943,11 @@ class TalkinBot:
                     private_username = str(
                         cm.get(22, "") or cm.get("username", "") or cm.get("sender", "") or ""
                     ).strip()
-                    if body:
+                    secret_pending = getattr(self, "_secret_export_auth_pending", {})
+                    is_secret_password_reply = (
+                        isinstance(secret_pending, dict) and _norm_user(frm) in secret_pending
+                    )
+                    if body and not is_secret_password_reply:
                         self._remember_inflight_command(self.room, body, frm, is_private=True)
                     media_url = next(
                         (str(cm.get(key, "") or "").strip() for key in (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "url", "media_url", "image_url", "file_url")
@@ -24653,7 +24975,7 @@ class TalkinBot:
                         media_candidates = [frm, cm.get(22, ""), cm.get("sender", ""), cm.get("username", "")]
                         if self._try_publish_pending_media(media_room, media_url, media_candidates):
                             return
-                    if body and self._handle_telegram_log_command(body, frm):
+                    if body and self._handle_telegram_log_command(body, frm, is_private=True):
                         return
                     # Every NS is a fresh navigation request. Do not suppress
                     # rapid NS commands with the normal transport de-dup cache.
