@@ -5199,12 +5199,9 @@ def _shape_name(text):
             return get_display(arabic_reshaper.reshape(raw), base_dir="R")
         except Exception:
             pass
-    # Embedded fallback: correct shaping and visual order with no external libs.
-    if _has_arabic(raw):
-        try:
-            return _embedded_bidi(raw)
-        except Exception:
-            pass
+    # Never use the old embedded bidi approximation as a last resort: it can
+    # reverse decorated usernames. The original logical text is safer than a
+    # visually corrupted name when optional shaping libraries are unavailable.
     return raw
 
 def _shape_name_for_fallback(text):
