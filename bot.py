@@ -5225,11 +5225,19 @@ def _shape_name_for_fallback(text):
         for ch in raw
     )
     if has_decoration:
-        # Do not convert the user's decorated username to Arabic Presentation
-        # Forms or reorder its code points. The saved correction and the text
-        # supplied to the renderer must remain byte-for-byte equivalent to the
-        # user's input; shaping is a renderer concern only.
-        return raw
+        # Decorated names are entered in the chat's logical order, while the
+        # image renderer lays mixed runs out from left to right. Move the run
+        # before the first ornament to the end, so the text after the ornament
+        # becomes the first run and the ornament remains attached to the name.
+        # Do not reshape or replace any code point while doing so.
+        decoration_at = next(
+            (index for index, ch in enumerate(raw)
+             if unicodedata.category(ch) in {"So", "Sk", "Sm"}
+             or 0x13000 <= ord(ch) <= 0x1342F
+             or 0x1D100 <= ord(ch) <= 0x1D1FF),
+            None,
+        )
+        return raw if decoration_at in (None, 0) else raw[decoration_at:] + raw[:decoration_at]
     if arabic_reshaper is not None and get_display is not None:
         try:
             return get_display(arabic_reshaper.reshape(raw), base_dir="R")
