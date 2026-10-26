@@ -13,12 +13,44 @@ try:
 except Exception:
     Image = ImageDraw = ImageFont = None
 
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+except Exception:
+    arabic_reshaper = get_display = None
+
 BASE_DIR = Path(__file__).resolve().parent
 MEDIA_DIR = BASE_DIR / 'media'
 MUSIC_DIR = MEDIA_DIR / 'music'
 GIFT_DIR = BASE_DIR / 'assets'
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+def _rtl_text(value):
+    """Return Arabic in visual order only for Pillow's legacy renderer."""
+    text = str(value or "")
+    if not any("\u0600" <= ch <= "\u06ff" for ch in text):
+        return text
+    try:
+        if Image is not None and getattr(Image, "features", None):
+            from PIL import features
+            if features.check("raqm"):
+                return text
+    except Exception:
+        pass
+    if arabic_reshaper is not None and get_display is not None:
+        try:
+            return get_display(arabic_reshaper.reshape(text), base_dir="R")
+        except Exception:
+            pass
+    return text
+
+def _draw_rtl(draw, xy, value, font, **kwargs):
+    text = _rtl_text(value)
+    try:
+        return draw.text(xy, text, font=font, direction="rtl", language="ar", **kwargs)
+    except (TypeError, ValueError):
+        return draw.text(xy, text, font=font, **kwargs)
 
 GIFTS = {
  '1':('🌹','وردة'), '2':('❤️','قلب'), '3':('💋','قبلة'), '4':('🧸','دب'),
@@ -216,10 +248,10 @@ def gift_card_url(gid, sender, receiver):
     _emoji,name=GIFTS.get(str(gid), ('🎁','هدية'))
     # Keep Arabic labels and account names on separate lines so a font that
     # lacks Latin glyphs cannot turn usernames into replacement boxes.
-    draw.text((cx, 235), name, font=title_font, fill='#4b241d', anchor='mm', stroke_width=1, stroke_fill='#f0c27b')
-    draw.text((cx, 420), 'المرسل', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    _draw_rtl(draw, (cx, 235), name, title_font, fill='#4b241d', anchor='mm', stroke_width=1, stroke_fill='#f0c27b')
+    _draw_rtl(draw, (cx, 420), 'المرسل', ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
     draw.text((cx, 475), f'@{sender}', font=en_font, fill='#3f211b', anchor='mm')
-    draw.text((cx, 545), 'المستقبل', font=ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
+    _draw_rtl(draw, (cx, 545), 'المستقبل', ar_font, fill='#3f211b', anchor='mm', stroke_width=1, stroke_fill='#eabd7d')
     draw.text((cx, 600), f'@{receiver}', font=en_font, fill='#3f211b', anchor='mm')
     draw.text((cx, 650), 'A special gift for you', font=en_font, fill='#6a3428', anchor='mm')
     image.save(dst, format='PNG', optimize=True)

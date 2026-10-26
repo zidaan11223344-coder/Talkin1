@@ -869,6 +869,7 @@ GAME_CONTROL_FILE = DATA_DIR / "game_control.json"
 CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
 STOCK_MARKET_FILE = DATA_DIR / "stock_market_investments.json"
 STOCK_MARKET_HISTORY_FILE = DATA_DIR / "stock_market_history.json"
+WAGER_STATE_FILE = DATA_DIR / "wager_state.json"
 DRAGON_HUNTERS_FILE = DATA_DIR / "dragon_hunters.json"
 PAYROLL_FILE = DATA_DIR / "payroll.json"
 PAYROLL_COOLDOWN_SECONDS = max(60.0, float(os.getenv("PAYROLL_COOLDOWN_SECONDS", "600") or 600))
@@ -7330,7 +7331,7 @@ class TalkinBot:
         self._first_connection_status_sent = False
         self.music_lock = threading.Lock()
         # Mini-games: free-to-play, no points are deducted.
-        self.game_lock = threading.Lock()
+        self.game_lock = threading.RLock()
         self.game_cooldown = defaultdict(float)
         self.board_game_cooldown = {}
         self.guess_games = {}
@@ -7369,8 +7370,9 @@ class TalkinBot:
             row for row in saved_stock_rows
             if isinstance(row, dict) and row.get("id") and row.get("username")
         ] if isinstance(saved_stock_rows, list) else []
-        # Global wager queues, crop timers, and fruit-match state.
-        self.wager_waiting = {}
+        # Global wager queues, crop timers, and fruit-match state. A wager
+        # reserves points immediately, so it must survive a process restart.
+        self.wager_waiting = self._load_wager_state()
         # Global fixed-prize PvP queues: one open challenge per game name.
         self.fixed_game_waiting = {}
         # Temporary one-minute anti-steal protection granted by the حصانه command.
@@ -14278,6 +14280,39 @@ class TalkinBot:
                     total += int(waiting.get("stake", 0) or 0)
         return total
 
+    def _load_wager_state(self):
+        """Restore open wagers whose stakes were already reserved."""
+        data = _load_local_json(WAGER_STATE_FILE, {})
+        rows = data.get("waiting", data) if isinstance(data, dict) else {}
+        if not isinstance(rows, dict):
+            return {}
+        restored = {}
+        for key, value in rows.items():
+            if not isinstance(value, dict) or not value.get("user"):
+                continue
+            try:
+                stake = int(value.get("stake", 0) or 0)
+                created = float(value.get("created", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if stake <= 0 or created <= 0:
+                continue
+            item = dict(value)
+            item.update(stake=stake, created=created, reserved=bool(value.get("reserved", True)))
+            item["id"] = str(item.get("id") or uuid.uuid4().hex)
+            restored[str(key).casefold()] = item
+        return restored
+
+    def _save_wager_state(self):
+        """Persist open wagers through the shared atomic JSON writer."""
+        with self.game_lock:
+            snapshot = {
+                str(key): dict(value)
+                for key, value in self.wager_waiting.items()
+                if isinstance(value, dict)
+            }
+        _save_local_json(WAGER_STATE_FILE, {"version": 1, "waiting": snapshot})
+
     def _cleanup_expired_wagers(self):
         # مدة البحث عن منافس لأي لعبة انتظار = دقيقتان فقط.
         timeout = 120
@@ -14301,6 +14336,8 @@ class TalkinBot:
                         waiting["id"] = challenge_id
                     waiting["_refund_pending"] = True
                     expired.append((key, dict(waiting), challenge_id))
+            if expired:
+                self._save_wager_state()
         for key, waiting, challenge_id in expired:
             room = str(waiting.get("room") or "").strip()
             game = str(waiting.get("game") or "اللعبة").strip()
@@ -14325,6 +14362,7 @@ class TalkinBot:
                 if current and str(current.get("id") or "") == challenge_id:
                     self.wager_waiting.pop(key, None)
                     removed = True
+                    self._save_wager_state()
             if not removed:
                 continue
             if room:
@@ -14482,6 +14520,7 @@ class TalkinBot:
                 # A second player may enter ANY amount, from the same room or another room.
                 # Their room and stake are both preserved for the final result.
                 self.wager_waiting.pop(key, None)
+                self._save_wager_state()
             elif error is None:
                 # Reserve the stake immediately. This prevents spending the same
                 # balance in another game while the challenge is open.
@@ -14495,6 +14534,7 @@ class TalkinBot:
                     "game": game_name,
                     "created": time.time(),
                 }
+                self._save_wager_state()
 
         if error:
             self.send_room_text(room, error)
@@ -20826,15 +20866,17 @@ class TalkinBot:
         name_image_commands = {"فحص اسم": "preview", "اصلاح اسم": "repair", "إصلاح اسم": "repair"}
         name_image_mode = name_image_commands.get(low)
         if name_image_mode:
-            if not is_private or not _is_primary_master(sender):
-                message = "🔒 استخدم هذا الأمر من الخاص، وهو مخصص للماستر المحدد في BOT_MASTER."
-                self.send_private_text(sender, message) if sender else None
+            if not _is_primary_master(sender):
+                message = "🔒 هذا الأمر مخصص للماستر المحدد في BOT_MASTER، ويمكن استخدامه من الخاص أو داخل الغرفة."
+                if sender:
+                    self.send_room_text(room, message) if room and not is_private else self.send_private_text(sender, message)
                 return True
             requests_by_master = getattr(self, "_master_name_image_requests", None)
             if not isinstance(requests_by_master, dict):
                 requests_by_master = self._master_name_image_requests = {}
             requests_by_master[_norm_user(sender)] = {
                 "mode": name_image_mode, "created_at": time.time(),
+                "is_private": bool(is_private), "room": str(room or ""),
             }
             prompt = (
                 "أرسل الاسم كما يظهر في المحادثة (من دون @). سأعرض معاينة؛ بعد رؤيتها يمكنك اعتمادها "
@@ -20842,19 +20884,30 @@ class TalkinBot:
                 if name_image_mode == "repair" else
                 "أرسل الاسم الذي تريد فحص كتابته في صورة (من دون @)."
             )
-            self.send_private_text(sender, prompt)
+            self.send_room_text(room, prompt) if room and not is_private else self.send_private_text(sender, prompt)
             return True
 
         name_requests = getattr(self, "_master_name_image_requests", {})
         pending_name = name_requests.get(_norm_user(sender)) if isinstance(name_requests, dict) else None
-        if isinstance(pending_name, dict) and is_private and _is_primary_master(sender):
+        if isinstance(pending_name, dict) and _is_primary_master(sender):
+            request_private = bool(pending_name.get("is_private", True))
+            request_room = str(pending_name.get("room") or room or "")
+            def _name_text(message):
+                if request_private:
+                    self.send_private_text(sender, message)
+                elif request_room:
+                    self.send_room_text(request_room, message)
+            def _name_media(url):
+                if request_private:
+                    return self.send_private_media(sender, url, "image")
+                return self.send_room_media(request_room, url, "image") if request_room else False
             if time.time() - float(pending_name.get("created_at") or 0) > 180:
                 name_requests.pop(_norm_user(sender), None)
-                self.send_private_text(sender, "⌛ انتهت مهلة طلب الاسم. أرسل «اصلاح اسم» أو «فحص اسم» للبدء مجددًا.")
+                _name_text("⌛ انتهت مهلة طلب الاسم. أرسل «اصلاح اسم» أو «فحص اسم» للبدء مجددًا.")
                 return True
             if low in {"إلغاء", "الغاء", "cancel"}:
                 name_requests.pop(_norm_user(sender), None)
-                self.send_private_text(sender, "تم إلغاء طلب فحص الاسم.")
+                _name_text("تم إلغاء طلب فحص الاسم.")
                 return True
             if pending_name.get("mode") == "awaiting_approval":
                 if low in {"اعتماد الاسم", "اعتمد الاسم", "اعتماد", "نعم", "yes"}:
@@ -20864,15 +20917,15 @@ class TalkinBot:
                             pending_name.get("candidate_name", ""),
                         )
                         name_requests.pop(_norm_user(sender), None)
-                        self.send_private_text(sender, "✅ تم اعتماد تصحيح الاسم وحفظه. سيظهر بالصيغة المعتمدة في بطاقات الصور والترحيب القادمة.")
+                        _name_text("✅ تم اعتماد تصحيح الاسم وحفظه. سيظهر بالصيغة المعتمدة في بطاقات الصور والترحيب القادمة.")
                     except Exception as exc:
-                        self.send_private_text(sender, f"❌ تعذر حفظ تصحيح الاسم: {exc}")
+                        _name_text(f"❌ تعذر حفظ تصحيح الاسم: {exc}")
                     return True
                 edit_match = re.fullmatch(r"(?:تعديل الاسم|النص الصحيح)\s*[:：]\s*(.+)", text, re.S)
                 if edit_match:
                     candidate_name = _clean_name_for_image(edit_match.group(1)).strip()
                     if not candidate_name or len(candidate_name) > 256:
-                        self.send_private_text(sender, "❌ أرسل الاسم المصحح من 1 إلى 256 حرفًا.")
+                        _name_text("❌ أرسل الاسم المصحح من 1 إلى 256 حرفًا.")
                         return True
                     try:
                         card = render_name_preview_card(candidate_name, corrected=True)
@@ -20881,19 +20934,19 @@ class TalkinBot:
                             raise RuntimeError("رابط الوسائط العامة غير مضبوط")
                         url = f"{base}/welcomes/{card.name}"
                         self._verify_public_media_url(url, "image")
-                        if self.send_private_media(sender, url, "image") is False:
-                            raise RuntimeError("تعذر إرسال صورة المعاينة إلى الخاص")
+                        if _name_media(url) is False:
+                            raise RuntimeError("تعذر إرسال صورة المعاينة")
                         pending_name["candidate_name"] = candidate_name
                         pending_name["created_at"] = time.time()
-                        self.send_private_text(sender, "أرسلت معاينة النص البديل. إذا كانت صحيحة أرسل «اعتماد الاسم»، أو أرسل تعديلًا آخر، أو «إلغاء».")
+                        _name_text("أرسلت معاينة النص البديل. إذا كانت صحيحة أرسل «اعتماد الاسم»، أو أرسل تعديلًا آخر، أو «إلغاء».")
                     except Exception as exc:
-                        self.send_private_text(sender, f"❌ تعذر إنشاء معاينة الاسم: {exc}")
+                        _name_text(f"❌ تعذر إنشاء معاينة الاسم: {exc}")
                     return True
-                self.send_private_text(sender, "بعد المعاينة أرسل «اعتماد الاسم»، أو «تعديل الاسم: النص الصحيح»، أو «إلغاء».")
+                _name_text("بعد المعاينة أرسل «اعتماد الاسم»، أو «تعديل الاسم: النص الصحيح»، أو «إلغاء».")
                 return True
             display_name = _clean_name_for_image(text).strip()
             if not display_name or len(display_name) > 256:
-                self.send_private_text(sender, "❌ أرسل اسمًا من 1 إلى 256 حرفًا، أو اكتب إلغاء.")
+                _name_text("❌ أرسل اسمًا من 1 إلى 256 حرفًا، أو اكتب إلغاء.")
                 return True
             mode = str(pending_name.get("mode") or "preview")
             name_requests.pop(_norm_user(sender), None)
@@ -20904,22 +20957,22 @@ class TalkinBot:
                     raise RuntimeError("رابط الوسائط العامة غير مضبوط")
                 url = f"{base}/welcomes/{card.name}"
                 self._verify_public_media_url(url, "image")
-                if self.send_private_media(sender, url, "image") is False:
-                    raise RuntimeError("تعذر إرسال صورة المعاينة إلى الخاص")
+                if _name_media(url) is False:
+                    raise RuntimeError("تعذر إرسال صورة المعاينة")
                 if mode == "repair":
                     name_requests[_norm_user(sender)] = {
                         "mode": "awaiting_approval",
                         "source_name": display_name,
                         "candidate_name": display_name,
                         "created_at": time.time(),
+                        "is_private": request_private, "room": request_room,
                     }
-                self.send_private_text(
-                    sender,
+                _name_text(
                     "✅ أرسلت المعاينة. أرسل «اعتماد الاسم» لحفظها واستخدامها في الصور القادمة، أو «تعديل الاسم: النص الصحيح» لإنشاء بديل، أو «إلغاء»."
                     if mode == "repair" else "✅ أرسلت صورة فحص الاسم.",
                 )
             except Exception as exc:
-                self.send_private_text(sender, f"❌ تعذر إنشاء صورة الاسم: {exc}")
+                _name_text(f"❌ تعذر إنشاء صورة الاسم: {exc}")
             return True
 
         if low in {"فحص زرع", "فحص الزرع", "farm check", "check farm"}:
@@ -21191,7 +21244,7 @@ class TalkinBot:
             english = text.casefold().startswith("room message@")
             if self._queue_room_broadcast(message_text, sender):
                 ack = ("📨 Background broadcast started in the background queue; a delivery report will follow."
-                       if english else "📨 وُضعت الرسالة في طابور الخلفية؛ سيصلك تقرير بعد الإرسال إلى الغرف.")
+                       if english else "✅ تم قبول طلبك؛ سأبلغك عند الانتهاء من إرسال الرسالة إلى كل الغرف.")
                 self.send_private_text(sender, ack)
             else:
                 busy = ("⏳ The room broadcast queue is full; please retry shortly."
@@ -21231,7 +21284,7 @@ class TalkinBot:
             if not recipients:
                 self.send_private_text(sender, "⚠️ لم أجد مستخدمين معروفين لإرسال الرسالة لهم.")
                 return True
-            self.send_private_text(sender, f"📣 بدأ إرسال الرسالة الخاصة إلى {len(recipients)} مستخدم.\n⏳ الإرسال جارٍ في الخلفية...")
+            self.send_private_text(sender, f"✅ تم قبول طلبك؛ سأبلغك عند الانتهاء من إرسال الرسالة الخاصة إلى {len(recipients)} مستخدم.")
 
             def _broadcast_worker(targets, payload, requester):
                 delay = max(0.05, float(os.getenv("PRIVATE_BROADCAST_DELAY", "0.15")))
