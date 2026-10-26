@@ -5225,13 +5225,11 @@ def _shape_name_for_fallback(text):
         for ch in raw
     )
     if has_decoration:
-        # Shape Arabic letters but do not reorder the complete mixed string.
-        # The renderer draws this result left-to-right with the exact symbol
-        # sequence supplied by the user.
-        try:
-            return _embedded_reshape(raw)
-        except Exception:
-            return raw
+        # Do not convert the user's decorated username to Arabic Presentation
+        # Forms or reorder its code points. The saved correction and the text
+        # supplied to the renderer must remain byte-for-byte equivalent to the
+        # user's input; shaping is a renderer concern only.
+        return raw
     if arabic_reshaper is not None and get_display is not None:
         try:
             return get_display(arabic_reshaper.reshape(raw), base_dir="R")
