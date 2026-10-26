@@ -5,6 +5,7 @@ import bot as bot_module
 
 
 def test_timed_game_cycle_starts_with_mining_and_has_all_nine_games():
+    assert bot_module.TIMED_TREASURE_ANNOUNCEMENT_INTERVAL_SECONDS == 600.0
     assert list(bot_module.TIMED_TREASURE_GAMES)[0] == "rare_diamond"
     assert len(bot_module.TIMED_TREASURE_GAMES) == 9
     treasure_assets = bot_module.ASSETS_DIR / "treasures"
@@ -26,7 +27,7 @@ def test_timed_game_cycle_starts_with_mining_and_has_all_nine_games():
     assert all(bot_module.resolve_item_keys(item["icon"]) == (key,) for key, item in bot_module.MINING_ITEMS.items())
 
 
-def test_next_timed_game_is_due_three_minutes_after_round_resolution_finishes():
+def test_next_timed_game_is_due_ten_minutes_after_round_resolution_finishes():
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot._rare_diamond_lock = threading.RLock()
     bot._rare_diamond_event = None
@@ -46,10 +47,10 @@ def test_next_timed_game_is_due_three_minutes_after_round_resolution_finishes():
         bot._resolve_rare_diamond_event("round-1")
 
     assert finished == [True]
-    assert bot._rare_diamond_next_due == 1_425.0
+    assert bot._rare_diamond_next_due == 1_845.0
 
 
-def test_direct_timed_game_start_cannot_bypass_three_minute_cooldown():
+def test_direct_timed_game_start_cannot_bypass_announcement_cooldown():
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot._rare_diamond_lock = threading.RLock()
     bot._rare_diamond_next_due = 101.0
@@ -61,7 +62,18 @@ def test_direct_timed_game_start_cannot_bypass_three_minute_cooldown():
     assert bot._rare_diamond_event is None
 
 
-def test_timed_round_timeout_closes_once_and_waits_three_minutes_before_next_game():
+def test_announcement_interval_change_does_not_extend_round_join_window():
+    bot = _make_timed_game_test_bot()
+    bot._doctor_ban_lock = threading.RLock()
+    bot._doctor_ban_once = {}
+    bot.send_room_text = lambda *_args: None
+    with patch.object(bot_module, "_game_control_data", return_value={"results_disabled_rooms": []}), \
+         patch.object(bot_module.time, "time", return_value=1_000.0):
+        assert bot._start_rare_diamond_event("rare_diamond") is True
+    assert bot._rare_diamond_event["ends_at"] == 1_180.0
+
+
+def test_timed_round_timeout_closes_once_and_waits_ten_minutes_before_next_game():
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot._rare_diamond_lock = threading.RLock()
     bot._rare_diamond_event = {
@@ -84,9 +96,9 @@ def test_timed_round_timeout_closes_once_and_waits_three_minutes_before_next_gam
     with patch.object(bot_module.time, "time", return_value=100.0):
         bot._rare_diamond_event_worker()
     assert bot._rare_diamond_event is None
-    assert bot._rare_diamond_next_due == 280.0
+    assert bot._rare_diamond_next_due == 700.0
     assert len(sent) == 1
-    assert "بعد 3 دقائق" in sent[0][1]
+    assert "بعد 10 دقائق" in sent[0][1]
 
 
 def test_doctor_loser_is_refused_once_for_next_doctor_round_without_joining():

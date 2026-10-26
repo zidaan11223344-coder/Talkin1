@@ -344,6 +344,7 @@ GAME_COMMANDS = {
 }
 # Nine scheduled treasure/royal games. The artwork is stored in assets/treasures/.
 # Arabic and English aliases are normalized before lookup so hamza and ة/ه variants work.
+TIMED_TREASURE_ANNOUNCEMENT_INTERVAL_SECONDS = 10 * 60.0
 TIMED_TREASURE_GAMES = {
     "rare_diamond": {
         "title_ar": "💎 الألماس النادر", "title_en": "💎 Rare Diamond",
@@ -9143,7 +9144,7 @@ class TalkinBot:
             "أُضيف إلى مخزونك": "Added to your inventory", "عثرت على:": "found:",
             "لم يعثر على شيء هذه المرة. حظًا أوفر في التنقيب القادم.": "found nothing this time. Better luck on the next dig.",
             "يمكنك التنقيب مرة كل دقيقة. تبقّى ": "you can mine once per minute. Time left: ",
-            "لا توجد جولة ألماس نادر مفتوحة الآن. انتظر الإعلان القادم بعد 3 دقائق.": "No rare diamond round is open. Wait for the next announcement in 3 minutes.",
+            "لا توجد جولة ألماس نادر مفتوحة الآن. انتظر الإعلان القادم بعد 10 دقائق.": "No rare diamond round is open. Wait for the next announcement in 10 minutes.",
             "🏏 إعداد مباراة الكريكيت": "🏏 Cricket match setup",
             "🏏 إعداد مباراة ضد البوت": "🏏 Set up a match against the bot",
             "اختر عدد اللاعبين داخل هذه الغرفة فقط:": "Choose the player count for this room only:",
@@ -17964,14 +17965,17 @@ class TalkinBot:
         return True
 
     def _rare_diamond_event_worker(self):
-        """Run one round at a time; always pause three minutes after it closes."""
+        """Run one round at a time; pause ten minutes after it closes."""
         sequence = list(TIMED_TREASURE_GAMES)
         next_index = int(getattr(self, "_treasure_cycle_index", 0) or 0) % len(sequence)
         next_start = float(getattr(self, "_rare_diamond_next_due", time.time()))
         while not self.stop_event.wait(1.0):
             now = time.time()
             if next_start == float("inf"):
-                next_start = float(getattr(self, "_rare_diamond_next_due", now + 180.0))
+                next_start = float(getattr(
+                    self, "_rare_diamond_next_due",
+                    now + TIMED_TREASURE_ANNOUNCEMENT_INTERVAL_SECONDS,
+                ))
             with self._rare_diamond_lock:
                 event = self._rare_diamond_event
                 expired = isinstance(event, dict) and now >= float(event.get("ends_at", 0) or 0)
@@ -17979,7 +17983,7 @@ class TalkinBot:
                 with self._rare_diamond_lock:
                     if self._rare_diamond_event is event:
                         self._rare_diamond_event = None
-                        self._rare_diamond_next_due = time.time() + 180.0
+                        self._rare_diamond_next_due = time.time() + TIMED_TREASURE_ANNOUNCEMENT_INTERVAL_SECONDS
                 required = int(event.get("required_players", 5))
                 for target_room in event.get("rooms", [event.get("room", "")]):
                     try:
@@ -17988,13 +17992,16 @@ class TalkinBot:
                         if _game_results_disabled_for_room(target_room):
                             continue
                         if self._effective_room_language(target_room) == "en":
-                            notice = f"⌛ {config['title_en']} round closed: the player limit ({required}) was not reached. Next game announcement in 3 minutes."
+                            notice = f"⌛ {config['title_en']} round closed: the player limit ({required}) was not reached. Next game announcement in 10 minutes."
                         else:
-                            notice = f"⌛ أُغلقت جولة {config['title_ar']} لعدم اكتمال العدد ({required}). الإعلان التالي بعد 3 دقائق."
+                            notice = f"⌛ أُغلقت جولة {config['title_ar']} لعدم اكتمال العدد ({required}). الإعلان التالي بعد 10 دقائق."
                         self.send_room_text(target_room, notice)
                     except Exception as exc:
                         self.log("[TREASURE-CYCLE] timeout notice failed:", target_room, repr(exc))
-                next_start = float(getattr(self, "_rare_diamond_next_due", time.time() + 180.0))
+                next_start = float(getattr(
+                    self, "_rare_diamond_next_due",
+                    time.time() + TIMED_TREASURE_ANNOUNCEMENT_INTERVAL_SECONDS,
+                ))
             with self._rare_diamond_lock:
                 active = isinstance(self._rare_diamond_event, dict) and now < float(self._rare_diamond_event.get("ends_at", 0) or 0)
             if active or now < next_start:
@@ -18004,7 +18011,7 @@ class TalkinBot:
                 if self._start_rare_diamond_event(game_key):
                     next_index = (next_index + 1) % len(sequence)
                     self._treasure_cycle_index = next_index
-                    next_start = float("inf")  # resolver/timeout schedules the three-minute pause
+                    next_start = float("inf")  # resolver/timeout schedules the ten-minute pause
                 else:
                     next_start = time.time() + 10.0
             except Exception as exc:
@@ -18213,7 +18220,7 @@ class TalkinBot:
             return False
 
     def _resolve_rare_diamond_event(self, round_id):
-        """Resolve a completed round, then start the three-minute inter-game pause."""
+        """Resolve a completed round, then start the ten-minute inter-game pause."""
         try:
             return self._resolve_rare_diamond_event_impl(round_id)
         finally:
@@ -18222,7 +18229,7 @@ class TalkinBot:
                 with lock:
                     if (getattr(self, "_rare_diamond_event", None) is None
                             and float(getattr(self, "_rare_diamond_next_due", 0) or 0) == float("inf")):
-                        self._rare_diamond_next_due = time.time() + 180.0
+                        self._rare_diamond_next_due = time.time() + TIMED_TREASURE_ANNOUNCEMENT_INTERVAL_SECONDS
 
     def _resolve_rare_diamond_event_impl(self, round_id):
         """Resolve one round. Results go only to rooms where its players joined."""
@@ -18416,7 +18423,7 @@ class TalkinBot:
                 self.log("[RARE-DIAMOND] join failed:", repr(exc))
             # The timed rare expedition is separate from ordinary mining.
             # If no event is open, never fall through to the iron/normal dig game.
-            self.send_room_text(room, "💎 لا توجد جولة ألماس نادر مفتوحة الآن. انتظر الإعلان القادم بعد 3 دقائق.")
+            self.send_room_text(room, "💎 لا توجد جولة ألماس نادر مفتوحة الآن. انتظر الإعلان القادم بعد 10 دقائق.")
             return True
         if not (is_store or is_inventory or is_top or redeem_match or red_code_match or is_dig or is_diamond_test or is_rare_mining_test):
             return False
