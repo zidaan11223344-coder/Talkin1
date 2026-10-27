@@ -48,7 +48,7 @@ try:
 except Exception:
     pymysql = None
 from dotenv import dotenv_values, load_dotenv
-from auction_game import AuctionGame, BIDDING_DURATION_SECONDS, TURN_TIMEOUT_SECONDS, MAX_IMAGE_BYTES, parse_bid_amount as _parse_auction_bid_amount, parse_room_command as _parse_auction_room_command, parse_toggle_command as _parse_auction_toggle_command
+from auction_game import AuctionGame, BIDDING_DURATION_SECONDS, MAX_IMAGE_BYTES, parse_bid_amount as _parse_auction_bid_amount, parse_room_command as _parse_auction_room_command, parse_toggle_command as _parse_auction_toggle_command
 from cricket_integration import CricketIntegration
 import shop as member_shop
 from treasure_mining import DIAMOND_KEYS, ITEMS as MINING_ITEMS, MiningStore, format_cooldown, resolve_item_keys
@@ -15768,55 +15768,6 @@ class TalkinBot:
             timer.start()
         return True
 
-    def _schedule_auction_turn_timeout(self, auction=None):
-        """Schedule the 12-second inactivity penalty for the current bidder."""
-        game = getattr(self, "_auction_game", None)
-        if auction is None and game is not None:
-            auction = game.active()
-        if not isinstance(auction, dict) or auction.get("phase") != "bidding":
-            return False
-        deadline = float(auction.get("turn_deadline_at") or 0)
-        if deadline <= 0:
-            return False
-        timer = threading.Timer(max(0.0, deadline - float(game.clock())), self._expire_auction_turn,
-                                args=(str(auction.get("id") or ""), str(auction.get("turn_user_id") or "")))
-        timer.daemon = True
-        previous = getattr(self, "_auction_turn_timer", None)
-        if previous is not None:
-            try:
-                previous.cancel()
-            except Exception:
-                pass
-        self._auction_turn_timer = timer
-        timer.start()
-        return True
-
-    def _expire_auction_turn(self, auction_id, turn_user_id):
-        """Charge the silent bidder the reached amount, then close the auction."""
-        game = getattr(self, "_auction_game", None)
-        active = game.active() if game is not None else None
-        if not isinstance(active, dict) or str(active.get("id") or "") != str(auction_id) or active.get("phase") != "bidding":
-            return False
-        if str(active.get("turn_user_id") or "") != str(turn_user_id):
-            return False
-        if float(game.clock()) < float(active.get("turn_deadline_at") or 0):
-            self._schedule_auction_turn_timeout(active)
-            return False
-        idle_name = str(active.get("turn_username") or "").strip().lstrip("@")
-        item = active.get("item") if isinstance(active.get("item"), dict) else {}
-        reached = int(active.get("current_bid", 0) or 0) or int(item.get("starting_price", 0) or 0)
-        penalty = _apply_points_delta_once(idle_name, -reached, f"auction:{auction_id}:idle:{turn_user_id}", "auction inactive-turn penalty") if idle_name and reached > 0 else {"ok": False}
-        rooms = self._auction_participant_rooms(active)
-        self._cancel_auction_timeout(auction_id)
-        result = game.close(str(active.get("opener_id") or ""), str(active.get("opener_name") or ""), apply_delta=_apply_points_delta_once)
-        amount = _fmt_points(reached)
-        if penalty.get("ok"):
-            self._auction_broadcast(f"⏱️ @{idle_name} لم يرسل رقم المزايدة خلال 12 ثانية؛ خُصم منه {amount} نقطة وأُغلق المزاد.", f"⏱️ @{idle_name} did not send a bid number within 12 seconds; {amount} points were charged and the auction closed.", rooms=rooms)
-        else:
-            self._auction_broadcast(f"⏱️ @{idle_name} لم يرسل رقم المزايدة خلال 12 ثانية؛ تعذر خصم {amount} نقطة، وأُغلق المزاد.", f"⏱️ @{idle_name} did not send a bid number within 12 seconds; the penalty could not be charged, and the auction closed.", rooms=rooms)
-        self._auction_broadcast_close_result(result, rooms=rooms, expired=False)
-        return True
-
     def _expire_auction_round(self, auction_id):
         game = getattr(self, "_auction_game", None)
         active = game.active() if game is not None else None
@@ -16048,7 +15999,6 @@ class TalkinBot:
                 self._auction_broadcast(f"✅ سُجل @{username} في المزاد ({count}/5 مشاركين).", f"✅ @{username} joined the auction ({count}/5 players).", rooms=participant_rooms)
             if result.get("auto_started"):
                 self._schedule_auction_timeout(result.get("auction"))
-                self._schedule_auction_turn_timeout(result.get("auction"))
                 item = result["auction"].get("item") or {}
                 starting_price = _fmt_points(item.get("starting_price", 100_000_000))
                 first_turn = result["auction"].get("turn_username") or ""
@@ -16067,7 +16017,6 @@ class TalkinBot:
                 self._auction_room_reply(room, ar, en)
                 return True
             self._schedule_auction_timeout(result.get("auction"))
-            self._schedule_auction_turn_timeout(result.get("auction"))
             item = result["auction"].get("item") or {}
             starting_price = _fmt_points(item.get("starting_price", 100_000_000))
             first_turn = result["auction"].get("turn_username") or ""
@@ -16099,7 +16048,6 @@ class TalkinBot:
                 return True
             amount = _fmt_points(result["amount"])
             next_turn = result.get("next_turn_username") or ""
-            self._schedule_auction_turn_timeout(result.get("auction"))
             self._auction_broadcast(f"🔨 زايد @{username} بمبلغ {amount} نقطة؛ هذا أعلى سعر حالي. الدور التالي على @{next_turn}.", f"🔨 @{username} bid {amount} points; this is the current high bid. Next turn: @{next_turn}.", rooms=self._auction_participant_rooms(result.get("auction")))
             return True
 
@@ -16111,7 +16059,6 @@ class TalkinBot:
                 return True
             if result.get("status") == "passed":
                 next_turn = result.get("next_turn_username") or ""
-                self._schedule_auction_turn_timeout(result.get("auction"))
                 self._auction_broadcast(f"⏭️ مرّر @{username} دوره؛ الدور التالي على @{next_turn}.", f"⏭️ @{username} passed; next turn: @{next_turn}.", rooms=participant_rooms)
                 return True
             if result.get("auto_closed") or result.get("pending") or result.get("status") in {"sold", "no_bids", "no_sale"}:
