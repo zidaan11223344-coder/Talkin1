@@ -20936,8 +20936,8 @@ class TalkinBot:
                 "is_private": bool(is_private), "room": str(room or ""),
             }
             prompt = (
-                "أرسل الاسم كما يظهر في المحادثة (من دون @). سأعرض معاينة؛ بعد رؤيتها يمكنك اعتمادها "
-                "لتُستخدم في الصور القادمة، أو إرسال «تعديل الاسم: النص الصحيح» ثم اعتماد المعاينة الجديدة."
+                "أرسل الاسم كما يظهر في المحادثة (من دون @). بعد ذلك سأطلب منك طريقة التعديل، "
+                "ثم أرسل المعاينة ولا يُحفظ الاسم إلا بعد إرسال «اعتماد الاسم»."
                 if name_image_mode == "repair" else
                 "أرسل الاسم الذي تريد فحص كتابته في صورة (من دون @)."
             )
@@ -20966,6 +20966,23 @@ class TalkinBot:
                 name_requests.pop(_norm_user(sender), None)
                 _name_text("تم إلغاء طلب فحص الاسم.")
                 return True
+            if pending_name.get("mode") == "awaiting_method":
+                manual_match = re.fullmatch(r"(?:تعديل الاسم|النص الصحيح)\s*[:：]\s*(.+)", text, re.S)
+                automatic_method = low in {
+                    "1", "تلقائي", "تعديل تلقائي", "الطريقة 1", "طريقة 1",
+                    "عكس الرمز", "تبديل الرمز", "تبديل حول الرمز", "حول الرمز",
+                }
+                if not manual_match and not automatic_method:
+                    _name_text(
+                        "اختر طريقة التعديل:\n"
+                        "1️⃣ تعديل تلقائي حول الرمز الداخلي أو حرف ه/ۿ\n"
+                        "2️⃣ إرسال النص المصحح يدويًا بصيغة: «تعديل الاسم: النص الصحيح»\n"
+                        "بعد المعاينة أرسل «اعتماد الاسم» للحفظ."
+                    )
+                    return True
+                pending_name["mode"] = "repair_ready"
+                pending_name["created_at"] = time.time()
+                text = manual_match.group(1).strip() if manual_match else str(pending_name.get("source_name") or "")
             if pending_name.get("mode") == "awaiting_approval":
                 if low in {"اعتماد الاسم", "اعتمد الاسم", "اعتماد", "نعم", "yes"}:
                     try:
@@ -21006,9 +21023,21 @@ class TalkinBot:
                 _name_text("❌ أرسل اسمًا من 1 إلى 256 حرفًا، أو اكتب إلغاء.")
                 return True
             mode = str(pending_name.get("mode") or "preview")
+            if mode == "repair":
+                pending_name.update(
+                    mode="awaiting_method", source_name=display_name,
+                    candidate_name=display_name, created_at=time.time(),
+                )
+                _name_text(
+                    "✅ تم استلام الاسم. أرسل طريقة التعديل الآن:\n"
+                    "1️⃣ تعديل تلقائي حول الرمز الداخلي أو حرف ه/ۿ\n"
+                    "2️⃣ النص المصحح يدويًا بصيغة: «تعديل الاسم: النص الصحيح»\n"
+                    "بعد المعاينة أرسل «اعتماد الاسم» للحفظ."
+                )
+                return True
             name_requests.pop(_norm_user(sender), None)
             try:
-                card = render_name_preview_card(display_name, corrected=(mode == "repair"))
+                card = render_name_preview_card(display_name, corrected=(mode in {"repair", "repair_ready"}))
                 base = _public_base_url()
                 if not base:
                     raise RuntimeError("رابط الوسائط العامة غير مضبوط")
@@ -21016,7 +21045,7 @@ class TalkinBot:
                 self._verify_public_media_url(url, "image")
                 if _name_media(url) is False:
                     raise RuntimeError("تعذر إرسال صورة المعاينة")
-                if mode == "repair":
+                if mode in {"repair", "repair_ready"}:
                     name_requests[_norm_user(sender)] = {
                         "mode": "awaiting_approval",
                         "source_name": display_name,
