@@ -304,12 +304,41 @@ class CricketIntegration:
     def _private_league_command(self, room: str, sender: str, text: str) -> bool:
         """Master-only league administration; registration stays in DM."""
         low = self._control_key(text)
+        menu_key = self._control_key(sender)
+        menu_pages = getattr(self, "_master_command_menu_pages", None)
+        if not isinstance(menu_pages, dict):
+            menu_pages = self._master_command_menu_pages = {}
+        if low in {"ns", "n", "التالي", "القائمة التالية", "next"} and menu_key in menu_pages:
+            if not self.is_configured_master(sender):
+                menu_pages.pop(menu_key, None)
+                return True
+            menu_pages.pop(menu_key, None)
+            self._send_private(sender, room, (
+                "📋 قائمة أوامر الماستر — 2\n"
+                "━━━━━━━━━━━━\n"
+                "🔨 المزاد العالمي\n"
+                "• تشغيل لعبة مزاد\n"
+                "• إيقاف لعبة مزاد\n"
+                "• افتح المزاد — من الغرفة\n"
+                "• ابدأ المزاد — من الغرفة\n"
+                "• اغلاق المزاد — من الغرفة\n"
+                "• إغلاق المزاد — إيقاف الجولة وتسوية الفائز\n"
+                "━━━━━━━━━━━━\n"
+                "🏏 أوامر فتح مباريات الدوري\n"
+                "• حالة الدوري\n"
+                "• افتح مباراة الدوري@رمز المباراة\n"
+                "• تغيير غرفة فريق@اسم الفريق@الغرفة الجديدة\n"
+                "━━━━━━━━━━━━\n"
+                "🏆 جائزة النهائي: 1000b للفريق الفائز."
+            ))
+            return True
         if low in {"اوامر الدوري", "أوامر الدوري", "اوامر المزاد", "أوامر المزاد", "اوامر الدوري والمزاد", "أوامر الدوري والمزاد", "league auction commands"}:
             if not self.is_configured_master(sender):
                 self._send_private(sender, room, "🔒 قائمة أوامر الدوري والمزاد للماستر المحدد فقط.")
                 return True
+            menu_pages[menu_key] = 2
             menu = (
-                "📋 أوامر الماستر — الدوري والمزاد\n"
+                "📋 قائمة أوامر الماستر — 1\n"
                 "━━━━━━━━━━━━\n"
                 "🏏 دوري الكركيت\n"
                 "• سجل فريق@اسم الفريق@الغرفة@لاعب1\n"
@@ -319,14 +348,7 @@ class CricketIntegration:
                 "• افتح مباراة الدوري@رمز المباراة\n"
                 "• تغيير غرفة فريق@اسم الفريق@الغرفة الجديدة\n"
                 "━━━━━━━━━━━━\n"
-                "🔨 المزاد العالمي\n"
-                "• تشغيل لعبة مزاد\n"
-                "• إيقاف لعبة مزاد\n"
-                "• افتح المزاد — من الغرفة\n"
-                "• ابدأ المزاد — من الغرفة\n"
-                "• اغلاق المزاد — من الغرفة\n"
-                "━━━━━━━━━━━━\n"
-                "⏱️ المزايدة: أرسل الرقم فقط مثل 120m أو 10b أو 120000000."
+                "📌 للقائمة الثانية أرسل ns"
             )
             self._send_private(sender, room, menu)
             return True
