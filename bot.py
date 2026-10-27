@@ -6324,9 +6324,9 @@ def render_billion_card(winner_name, winner_photo_url=""):
                    (255, 224, 145, 255), max(80, text_right - text_left))
     display_name = _display_name_for_image(str(winner_name or "").strip().lstrip("@"))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
-                        display_name, max(28, int(h * 0.038)),
+                        display_name, max(25, int(h * 0.032)),
                         (255, 255, 255, 255), max(80, text_right - text_left),
-                        apply_correction=False, force_ltr=False)
+                        apply_correction=False, force_ltr=True)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
@@ -6404,13 +6404,13 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     name_lines = [raw_name]
     line_ys = (.68,)
     # Keep the million name a little smaller so decorated names remain clear.
-    name_size = max(27, int(h * (.034 if game_key == "million" else .038)))
+    name_size = max(25, int(h * (.030 if game_key == "million" else .034)))
     for line, y_ratio in zip(name_lines, line_ys):
         name_center = ((text_left + text_right) / 2,
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
         _draw_name_centered(draw, name_center, line, name_size,
                             (255, 255, 255, 255), max(80, text_right - text_left),
-                            apply_correction=False, force_ltr=False)
+                            apply_correction=False, force_ltr=True)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
