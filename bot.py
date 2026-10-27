@@ -6323,7 +6323,7 @@ def render_billion_card(winner_name, winner_photo_url=""):
     _draw_centered(d, text_center, "🏆 الفائز بالمليار", max(22, int(h * 0.055)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
-                        str(winner_name or "").lstrip("@"), max(30, int(h * 0.045)),
+                        str(winner_name or "").lstrip("@"), max(28, int(h * 0.038)),
                         (255, 255, 255, 255), max(80, text_right - text_left),
                         apply_correction=True, force_ltr=False)
 
@@ -6415,7 +6415,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
         name_lines = [raw_name]
         line_ys = (.68,)
     # Keep the million name a little smaller so decorated names remain clear.
-    name_size = max(29, int(h * (.038 if game_key == "million" else .042)))
+    name_size = max(27, int(h * (.034 if game_key == "million" else .038)))
     for line, y_ratio in zip(name_lines, line_ys):
         name_center = ((text_left + text_right) / 2,
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
@@ -24131,7 +24131,7 @@ class TalkinBot:
             )
             _draw_name_centered(
                 draw, (w / 2, banner_y + banner_h * .70), str(username or "").lstrip("@"),
-                max(22, int(banner_h * .29)), (255, 255, 255, 255), int(w * .88),
+                max(20, int(banner_h * .25)), (255, 255, 255, 255), int(w * .88),
                 apply_correction=True,
             )
             image = Image.alpha_composite(image, overlay).convert("RGB")
