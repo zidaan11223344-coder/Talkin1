@@ -20647,6 +20647,24 @@ class TalkinBot:
             cleaned.append(room_name)
         if not cleaned:
             return False
+        # Every explicit دخول@ request becomes a saved-room candidate. This
+        # is intentionally done before the language prompt and before the
+        # asynchronous join, so a reconnect cannot lose a newly requested
+        # room while the server is still acknowledging room_join.
+        existing = _persistent_rooms()
+        existing_keys = {_norm_room(value).casefold() for value in existing}
+        added = False
+        for room_name in cleaned:
+            key = _norm_room(room_name).casefold()
+            if key and key not in existing_keys:
+                existing.append(room_name)
+                existing_keys.add(key)
+                added = True
+        if added:
+            _save_persistent_rooms(existing)
+        if not isinstance(getattr(self, "known_rooms", None), set):
+            self.known_rooms = set()
+        self.known_rooms.update(cleaned)
         if not hasattr(self,"_pending_room_language"):
             self._pending_room_language={}
         self._pending_room_language[self._room_language_pending_key(sender)]={
@@ -22627,6 +22645,21 @@ class TalkinBot:
                 if is_private: self.send_private_text(sender, msg)
                 elif room: self.send_room_text(room, msg)
                 return True
+            # Persist explicit manual join targets immediately. The actual
+            # room_join packets still run on the serial background worker, so
+            # saving here prevents a newly requested room from being lost
+            # across a reconnect while its server acknowledgement is pending.
+            saved_rooms = _persistent_rooms()
+            saved_keys = {_norm_room(value).casefold() for value in saved_rooms}
+            for target in rooms:
+                key = _norm_room(target).casefold()
+                if key and key not in saved_keys:
+                    saved_rooms.append(target)
+                    saved_keys.add(key)
+            _save_persistent_rooms(saved_rooms)
+            if not isinstance(getattr(self, "known_rooms", None), set):
+                self.known_rooms = set()
+            self.known_rooms.update(rooms)
             for target in rooms:
                 blocked = _norm_room(target) in getattr(self, "blocked_rooms", set())
                 if blocked:
@@ -23232,6 +23265,17 @@ class TalkinBot:
                 self.connected_rooms = {r for r in self.connected_rooms if _norm_room(r) != blocked_key}
                 self._save_blocked_rooms()
                 _save_persistent_rooms(self.known_rooms)
+            # A manual دخول@ request is also an explicit save request. Store
+            # the room before asking for language so it survives reconnects
+            # even when the server ACK arrives asynchronously.
+            saved_rooms = _persistent_rooms()
+            saved_keys = {_norm_room(value).casefold() for value in saved_rooms}
+            if _norm_room(target).casefold() not in saved_keys:
+                saved_rooms.append(target)
+                _save_persistent_rooms(saved_rooms)
+            if not isinstance(getattr(self, "known_rooms", None), set):
+                self.known_rooms = set()
+            self.known_rooms.add(target)
             # Ask for the language before sending room_join. The previous
             # room-command path joined first and showed the prompt afterward.
             self._begin_join_rooms_language(
