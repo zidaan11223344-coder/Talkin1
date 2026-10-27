@@ -20960,21 +20960,16 @@ class TalkinBot:
                 return True
             if pending_name.get("mode") == "awaiting_method":
                 manual_match = re.fullmatch(r"(?:تعديل الاسم|النص الصحيح)\s*[:：]\s*(.+)", text, re.S)
-                automatic_method = low in {
-                    "1", "تلقائي", "تعديل تلقائي", "الطريقة 1", "طريقة 1",
-                    "عكس الرمز", "تبديل الرمز", "تبديل حول الرمز", "حول الرمز",
-                }
-                if not manual_match and not automatic_method:
+                if not manual_match:
                     _name_text(
-                        "اختر طريقة التعديل:\n"
-                        "1️⃣ تعديل تلقائي حول الرمز الداخلي أو حرف ه/ۿ\n"
-                        "2️⃣ إرسال النص المصحح يدويًا بصيغة: «تعديل الاسم: النص الصحيح»\n"
+                        "أرسل النص المصحح يدويًا فقط بصيغة:\n"
+                        "«تعديل الاسم: النص الصحيح»\n"
                         "بعد المعاينة أرسل «اعتماد الاسم» للحفظ."
                     )
                     return True
                 pending_name["mode"] = "repair_ready"
                 pending_name["created_at"] = time.time()
-                text = manual_match.group(1).strip() if manual_match else str(pending_name.get("source_name") or "")
+                text = manual_match.group(1).strip()
             if pending_name.get("mode") == "awaiting_approval":
                 if low in {"اعتماد الاسم", "اعتمد الاسم", "اعتماد", "نعم", "yes"}:
                     try:
@@ -21021,9 +21016,8 @@ class TalkinBot:
                     candidate_name=display_name, created_at=time.time(),
                 )
                 _name_text(
-                    "✅ تم استلام الاسم. أرسل طريقة التعديل الآن:\n"
-                    "1️⃣ تعديل تلقائي حول الرمز الداخلي أو حرف ه/ۿ\n"
-                    "2️⃣ النص المصحح يدويًا بصيغة: «تعديل الاسم: النص الصحيح»\n"
+                    "✅ تم استلام الاسم. أرسل النص المصحح يدويًا فقط بصيغة:\n"
+                    "«تعديل الاسم: النص الصحيح»\n"
                     "بعد المعاينة أرسل «اعتماد الاسم» للحفظ."
                 )
                 return True
