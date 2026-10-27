@@ -6029,8 +6029,12 @@ def _visual_text_width(draw, text, size):
 def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=1, stroke_fill=(0,0,0,180)):
     return _draw_name_centered(draw, (xy[0], xy[1]+size/2), raw_text, size, fill, 10000)
 
-def _draw_centered(draw, center, raw_text, size, fill, max_width):
-    return _draw_name_centered(draw, center, raw_text, size, fill, max_width, grow_short=False)
+
+def _draw_centered(draw, center, raw_text, size, fill, max_width, *, force_ltr=False):
+    return _draw_name_centered(
+        draw, center, raw_text, size, fill, max_width,
+        grow_short=False, force_ltr=force_ltr,
+    )
 
 
 def _load_sender_avatar(photo_url, size=190):
@@ -6321,7 +6325,7 @@ def render_billion_card(winner_name, winner_photo_url=""):
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
                         str(winner_name or "").lstrip("@"), max(24, int(h * 0.065)),
                         (255, 255, 255, 255), max(80, text_right - text_left),
-                        apply_correction=False)
+                        apply_correction=False, force_ltr=True)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
@@ -6385,11 +6389,11 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
 
     english = str(language or "ar").casefold().startswith("en")
     title = ("Million winner" if game_key == "million" else "Billion winner") if english else (
-        "الفائز بالمليون" if game_key == "million" else "الفائز بالمليار"
+        "فائز لعبة المليون" if game_key == "million" else "فائز لعبة المليار"
     )
     text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .22)
-    _draw_centered(draw, text_center, "🏆 " + title, max(28, int(h * .038)),
-                   (255, 224, 145, 255), max(80, text_right - text_left))
+    _draw_centered(draw, text_center, title, max(28, int(h * .038)),
+                   (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=True)
     source_name = str(winner_name or "").strip().lstrip("@")
     # Game cards must show the exact username received in the chat event.
     # Master-approved image-name corrections are intentionally not applied
@@ -6415,7 +6419,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
         _draw_name_centered(draw, name_center, line, max(32, int(h * .042)),
                             (255, 255, 255, 255), max(80, text_right - text_left),
-                            apply_correction=False)
+                            apply_correction=False, force_ltr=True)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
@@ -6576,13 +6580,14 @@ def render_rare_diamond_winner_card(winner_name, winner_photo_url="", source_pat
     _draw_centered(
         draw, (center_x, panel_box[1] + (panel_box[3] - panel_box[1]) * .32),
         str(title or "💎 الفائز بالألماسة النادرة"), max(27, int(h * .038)),
-        (115, 225, 255, 255), max(80, text_right - text_left),
+        (115, 225, 255, 255), max(80, text_right - text_left), force_ltr=True,
     )
     _draw_name_centered(
         draw, (center_x, panel_box[1] + (panel_box[3] - panel_box[1]) * .70),
         str(winner_name or "").lstrip("@"), max(34, int(h * .045)),
         (255, 255, 255, 255), max(80, text_right - text_left),
         apply_correction=False,
+        force_ltr=True,
     )
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
@@ -6645,6 +6650,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
         34,
         (255, 222, 155, 255),
         header[2] - header[0] - 40,
+        force_ltr=True,
     )
 
     # Winner identity panel near the bottom: name INSIDE the rectangle,
@@ -6679,6 +6685,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
         24,
         (255, 224, 165, 255),
         text_max_w,
+        force_ltr=True,
     )
     _draw_name_centered(
         d,
@@ -6688,6 +6695,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
         (126, 226, 255, 255),
         text_max_w,
         apply_correction=False,
+        force_ltr=True,
     )
 
     try:
