@@ -6322,10 +6322,11 @@ def render_billion_card(winner_name, winner_photo_url=""):
     text_center = ((text_left + text_right) / 2, panel_y + panel_h * 0.32)
     _draw_centered(d, text_center, "🏆 الفائز بالمليار", max(22, int(h * 0.055)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
+    display_name = _display_name_for_image(str(winner_name or "").strip().lstrip("@"))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
-                        str(winner_name or "").lstrip("@"), max(28, int(h * 0.038)),
+                        display_name, max(28, int(h * 0.038)),
                         (255, 255, 255, 255), max(80, text_right - text_left),
-                        apply_correction=True, force_ltr=False)
+                        apply_correction=False, force_ltr=False)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
@@ -6395,11 +6396,9 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     _draw_centered(draw, text_center, title, max(28, int(h * .038)),
                    (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=False)
     source_name = str(winner_name or "").strip().lstrip("@")
-    # Game cards must show the exact username received in the chat event.
-    # Master-approved image-name corrections are intentionally not applied
-    # here; they belong to the separate name-repair flow, not game results.
-    approved_name = False
-    raw_name = source_name
+    # Apply the master-approved spelling only to the image display. The raw
+    # username remains untouched in identity, points, and command handling.
+    raw_name = _display_name_for_image(source_name)
     # Keep the username on one line. _draw_name_centered will reduce the
     # fitted size when a decorated name is wider than the winner panel.
     name_lines = [raw_name]
@@ -6411,7 +6410,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
         _draw_name_centered(draw, name_center, line, name_size,
                             (255, 255, 255, 255), max(80, text_right - text_left),
-                            apply_correction=True, force_ltr=False)
+                            apply_correction=False, force_ltr=False)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
