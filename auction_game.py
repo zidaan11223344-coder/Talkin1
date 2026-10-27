@@ -20,6 +20,7 @@ BID_INCREMENT = 10_000_000
 MAX_PARTICIPANTS = 5
 MIN_PARTICIPANTS_TO_START_EARLY = 3
 BIDDING_DURATION_SECONDS = 60
+TURN_TIMEOUT_SECONDS = 12
 REDEMPTION_BONUS_PERCENT = 5
 MAX_IMAGE_BYTES = 50_000
 
@@ -60,11 +61,13 @@ _TOGGLE_OFF = {"اوقف لعبه مزاد", "اوقف لعبة مزاد", "وق
 
 
 def parse_room_command(text: str) -> str | None:
-    normalized = normalize_command(text)
+    normalized = normalize_command(str(text or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))).translate(str.maketrans({"م": "m", "ب": "b"}))
     for action, aliases in _ROOM_COMMANDS.items():
         if normalized in {normalize_command(alias) for alias in aliases}:
             return action
     if any(normalized.startswith(normalize_command(alias) + " ") for alias in _ROOM_COMMANDS["bid"]):
+        return "bid"
+    if re.fullmatch(r"[0-9]+(?:[mb])?", normalized, re.I):
         return "bid"
     return None
 
@@ -73,7 +76,12 @@ def parse_bid_amount(text: str) -> int | None:
     """Parse an explicit bid amount from Arabic or English bid commands."""
     digits = "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹"
     ascii_digits = "01234567890123456789"
-    normalized = normalize_command(str(text or "").translate(str.maketrans(digits, ascii_digits)))
+    normalized = normalize_command(str(text or "").translate(str.maketrans(digits, ascii_digits))).translate(str.maketrans({"م": "m", "ب": "b"}))
+    if re.fullmatch(r"[0-9]+(?:[mb])?", normalized, re.I):
+        token = normalized
+        suffix = token[-1:].casefold() if token[-1:].casefold() in {"m", "b"} else ""
+        raw = token[:-1] if suffix else token
+        return int(raw) * ({"": 1, "m": 1_000_000, "b": 1_000_000_000}[suffix])
     for alias in sorted(_ROOM_COMMANDS["bid"], key=len, reverse=True):
         prefix = normalize_command(alias)
         if not normalized.startswith(prefix + " "):
@@ -188,6 +196,7 @@ class AuctionGame:
         active["deadline_at"] = started_at + BIDDING_DURATION_SECONDS
         active["passed_since_bid"] = []
         AuctionGame._set_turn(active, 0)
+        active["turn_deadline_at"] = started_at + TURN_TIMEOUT_SECONDS
 
     @staticmethod
     def _set_turn(active: dict, index: int) -> dict | None:
@@ -408,6 +417,7 @@ class AuctionGame:
             del history[:-200]
             current_index = int(active.get("turn_index", 0) or 0)
             self._advance_turn(active, current_index, skip_passed=False)
+            active["turn_deadline_at"] = float(self.clock()) + TURN_TIMEOUT_SECONDS
             state["active"] = active
             self._write(state)
             return {
@@ -444,6 +454,7 @@ class AuctionGame:
                 self._write(state)
             else:
                 self._advance_turn(active, current_index, skip_passed=True)
+                active["turn_deadline_at"] = float(self.clock()) + TURN_TIMEOUT_SECONDS
                 state["active"] = active
                 self._write(state)
                 return {
