@@ -5644,6 +5644,8 @@ def _fallback_font_paths():
         BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
         BASE_DIR/"assets"/"Amiri-Bold.ttf",
         BASE_DIR/"assets"/"DejaVuSans.ttf",
+        BASE_DIR/"assets"/"Unifont.otf",
+        BASE_DIR/"assets"/"UnifontUpper.otf",
         BASE_DIR/"assets"/"NotoSansSymbols2-Regular.ttf",
         BASE_DIR/"assets"/"NotoSansSymbols-Regular.ttf",
         BASE_DIR/"assets"/"Symbola.ttf",
