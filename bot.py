@@ -5293,6 +5293,19 @@ def _shape_name_for_fallback(text):
             pass
     return _embedded_bidi(raw)
 
+
+def _shape_name_for_ltr(text):
+    """Prepare Arabic glyph forms while preserving the user's left-to-right order."""
+    raw = _clean_name_for_image(text)
+    if not raw or not _has_arabic(raw):
+        return raw
+    if arabic_reshaper is not None:
+        try:
+            return arabic_reshaper.reshape(raw)
+        except Exception:
+            pass
+    return raw
+
 _NAME_BIDI_CONTROLS = frozenset(
     "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
 )
@@ -5706,7 +5719,7 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
     # Raqm expects logical Arabic text and performs shaping plus bidi itself.
     # Do not pre-reverse it, otherwise the generated card shows mirrored text.
     base_font = _gift_font(raw_text, int(size))
-    native_complete = native_rtl and all(
+    native_complete = native_rtl and direction != "ltr" and all(
         _font_has_glyph(base_font, ch) or unicodedata.category(ch).startswith("M")
         for ch in raw_text if not ch.isspace()
     )
@@ -5714,20 +5727,20 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
         try:
             draw.text(xy, raw_text, font=base_font, fill=fill,
                       stroke_width=stroke_width, stroke_fill=stroke_fill,
-                      direction="rtl", language="ar")
+                      direction=direction, language="ar" if direction == "rtl" else None)
         except Exception:
             draw.text(xy, raw_text, font=base_font, fill=fill,
                       stroke_width=stroke_width, stroke_fill=stroke_fill)
         try:
             return xy[0] + draw.textlength(raw_text, font=base_font,
-                                           direction="rtl", language="ar")
+                                           direction=direction, language="ar" if direction == "rtl" else None)
         except Exception:
             return xy[0] + base_font.getlength(raw_text)
 
     # Decorative names often mix Arabic with Egyptian glyphs, chess symbols,
     # musical symbols, and tatweel. No single font contains all of them. Shape
     # and resolve the complete bidi string once before splitting it by font.
-    visual = _shape_name_for_fallback(raw_text)
+    visual = _shape_name_for_ltr(raw_text) if direction == "ltr" else _shape_name_for_fallback(raw_text)
     if not visual:
         return xy[0]
     base=_gift_font(visual,int(size))
@@ -5808,7 +5821,7 @@ def _visual_rtl_text(text):
 def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
-def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True):
+def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True, force_ltr=False):
     """Center the exact username using mixed fonts and color emoji."""
     raw_text = _clean_name_for_image(raw_text)
     if apply_correction:
@@ -5840,6 +5853,8 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         # Keep ordinary Arabic logical text for libraqm: draw.text(direction=rtl)
         # will shape and order it. Only pre-shape when a mixed-font fallback is
         # genuinely required, otherwise the title itself gets reversed twice.
+        if force_ltr:
+            return _shape_name_for_ltr(value)
         if _has_arabic(value):
             candidate = _gift_font(value, current_size)
             complete = all(
@@ -5851,7 +5866,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                     return value
             except Exception:
                 pass
-        return _shape_name_for_fallback(value)
+        return _shape_name_for_ltr(value) if force_ltr else _shape_name_for_fallback(value)
 
     while size > 14:
         visual = visual_for_centered(raw_text, size)
@@ -5903,6 +5918,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                 _draw_name_visual(
                     draw, (cursor, y), "".join(normal), size, fill,
                     stroke_width=2, stroke_fill=(0, 0, 0, 220),
+                    direction="ltr" if force_ltr else "rtl",
                 )
                 cursor += normal_width
                 normal = []
@@ -5917,6 +5933,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         _draw_name_visual(
             draw, (cursor, y), "".join(normal), size, fill,
             stroke_width=2, stroke_fill=(0, 0, 0, 220),
+            direction="ltr" if force_ltr else "rtl",
         )
 
 def render_name_preview_card(name, *, corrected=False):
@@ -5934,7 +5951,8 @@ def render_name_preview_card(name, *, corrected=False):
     _draw_centered(draw, (800, 170), title, 54, (255, 224, 145, 255), 1450)
     draw.line((100, 245, 1500, 245), fill=(244, 196, 92, 220), width=3)
     _draw_name_centered(draw, (800, 380), display_name, 82,
-                        (255, 255, 255, 255), 1430, apply_correction=False)
+                        (255, 255, 255, 255), 1430, apply_correction=False,
+                        force_ltr=True)
     image = image.convert("RGB")
     out_dir = BASE_DIR / "generated_welcomes"
     out_dir.mkdir(parents=True, exist_ok=True)
