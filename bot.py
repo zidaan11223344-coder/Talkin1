@@ -6321,7 +6321,7 @@ def render_billion_card(winner_name, winner_photo_url=""):
     text_right = panel[2] - max(18, int(w * 0.035))
     text_center = ((text_left + text_right) / 2, panel_y + panel_h * 0.32)
     _draw_centered(d, text_center, "🏆 الفائز بالمليار", max(22, int(h * 0.055)),
-                   (255, 224, 145, 255), max(80, text_right - text_left))
+                   (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=True)
     display_name = _display_name_for_image(str(winner_name or "").strip().lstrip("@"))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
                         display_name, max(25, int(h * 0.032)),
@@ -6394,7 +6394,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     )
     text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .22)
     _draw_centered(draw, text_center, title, max(28, int(h * .038)),
-                   (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=False)
+                   (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=True)
     source_name = str(winner_name or "").strip().lstrip("@")
     # Apply the master-approved spelling only to the image display. The raw
     # username remains untouched in identity, points, and command handling.
