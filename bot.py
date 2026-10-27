@@ -5232,21 +5232,30 @@ def _shape_name_for_fallback(text):
                 or 0x13000 <= ord(ch) <= 0x1342F
                 or 0x1D100 <= ord(ch) <= 0x1D1FF
             )
-        # Names framed by ornaments at both edges already have the same
-        # visual order as the room text. Do not apply the internal-symbol swap
-        # to them, even if another decorative mark exists in the middle.
-        if is_ornament(raw[0]) and is_ornament(raw[-1]):
+        # Strip only the ornamental frame at both edges. It must be restored
+        # unchanged after the internal text runs are rearranged.
+        left = 0
+        while left < len(raw) and is_ornament(raw[left]):
+            left += 1
+        right = len(raw)
+        while right > left and is_ornament(raw[right - 1]):
+            right -= 1
+        if left and right < len(raw):
+            edge_prefix, core, edge_suffix = raw[:left], raw[left:right], raw[right:]
+        else:
+            edge_prefix, core, edge_suffix = "", raw, ""
+        if not core:
             return raw
         internal = next(
-            (index for index, ch in enumerate(raw)
-             if is_ornament(ch) and index > 0 and index < len(raw) - 1),
+            (index for index, ch in enumerate(core)
+             if is_ornament(ch) and index > 0 and index < len(core) - 1),
             None,
         )
         if internal is not None:
             end = internal + 1
-            while end < len(raw) and is_ornament(raw[end]):
+            while end < len(core) and is_ornament(core[end]):
                 end += 1
-            return raw[end:] + raw[internal:end] + raw[:internal]
+            return edge_prefix + core[end:] + core[internal:end] + core[:internal] + edge_suffix
         return raw
     if arabic_reshaper is not None and get_display is not None:
         try:
