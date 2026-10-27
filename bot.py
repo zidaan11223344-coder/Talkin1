@@ -6429,7 +6429,7 @@ def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
     avatar_y = h + margin
     _paste_avatar_safe(canvas, avatar, (avatar_x, avatar_y))
 
-    name = "@" + str(publisher_name or "").strip().lstrip("@")
+    name = str(publisher_name or "").strip().lstrip("@")
     font_size = max(18, int(avatar_size * .30))
     try:
         measured = int(_visual_text_width(d, name, font_size))
@@ -17496,7 +17496,7 @@ class TalkinBot:
                 _paste_avatar_safe(img, avatar, (36, 41))
             d.text((W//2,38), "🏆 الفائز" if state.get("lang")!="en" else "🏆 WINNER",
                    fill=(255,215,80), font=small, anchor="ma")
-            d.text((W//2,80), f"@{str(winner_name).lstrip('@')}",
+            d.text((W//2,80), str(winner_name).lstrip('@'),
                    fill=(255,255,255), font=title_font, anchor="ma")
         else:
             d.text((W//2,38), "السلم والثعبان" if state.get("lang")!="en" else "SNAKE & LADDERS", fill=(255,215,80), font=title_font, anchor="ma")
@@ -17730,7 +17730,7 @@ class TalkinBot:
                 _paste_avatar_safe(img, avatar, (left+20, panel_y0+14))
             d.text((W//2, panel_y0+31), "🏆 الفائز" if state.get("lang")!="en" else "🏆 WINNER",
                    fill=(245,205,80), font=_gift_font("1",22), anchor="ma")
-            d.text((W//2, panel_y0+70), f"@{str(winner_name).lstrip('@')}",
+            d.text((W//2, panel_y0+70), str(winner_name).lstrip('@'),
                    fill=(255,255,255), font=_gift_font("1",26), anchor="ma")
 
         out=BASE_DIR/"generated_games"/f"snake_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
@@ -17978,7 +17978,7 @@ class TalkinBot:
                 _paste_avatar_safe(img, avatar, (ox+20, panel_y0+14))
             d.text((ox+15*cell//2, panel_y0+31), "🏆 Winner" if state.get("lang") == "en" else "🏆 الفائز",
                    fill=(245,205,80), font=_gift_font("1",22), anchor="ma")
-            d.text((ox+15*cell//2, panel_y0+70), f"@{str(winner_name).lstrip('@')}",
+            d.text((ox+15*cell//2, panel_y0+70), str(winner_name).lstrip('@'),
                    fill=(255,255,255), font=_gift_font("1",26), anchor="ma")
         out=BASE_DIR/"generated_games"/f"ludo_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
         img.save(out,"JPEG",quality=88,optimize=True); return out
