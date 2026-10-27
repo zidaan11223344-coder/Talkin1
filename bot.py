@@ -5918,7 +5918,11 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                 width += metrics(ch, font, ch)
         if width <= max_width:
             break
-        if not compacted:
+        # English/decorative usernames must remain exact. For those names,
+        # keep every ornament and let the fitted font size shrink instead.
+        # Compacting is reserved for Arabic-containing names whose tiny
+        # stacked marks can otherwise make the text unreadable.
+        if not compacted and _has_arabic(raw_text):
             compact = _compact_name_for_image(raw_text)
             if compact and compact != raw_text:
                 raw_text = compact
