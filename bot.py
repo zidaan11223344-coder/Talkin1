@@ -5306,11 +5306,21 @@ def _save_image_name_correction(source_name, display_name):
     records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
     if not isinstance(records, dict):
         records = {}
-    records[key] = {
+    correction = {
         "source_name": source,
         "display_name": display,
         "updated_at": time.time(),
     }
+    # Keep both spellings addressable. The platform may report the user's
+    # original spelling in one event and the manually corrected spelling in a
+    # later event; either must resolve to the approved display name.
+    records[key] = correction
+    display_key = _image_name_key(display)
+    if display_key:
+        records[display_key] = {
+            **correction,
+            "source_name": source,
+        }
     _save_local_json(NAME_IMAGE_CORRECTIONS_FILE, records)
     return display
 

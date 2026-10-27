@@ -123,6 +123,15 @@ def test_master_private_name_repair_and_check_commands_send_preview_image(tmp_pa
     ]
 
 
+def test_approved_name_correction_resolves_old_and_current_username(tmp_path):
+    old_name = "الاسم_السابق"
+    corrected_name = "∫♚∫الاسم_الجديد∫♚∫"
+    with patch.object(bot_module, "NAME_IMAGE_CORRECTIONS_FILE", tmp_path / "names.json"):
+        bot_module._save_image_name_correction(old_name, corrected_name)
+        assert bot_module._display_name_for_image(old_name) == corrected_name
+        assert bot_module._display_name_for_image(corrected_name) == corrected_name
+
+
 def test_master_can_post_personalized_million_and_billion_preview_to_command_room(tmp_path):
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot.stock_pending = {}
