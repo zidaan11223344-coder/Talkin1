@@ -5337,15 +5337,8 @@ def _compact_name_for_image(text):
         category = unicodedata.category(ch)
         if category.startswith(("M", "C")) or ch == "ـ":
             continue
-        if category.startswith("N") or ch in " ._-":
+        if category.startswith(("L", "N")) or ch in " ._-":
             kept.append(ch)
-        elif category.startswith("L"):
-            # Keep common readable scripts after NFKC, but drop obscure
-            # letter-like ornament blocks (for example ꪻ/𖹭) that render as
-            # oversized glyphs or tofu in chat fonts.
-            script_name = unicodedata.name(ch, "")
-            if any(script in script_name for script in ("LATIN", "ARABIC", "GREEK", "CYRILLIC", "HEBREW")):
-                kept.append(ch)
     compact = "".join(kept)
     return compact.strip() or normalized.strip()
 
