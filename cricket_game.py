@@ -1099,6 +1099,7 @@ class CricketGame:
         if innings_over:
             self._emit(data, result_rooms, result_text, tuple(images))
             if int(match.get("innings", 1)) == 1:
+                first_innings_score = int(scores.get(batting, 0))
                 match["innings"] = 2
                 match["batting_team"] = bowling
                 match["balls"] = 0
@@ -1109,7 +1110,7 @@ class CricketGame:
                 match["wicket_streak_bowler"] = ""
                 match["choices"] = {}
                 self._set_initial_players(match)
-                target = attack_score + 1
+                target = first_innings_score + 1
                 self._emit(data, participants, f"🏁 الشوط الأول انتهى\n🎯 الهدف: {target}")
                 self._emit_room_messages(data, self._turn_messages(match))
             else:

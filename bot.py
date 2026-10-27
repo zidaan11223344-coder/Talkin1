@@ -915,7 +915,7 @@ _STATE_FILE_NAMES = (
     "masters.json", "vip_users.json", "verified_users.json", "points.json",
     "messages.json", "published_posts.json", "media_stats.json", "game_stats.json", "game_levels.json", "mining_game.json", "shop_data.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
-    "moderation.json", "mf.json", "filter_bans.json", "bot_bans.json", "last_bot_bans.json", "money_game_win_state.json", "publish_bans.json", "mvip_masters.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
+    "moderation.json", "mf.json", "filter_bans.json", "bot_bans.json", "last_bot_bans.json", "money_game_win_state.json", "publish_bans.json", "mvip_masters.json", "name_image_corrections.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
     "custom_commands.json", "repair_state.json", "wager_state.json", "cricket_state.json", "last_action.json", "backup_manifest.json",
 )
 
@@ -6030,10 +6030,10 @@ def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=1, stroke_fill
     return _draw_name_centered(draw, (xy[0], xy[1]+size/2), raw_text, size, fill, 10000)
 
 
-def _draw_centered(draw, center, raw_text, size, fill, max_width, *, force_ltr=False):
+def _draw_centered(draw, center, raw_text, size, fill, max_width, *, force_ltr=False, apply_correction=True):
     return _draw_name_centered(
         draw, center, raw_text, size, fill, max_width,
-        grow_short=False, force_ltr=force_ltr,
+        grow_short=False, force_ltr=force_ltr, apply_correction=apply_correction,
     )
 
 
@@ -6325,7 +6325,7 @@ def render_billion_card(winner_name, winner_photo_url=""):
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
                         str(winner_name or "").lstrip("@"), max(24, int(h * 0.065)),
                         (255, 255, 255, 255), max(80, text_right - text_left),
-                        apply_correction=False, force_ltr=True)
+                        apply_correction=True, force_ltr=True)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
@@ -6419,7 +6419,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
         _draw_name_centered(draw, name_center, line, max(32, int(h * .042)),
                             (255, 255, 255, 255), max(80, text_right - text_left),
-                            apply_correction=False, force_ltr=True)
+                            apply_correction=True, force_ltr=True)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
@@ -6586,7 +6586,7 @@ def render_rare_diamond_winner_card(winner_name, winner_photo_url="", source_pat
         draw, (center_x, panel_box[1] + (panel_box[3] - panel_box[1]) * .70),
         str(winner_name or "").lstrip("@"), max(34, int(h * .045)),
         (255, 255, 255, 255), max(80, text_right - text_left),
-        apply_correction=False,
+        apply_correction=True,
         force_ltr=True,
     )
     image = Image.alpha_composite(image, overlay).convert("RGB")
@@ -6694,7 +6694,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
         38,
         (126, 226, 255, 255),
         text_max_w,
-        apply_correction=False,
+        apply_correction=True,
         force_ltr=True,
     )
 
@@ -17974,7 +17974,7 @@ class TalkinBot:
                    fill=(255,215,80), font=small, anchor="ma")
             _draw_name_centered(
                 d, (W//2, 80), str(winner_name).lstrip('@'), 34,
-                (255,255,255), W - 180, apply_correction=False,
+                (255,255,255), W - 180, apply_correction=True,
             )
         else:
             d.text((W//2,38), "السلم والثعبان" if state.get("lang")!="en" else "SNAKE & LADDERS", fill=(255,215,80), font=title_font, anchor="ma")
@@ -18210,7 +18210,7 @@ class TalkinBot:
                    fill=(245,205,80), font=_gift_font("1",18), anchor="ma")
             _draw_name_centered(
                 d, (W//2, panel_y0+80), str(winner_name).lstrip('@'), 24,
-                (255,255,255), W - 180, apply_correction=False,
+                (255,255,255), W - 180, apply_correction=True,
             )
 
         out=BASE_DIR/"generated_games"/f"snake_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
@@ -18460,7 +18460,7 @@ class TalkinBot:
                    fill=(245,205,80), font=_gift_font("1",18), anchor="ma")
             _draw_name_centered(
                 d, (ox+15*cell//2, panel_y0+80), str(winner_name).lstrip('@'), 24,
-                (255,255,255), 15*cell - 180, apply_correction=False,
+                (255,255,255), 15*cell - 180, apply_correction=True,
             )
         out=BASE_DIR/"generated_games"/f"ludo_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
         img.save(out,"JPEG",quality=88,optimize=True); return out
