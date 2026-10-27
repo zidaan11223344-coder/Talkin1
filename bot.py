@@ -5306,6 +5306,26 @@ def _save_image_name_correction(source_name, display_name):
     records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
     if not isinstance(records, dict):
         records = {}
+    # Replace the user's previous correction chain instead of accumulating
+    # stale aliases when the master uses "تعديل اسم" again.
+    related_names = {key, _image_name_key(display)}
+    changed = True
+    while changed:
+        changed = False
+        for record in records.values():
+            if not isinstance(record, dict):
+                continue
+            record_names = {
+                _image_name_key(record.get("source_name", "")),
+                _image_name_key(record.get("display_name", "")),
+            }
+            overlap = record_names & related_names
+            if overlap and not record_names.issubset(related_names):
+                before = len(related_names)
+                related_names.update(record_names)
+                changed = len(related_names) != before
+    for old_key in related_names:
+        records.pop(old_key, None)
     correction = {
         "source_name": source,
         "display_name": display,
@@ -20925,7 +20945,7 @@ class TalkinBot:
         name_image_commands = {
             "فحص اسم": "preview",
             "اصلاح اسم": "repair", "إصلاح اسم": "repair",
-            "تعديل اسم": "repair", "تعديل الاسم": "repair",
+            "تعديل اسم": "edit", "تعديل الاسم": "edit",
         }
         name_image_mode = name_image_commands.get(low)
         if name_image_mode:
@@ -20942,6 +20962,9 @@ class TalkinBot:
                 "is_private": bool(is_private), "room": str(room or ""),
             }
             prompt = (
+                "أرسل اسم المستخدم الحقيقي المراد تعديلُه كما يظهر في المحادثة (من دون @). "
+                "بعد ذلك سأطلب منك نص التعديل اليدوي، وعند «اعتماد الاسم» سأحذف التصحيح السابق وأحفظ الجديد."
+                if name_image_mode == "edit" else
                 "أرسل الاسم الذي عدّله البوت سابقًا والمراد تعديلُه مرة أخرى كما يظهر في المحادثة (من دون @). "
                 "بعد ذلك سأطلب منك نص التعديل اليدوي، ثم أرسل المعاينة ولا يُحفظ الاسم إلا بعد إرسال «اعتماد الاسم»."
                 if name_image_mode == "repair" else
@@ -21024,7 +21047,7 @@ class TalkinBot:
                 _name_text("❌ أرسل اسمًا من 1 إلى 256 حرفًا، أو اكتب إلغاء.")
                 return True
             mode = str(pending_name.get("mode") or "preview")
-            if mode == "repair":
+            if mode in {"repair", "edit"}:
                 pending_name.update(
                     mode="awaiting_method", source_name=display_name,
                     candidate_name=display_name, created_at=time.time(),
