@@ -1073,6 +1073,7 @@ class CricketGame:
             )
             images.append(render_ball_image(
                 match_id=str(match.get("id") or "match"),
+                innings=int(match.get("innings", 1)),
                 ball_no=ball_no,
                 number=bat_value,
                 out=(bat_value == bowl_value),

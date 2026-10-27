@@ -175,14 +175,16 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
     return path.name
 
 
-def render_ball_image(*, match_id: str, ball_no: int, number: int, out: bool = False,
+def render_ball_image(*, match_id: str, innings: int = 1, ball_no: int, number: int, out: bool = False,
                       team_asset: str | None = None,
                       output_dir: str | Path | None = None) -> str:
     """Create a per-ball card using the fixed team identity (team 1 blue, team 2 red)."""
     target_dir = Path(output_dir) if output_dir else OUTPUT_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(ch for ch in str(match_id) if ch.isalnum())[:20] or "match"
-    path = target_dir / f"cricket_result_ball_{safe_id}_{int(ball_no)}.png"
+    # Ball numbers restart at one in innings two; include innings in the path
+    # so later cards never overwrite earlier cards in the event queue.
+    path = target_dir / f"cricket_result_ball_{safe_id}_i{int(innings)}_{int(ball_no)}.png"
     canvas = Image.new("RGBA", (900, 760), (8, 15, 30, 255))
     draw = ImageDraw.Draw(canvas)
     accent = (232, 62, 83, 255) if out else (35, 157, 255, 255)
