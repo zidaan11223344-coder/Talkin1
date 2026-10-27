@@ -61,13 +61,17 @@ _TOGGLE_OFF = {"اوقف لعبه مزاد", "اوقف لعبة مزاد", "وق
 
 
 def parse_room_command(text: str) -> str | None:
-    normalized = normalize_command(str(text or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))).translate(str.maketrans({"م": "m", "ب": "b"}))
+    # Do not translate Arabic letters globally: commands such as «افتح المزاد»
+    # and «مزايده» contain م/ب as ordinary letters. Translate suffixes only
+    # after command aliases have been checked.
+    normalized = normalize_command(str(text or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")))
     for action, aliases in _ROOM_COMMANDS.items():
         if normalized in {normalize_command(alias) for alias in aliases}:
             return action
     if any(normalized.startswith(normalize_command(alias) + " ") for alias in _ROOM_COMMANDS["bid"]):
         return "bid"
-    if re.fullmatch(r"[0-9]+(?:[mb])?", normalized, re.I):
+    numeric = normalized.translate(str.maketrans({"م": "m", "ب": "b"}))
+    if re.fullmatch(r"[0-9]+(?:[mb])?", numeric, re.I):
         return "bid"
     return None
 
