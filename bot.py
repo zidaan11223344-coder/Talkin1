@@ -20912,7 +20912,11 @@ class TalkinBot:
         text=str(body or "").strip()
         low=text.casefold()
 
-        name_image_commands = {"فحص اسم": "preview", "اصلاح اسم": "repair", "إصلاح اسم": "repair"}
+        name_image_commands = {
+            "فحص اسم": "preview",
+            "اصلاح اسم": "repair", "إصلاح اسم": "repair",
+            "تعديل اسم": "repair", "تعديل الاسم": "repair",
+        }
         name_image_mode = name_image_commands.get(low)
         if name_image_mode:
             if not _is_primary_master(sender):

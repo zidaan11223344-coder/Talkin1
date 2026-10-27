@@ -106,7 +106,7 @@ def test_master_private_name_repair_and_check_commands_send_preview_image(tmp_pa
     ), patch.object(bot_module, "render_name_preview_card", side_effect=fake_render), patch.object(
         bot_module, "_save_image_name_correction", side_effect=lambda source, corrected: saved.append((source, corrected))
     ):
-        assert bot._handle_management_command_impl("", "اصلاح اسم", "Master", is_private=True)
+        assert bot._handle_management_command_impl("", "تعديل اسم", "Master", is_private=True)
         assert "أرسل الاسم" in sent_text[-1][1]
         assert bot._handle_management_command_impl("", ornate, "Master", is_private=True)
         assert "النص المصحح يدويًا فقط" in sent_text[-1][1]
