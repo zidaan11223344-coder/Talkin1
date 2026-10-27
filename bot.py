@@ -5232,6 +5232,11 @@ def _shape_name_for_fallback(text):
                 or 0x13000 <= ord(ch) <= 0x1342F
                 or 0x1D100 <= ord(ch) <= 0x1D1FF
             )
+        # Names framed by ornaments at both edges already have the same
+        # visual order as the room text. Do not apply the internal-symbol swap
+        # to them, even if another decorative mark exists in the middle.
+        if is_ornament(raw[0]) and is_ornament(raw[-1]):
+            return raw
         internal = next(
             (index for index, ch in enumerate(raw)
              if is_ornament(ch) and index > 0 and index < len(raw) - 1),

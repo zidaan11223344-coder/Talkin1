@@ -79,6 +79,8 @@ def test_decorated_arabic_names_swap_runs_around_internal_symbols_without_at():
     assert bot_module._shape_name_for_fallback(first) == (
         first[symbol_end:] + first[symbol_at:symbol_end] + first[:symbol_at]
     )
+    edge_decorated = samples[2]
+    assert bot_module._shape_name_for_fallback(edge_decorated) == edge_decorated
 
 
 def test_master_private_name_repair_and_check_commands_send_preview_image(tmp_path):
