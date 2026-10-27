@@ -3468,13 +3468,23 @@ def _game_name_key(name):
     """Compare decorated usernames without changing their displayed form."""
     raw = unicodedata.normalize("NFKC", str(name or "")).strip().lstrip("@")
     # Talkin names commonly contain ornamental symbols, tatweel, zero-width
-    # joiners, and Arabic combining marks. Ignore those only for lookup; keep
-    # the original spelling for the welcome text.
-    compact = "".join(
-        char for char in raw
-        if not unicodedata.category(char).startswith(("M", "P", "S", "C", "Z"))
-        and not (0x13000 <= ord(char) <= 0x1345F)  # ornamental Egyptian-hieroglyph brackets
-    )
+    # joiners, and Arabic combining marks. Ignore decorative edge marks only
+    # for lookup; preserve a meaningful symbol between name characters. For
+    # example, SOU☀REA and SOUREA are two different Talkin accounts, not two
+    # spellings of one account. Keeping that internal separator also prevents
+    # their game history and level welcome from being merged.
+    compact_chars = []
+    for index, char in enumerate(raw):
+        category = unicodedata.category(char)
+        if category.startswith(("M", "C", "Z")) or (0x13000 <= ord(char) <= 0x1345F):
+            continue
+        if category.startswith(("P", "S")):
+            previous = raw[index - 1] if index > 0 else ""
+            following = raw[index + 1] if index + 1 < len(raw) else ""
+            if not (previous.isalnum() and following.isalnum()):
+                continue
+        compact_chars.append(char)
+    compact = "".join(compact_chars)
     compact = compact.replace("ـ", "")
     return (compact or raw).casefold()
 
