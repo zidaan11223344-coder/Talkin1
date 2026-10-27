@@ -7470,6 +7470,12 @@ class TalkinBot:
             name="room-broadcast-worker", daemon=True,
         )
         self._room_broadcast_worker.start()
+        self._private_broadcast_queue = queue.Queue(maxsize=8)
+        self._private_broadcast_worker = threading.Thread(
+            target=self._private_broadcast_worker_loop,
+            name="private-broadcast-worker", daemon=True,
+        )
+        self._private_broadcast_worker.start()
         self._silent_master_local = threading.local()
         self._master_reply_local = threading.local()
         self.http = requests.Session()
@@ -9461,6 +9467,60 @@ class TalkinBot:
             self._room_broadcast_worker.start()
         try:
             work_queue.put_nowait((str(requester or "").strip(), str(text or "")))
+            return True
+        except queue.Full:
+            return False
+
+    def _private_broadcast_worker_loop(self):
+        """Deliver master private broadcasts away from the event worker."""
+        work_queue = self._private_broadcast_queue
+        while True:
+            targets, payload, requester = work_queue.get()
+            try:
+                delay = max(0.05, float(os.getenv("PRIVATE_BROADCAST_DELAY", "0.15") or 0.15))
+                sent = 0
+                failed = 0
+                total = len(targets)
+                for username in targets:
+                    try:
+                        if self.send_private_text(username, payload):
+                            sent += 1
+                        else:
+                            failed += 1
+                    except Exception as exc:
+                        failed += 1
+                        self.log("[BROADCAST] failed", username, repr(exc))
+                    if delay:
+                        time.sleep(delay)
+                if requester:
+                    self.send_private_text(
+                        requester,
+                        f"📣 اكتمل البث الخاص.\n👥 المستهدفون: {total}\n"
+                        f"✅ تم الإرسال: {sent}\n❌ تعذر الإرسال: {failed}",
+                    )
+                self.log(f"[BROADCAST] private completed total={total} sent={sent} failed={failed}")
+            except Exception as exc:
+                self.log("[BROADCAST] private background delivery failed:", repr(exc))
+                if requester:
+                    try:
+                        self.send_private_text(requester, "❌ تعذر إكمال بث الرسالة الخاصة؛ راجع سجل البوت.")
+                    except Exception:
+                        pass
+            finally:
+                work_queue.task_done()
+
+    def _queue_private_broadcast(self, targets, payload, requester):
+        """Queue one private broadcast; never block the WebSocket event worker."""
+        work_queue = getattr(self, "_private_broadcast_queue", None)
+        if work_queue is None:
+            work_queue = self._private_broadcast_queue = queue.Queue(maxsize=8)
+            self._private_broadcast_worker = threading.Thread(
+                target=self._private_broadcast_worker_loop,
+                name="private-broadcast-worker", daemon=True,
+            )
+            self._private_broadcast_worker.start()
+        try:
+            work_queue.put_nowait((list(targets), str(payload or ""), str(requester or "").strip()))
             return True
         except queue.Full:
             return False
@@ -21675,8 +21735,8 @@ class TalkinBot:
                 return True
             english = text.casefold().startswith("room message@")
             if self._queue_room_broadcast(message_text, sender):
-                ack = ("📨 Background broadcast started in the background queue; a delivery report will follow."
-                       if english else "✅ تم قبول طلبك؛ سأبلغك عند الانتهاء من إرسال الرسالة إلى كل الغرف.")
+                ack = ("⏳ Your request is being handled in the background; a delivery report will follow."
+                       if english else "⏳ جاري تلبية طلبك... سيتم إبلاغك بعد انتهاء الإرسال إلى كل الغرف.")
                 self.send_private_text(sender, ack)
             else:
                 busy = ("⏳ The room broadcast queue is full; please retry shortly."
@@ -21716,36 +21776,13 @@ class TalkinBot:
             if not recipients:
                 self.send_private_text(sender, "⚠️ لم أجد مستخدمين معروفين لإرسال الرسالة لهم.")
                 return True
-            self.send_private_text(sender, f"✅ تم قبول طلبك؛ سأبلغك عند الانتهاء من إرسال الرسالة الخاصة إلى {len(recipients)} مستخدم.")
-
-            def _broadcast_worker(targets, payload, requester):
-                delay = max(0.05, float(os.getenv("PRIVATE_BROADCAST_DELAY", "0.15")))
-                sent = 0
-                failed = 0
-                total = len(targets)
-                for username in targets:
-                    try:
-                        if self.send_private_text(username, payload):
-                            sent += 1
-                        else:
-                            failed += 1
-                    except Exception as exc:
-                        failed += 1
-                        self.log("[BROADCAST] failed", username, repr(exc))
-                    if delay:
-                        time.sleep(delay)
+            if self._queue_private_broadcast(recipients, message_text, sender):
                 self.send_private_text(
-                    requester,
-                    f"📣 اكتمل البث الخاص.\n👥 المستهدفون: {total}\n✅ تم الإرسال: {sent}\n❌ تعذر الإرسال: {failed}"
+                    sender,
+                    "⏳ جاري تلبية طلبك... سيتم إبلاغك بعد انتهاء إرسال الرسالة الخاصة."
                 )
-                self.log(f"[BROADCAST] completed total={total} sent={sent} failed={failed}")
-
-            threading.Thread(
-                target=_broadcast_worker,
-                args=(recipients, message_text, sender),
-                daemon=True,
-                name="private-broadcast",
-            ).start()
+            else:
+                self.send_private_text(sender, "⏳ يوجد بث خاص قيد التنفيذ؛ أعد المحاولة بعد قليل.")
             return True
 
         # The protection menu and all of its numbered settings are private and
