@@ -115,7 +115,9 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
     balls = {str(k).lstrip("@"): int(v) for k, v in (player_balls or {}).items()}
     awards = {str(k).lstrip("@"): int(v) for k, v in (player_awards or {}).items()}
 
-    W, H = 1600, 960
+    # Four-player teams need vertical room for the hero area plus four
+    # two-line player rows; the previous 960px canvas clipped the lower rows.
+    W, H = 1600, 1240
     img = Image.new("RGBA", (W, H), (7, 13, 27, 255))
     bg = Image.new("RGBA", (W, H), (7, 13, 27, 255))
     bg = bg.filter(ImageFilter.GaussianBlur(1))
@@ -128,8 +130,8 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
     _text(draw, (W // 2, 132), f"الفائز: {winner}", _font(30), anchor="mm", fill=white, rtl=True)
 
     panels = [
-        ((55, 190, W // 2 - 18, 875), str(team1_name), str(team1_label), p1, int(team1_score), blue, "cricket_attack_blue.png"),
-        ((W // 2 + 18, 190, W - 55, 875), str(team2_name), str(team2_label), p2, int(team2_score), red, "cricket_defense_red.png"),
+        ((55, 190, W // 2 - 18, H - 90), str(team1_name), str(team1_label), p1, int(team1_score), blue, "cricket_attack_blue.png"),
+        ((W // 2 + 18, 190, W - 55, H - 90), str(team2_name), str(team2_label), p2, int(team2_score), red, "cricket_defense_red.png"),
     ]
     for box, room_name, team_label, players_list, total, accent, hero in panels:
         draw.rounded_rectangle(box, radius=28, fill=(24, 35, 56, 255), outline=accent, width=5)
