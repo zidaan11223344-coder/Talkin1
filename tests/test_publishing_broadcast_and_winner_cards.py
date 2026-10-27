@@ -80,7 +80,7 @@ def test_decorated_arabic_names_swap_runs_around_internal_symbols_without_at():
         first[symbol_end:] + first[symbol_at:symbol_end] + first[:symbol_at]
     )
     edge_decorated = samples[2]
-    edge_expected = "∫♚∫ــ𓏺𓏺ـيّـــّٰـبــۃۿاݪـــۛــ⃮ـ∫♚∫"
+    edge_expected = "∫♚∫ـيّـــّٰـبــۃ𓏺𓏺اݪـــۛــ⃮ـۿــ∫♚∫"
     assert bot_module._shape_name_for_fallback(edge_decorated) == edge_expected
     assert bot_module._shape_name_for_fallback(edge_decorated).startswith("∫♚∫")
     assert bot_module._shape_name_for_fallback(edge_decorated).endswith("∫♚∫")
