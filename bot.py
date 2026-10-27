@@ -3140,6 +3140,12 @@ def _auto_reply_key(value):
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _departure_trigger_key(value):
+    """Return a departure key only for one actual alphabetic character."""
+    key = _auto_reply_key(value)
+    return key if len(key) == 1 and key.isalpha() else ""
+
+
 def _normalize_lang_choice(val):
     """Normalize 1/2 language selection from Arabic/English numerals or words."""
     s = str(val or "").strip().casefold()
@@ -7862,9 +7868,9 @@ class TalkinBot:
         fixed = {}
         if isinstance(raw, dict):
             for trigger, replies in raw.items():
-                key = _auto_reply_key(trigger)
+                key = _departure_trigger_key(trigger)
                 values = [str(item).strip() for item in (replies if isinstance(replies, list) else [replies]) if str(item).strip()]
-                if len(key) == 1 and values:
+                if key and values:
                     fixed[key] = values
         self.departure_replies = fixed
 
@@ -7946,7 +7952,7 @@ class TalkinBot:
     def _departure_reply_text(self, trigger, username, room):
         defaults = {
             "ب": "🌀 في الخلاط", "ت": "⚰️ في التابوت",
-            "ح": "⚰️ في التابوت", "ق": "❤️ بقلبي",
+            "ق": "❤️ بقلبي", "ك": "👑 ملك الكركيت",
         }
         choices = getattr(self, "departure_replies", {}).get(trigger, [])
         if isinstance(choices, str):
@@ -7968,8 +7974,8 @@ class TalkinBot:
         return text
 
     def _handle_departure_reply_command(self, room, body):
-        trigger = _auto_reply_key(body)
-        if len(trigger) != 1:
+        trigger = _departure_trigger_key(body)
+        if not trigger:
             return False
         last = getattr(self, "_last_departed_user_by_room", {})
         username = last.get(_norm_room(room), "") if isinstance(last, dict) else ""
@@ -15933,11 +15939,24 @@ class TalkinBot:
     def _handle_auction_room_command(self, room, username, text):
         if self._handle_auction_toggle(username, text, is_private=False, room=room):
             return True
+        auction_game = getattr(self, "_auction_game", None)
+        active_auction = auction_game.active() if auction_game else None
+        # A bare number is an auction bid only while an actual bidding round
+        # is live. Outside that phase it must fall through to normal room
+        # handling; otherwise every ordinary message such as 12345 receives
+        # the misleading "auction closed" reply.
+        normalized_number = str(text or "").strip().translate(
+            str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+        )
+        bare_number = bool(re.fullmatch(r"[0-9]+(?:[mMbB]|[مب])?", normalized_number))
+        if bare_number and not (
+            isinstance(active_auction, dict)
+            and active_auction.get("phase") == "bidding"
+        ):
+            return False
         action = _parse_auction_room_command(text)
         if not action:
             return False
-        auction_game = getattr(self, "_auction_game", None)
-        active_auction = auction_game.active() if auction_game else None
         if not active_auction and action in {"join", "bid", "pass"}:
             self._auction_room_reply(room, "📭 المزاد مغلق؛ انتظر بدء جولة أخرى.", "📭 The auction is closed; wait for another round to start.")
             return True
@@ -23484,8 +23503,8 @@ class TalkinBot:
             if not _is_master_name(sender):
                 self.send_private_text(sender, "🔒 إضافة ردود المغادرة مخصصة للماستر.")
                 return True
-            trigger, reply = _auto_reply_key(m_ds.group(1)), m_ds.group(2).strip()
-            if len(trigger) != 1 or not reply:
+            trigger, reply = _departure_trigger_key(m_ds.group(1)), m_ds.group(2).strip()
+            if not trigger or not reply:
                 self.send_private_text(sender, "❌ الصيغة: +ds@أي_حرف@الرد (مثال: +ds@س@الرد)")
                 return True
             replies = getattr(self, "departure_replies", {})
