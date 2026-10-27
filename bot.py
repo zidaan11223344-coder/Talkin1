@@ -21370,6 +21370,7 @@ class TalkinBot:
             "اصلاح اسم": "repair", "إصلاح اسم": "repair",
             "تعديل اسم": "edit", "تعديل الاسم": "edit",
             "حذف تصحيح اسم": "delete", "حذف تصحيح الاسم": "delete",
+            "حذف اسم": "delete", "حذفاسم": "delete",
             "حذف تصحييح اسم": "delete", "حذف تصحييح الاسم": "delete",
         }
         name_image_mode = name_image_commands.get(low)
@@ -21382,17 +21383,13 @@ class TalkinBot:
             requests_by_master = getattr(self, "_master_name_image_requests", None)
             if not isinstance(requests_by_master, dict):
                 requests_by_master = self._master_name_image_requests = {}
-            if name_image_mode == "repair":
-                # "اصلاح اسم" starts a clean correction cycle so stale
-                # approvals such as الهــيبه cannot reappear in new cards.
-                _clear_image_name_corrections()
             requests_by_master[_norm_user(sender)] = {
                 "mode": name_image_mode, "created_at": time.time(),
                 "is_private": bool(is_private), "room": str(room or ""),
             }
             prompt = (
                 "أرسل اسم المستخدم الحقيقي المراد تعديلُه كما يظهر في المحادثة (من دون @). "
-                "بعد ذلك سأطلب منك نص التعديل اليدوي، وعند «اعتماد الاسم» سأحذف التصحيح السابق وأحفظ الجديد."
+                "بعد ذلك سأطلب منك نص التعديل اليدوي، وعند «اعتماد الاسم» سأضيف التصحيح أو أحدّث تصحيح هذا المستخدم فقط."
                 if name_image_mode == "edit" else
                 "أرسل اسم المستخدم الذي تريد حذف تصحيحه (من دون @). سيعود للظهور كما يصل من المحادثة."
                 if name_image_mode == "delete" else
