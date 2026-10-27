@@ -5708,7 +5708,7 @@ def _pick_font_for_char(base, fallbacks, ch):
     return None
 
 def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
-                      stroke_fill=(0,0,0,220), direction="ltr"):
+                      stroke_fill=(0,0,0,220), direction="ltr", *, preserve_order=False):
     """Draw one username from the user's exact command/message text.
 
     Arabic is reshaped/bidi-ordered once.  Each Unicode code point is then
@@ -5749,7 +5749,7 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
     # Mixed decorative usernames are already received in the exact order the
     # chat displayed. Preserve that order while only reshaping Arabic glyphs;
     # applying a second base-direction reversal makes the card read backwards.
-    visual = _shape_name_for_ltr(raw_text)
+    visual = raw_text if preserve_order else _shape_name_for_ltr(raw_text)
     if not visual:
         return xy[0]
     base=_gift_font(visual,int(size))
@@ -5875,10 +5875,10 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                     return value
             except Exception:
                 pass
-        # Fallback names containing symbols must remain in the chat's logical
-        # order. _shape_name_for_fallback reverses mixed runs and is suitable
-        # only for legacy callers, not for winner cards.
-        return _shape_name_for_ltr(value)
+        # Mixed Arabic names need a visual bidi pass when fallback fonts are
+        # involved. It keeps a decorative frame at the edges in place while
+        # moving internal symbol-separated Arabic runs to the readable order.
+        return _shape_name_for_fallback(value)
 
     while size > 14:
         visual = visual_for_centered(raw_text, size)
@@ -5959,7 +5959,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                 _draw_name_visual(
                     draw, (cursor, y), "".join(normal), size, fill,
                     stroke_width=2, stroke_fill=(0, 0, 0, 220),
-                    direction=run_direction,
+                    direction=run_direction, preserve_order=True,
                 )
                 cursor += normal_width
                 normal = []
@@ -5974,7 +5974,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         _draw_name_visual(
             draw, (cursor, y), "".join(normal), size, fill,
             stroke_width=2, stroke_fill=(0, 0, 0, 220),
-            direction=run_direction,
+            direction=run_direction, preserve_order=True,
         )
 
 def render_name_preview_card(name, *, corrected=False):
