@@ -92,6 +92,8 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
                         team1_players: Iterable[str] = (), team1_score: int = 0,
                         team2_name: str = "الفريق الثاني", team2_players: Iterable[str] = (),
                         team2_score: int = 0, player_scores: dict[str, int] | None = None,
+                        player_balls: dict[str, int] | None = None,
+                        team1_label: str = "فريق الهجوم", team2_label: str = "فريق الدفاع",
                         player_awards: dict[str, int] | None = None, winner: str = "تعادل",
                         prize: int = 0, output_dir: str | Path | None = None,
                         players: Iterable[str] | None = None, human_score: int | None = None,
@@ -110,6 +112,7 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
     p1 = [str(p).lstrip("@") for p in team1_players if str(p).strip()]
     p2 = [str(p).lstrip("@") for p in team2_players if str(p).strip()]
     scores = {str(k).lstrip("@"): int(v) for k, v in (player_scores or {}).items()}
+    balls = {str(k).lstrip("@"): int(v) for k, v in (player_balls or {}).items()}
     awards = {str(k).lstrip("@"): int(v) for k, v in (player_awards or {}).items()}
 
     W, H = 1600, 960
@@ -125,30 +128,44 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
     _text(draw, (W // 2, 132), f"الفائز: {winner}", _font(30), anchor="mm", fill=white, rtl=True)
 
     panels = [
-        ((55, 190, W // 2 - 18, 875), str(team1_name), p1, int(team1_score), blue, "cricket_attack_blue.png"),
-        ((W // 2 + 18, 190, W - 55, 875), str(team2_name), p2, int(team2_score), red, "cricket_defense_red.png"),
+        ((55, 190, W // 2 - 18, 875), str(team1_name), str(team1_label), p1, int(team1_score), blue, "cricket_attack_blue.png"),
+        ((W // 2 + 18, 190, W - 55, 875), str(team2_name), str(team2_label), p2, int(team2_score), red, "cricket_defense_red.png"),
     ]
-    for box, team_name, players_list, total, accent, hero in panels:
+    for box, room_name, team_label, players_list, total, accent, hero in panels:
         draw.rounded_rectangle(box, radius=28, fill=(24, 35, 56, 255), outline=accent, width=5)
-        _text(draw, ((box[0] + box[2]) // 2, box[1] + 42), team_name, _font(34), anchor="mm", fill=white, rtl=_has_arabic(team_name))
+        _text(draw, ((box[0] + box[2]) // 2, box[1] + 29), room_name, _font(28), anchor="mm", fill=white, rtl=_has_arabic(room_name))
+        _text(draw, ((box[0] + box[2]) // 2, box[1] + 62), team_label, _font(24), anchor="mm", fill=gold, rtl=_has_arabic(team_label))
         # Number is deliberately placed in a bright box above the player image.
-        score_box = (box[0] + 32, box[1] + 70, box[2] - 32, box[1] + 158)
+        score_box = (box[0] + 32, box[1] + 86, box[2] - 32, box[1] + 166)
         draw.rounded_rectangle(score_box, radius=18, fill=(8, 14, 27, 245), outline=accent, width=3)
         _text(draw, ((score_box[0] + score_box[2]) // 2, score_box[1] + 44), f"{total:,} نقطة", _latin_font(42), anchor="mm", fill=white, rtl=False)
-        hero_box = (box[0] + 28, box[1] + 178, box[2] - 28, box[1] + 430)
-        _paste_cover(img, _asset(hero, (hero_box[2] - hero_box[0], hero_box[3] - hero_box[1])), hero_box, (11, 24, 45, 255) if accent == blue else (45, 15, 29, 255))
-        _text(draw, (box[0] + 38, box[1] + 462), "اللاعب", _font(23), anchor="la", fill=gold, rtl=True)
-        _text(draw, (box[2] - 38, box[1] + 462), "النقاط / الجائزة", _font(23), anchor="ra", fill=gold, rtl=True)
-        y = box[1] + 510
+        hero_box = (box[0] + 28, box[1] + 184, box[2] - 28, box[1] + 350)
+        hero_asset = _asset(hero, (hero_box[2] - hero_box[0], hero_box[3] - hero_box[1]))
+        _paste_cover(img, hero_asset, hero_box, (11, 24, 45, 255) if accent == blue else (45, 15, 29, 255))
+        _text(draw, ((box[0] + box[2]) // 2, box[1] + 392), "اللاعب وإحصائياته", _font(20), anchor="mm", fill=gold, rtl=True)
+        y = box[1] + 430
         for index, player in enumerate(players_list, 1):
             player = str(player).strip()
             value = int(scores.get(player, 0))
+            ball_count = int(balls.get(player, 0))
             award = int(awards.get(player, 0))
-            draw.ellipse((box[0] + 35, y - 18, box[0] + 69, y + 16), fill=accent)
-            _text(draw, (box[0] + 52, y - 1), str(index), _latin_font(18), anchor="mm", fill=white, rtl=False)
-            _text(draw, (box[0] + 82, y), player, _font(25) if _has_arabic(player) else _latin_font(25), anchor="la", fill=white, rtl=_has_arabic(player))
-            _text(draw, (box[2] - 38, y), f"{value} / {award:,}", _latin_font(22), anchor="ra", fill=white, rtl=False)
-            y += 50
+            row_top = y - 20
+            avatar_box = (box[0] + 28, row_top + 2, box[0] + 70, row_top + 44)
+            avatar = hero_asset.copy() if hero_asset is not None else Image.new("RGBA", (42, 42), accent)
+            avatar.thumbnail((42, 42), Image.Resampling.LANCZOS)
+            mask = Image.new("L", (42, 42), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, 41, 41), fill=255)
+            avatar_layer = Image.new("RGBA", (42, 42), (0, 0, 0, 0))
+            avatar_layer.paste(avatar.resize((42, 42), Image.Resampling.LANCZOS), (0, 0), mask)
+            img.alpha_composite(avatar_layer, (avatar_box[0], avatar_box[1]))
+            draw.ellipse(avatar_box, outline=accent, width=3)
+            name_box = (box[0] + 78, row_top, box[2] - 28, row_top + 26)
+            stats_box = (box[0] + 78, row_top + 29, box[2] - 28, row_top + 55)
+            draw.rounded_rectangle(name_box, radius=10, fill=(10, 19, 35, 245), outline=accent, width=2)
+            draw.rounded_rectangle(stats_box, radius=10, fill=(18, 30, 50, 245), outline=(88, 112, 145, 255), width=2)
+            _text(draw, (name_box[0] + 10, name_box[1] + 13), f"{index}. {player}", _font(17) if _has_arabic(player) else _latin_font(17), anchor="lm", fill=white, rtl=_has_arabic(player))
+            _text(draw, ((stats_box[0] + stats_box[2]) // 2, stats_box[1] + 13), f"كرات {ball_count} | نقاط {value} | جائزة {award:,}", _font(14), anchor="mm", fill=white, rtl=True)
+            y += 62
         if not players_list:
             _text(draw, ((box[0] + box[2]) // 2, y), "لا يوجد لاعبين", _font(23), anchor="mm", fill=white, rtl=True)
     if prize:

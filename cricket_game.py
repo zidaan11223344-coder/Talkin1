@@ -860,8 +860,11 @@ class CricketGame:
         else:
             attack_room = team_rooms.get("attack") or {}
             defense_room = team_rooms.get("defense") or {}
-            team1_name = str(attack_room.get("name") or "الفريق الأول")
-            team2_name = str(defense_room.get("name") or "الفريق الثاني")
+            team1_name = str(attack_room.get("name") or "الغرفة الأولى")
+            team2_name = str(defense_room.get("name") or "الغرفة الثانية")
+            league_labels = match.get("league_team_names") or {}
+            team1_label = str(league_labels.get(attack_room.get("key"), "فريق الهجوم"))
+            team2_label = str(league_labels.get(defense_room.get("key"), "فريق الدفاع"))
             team1_players = [str(p).lstrip("@") for p in attack_room.get("players", []) if str(p).strip()]
             team2_players = [str(p).lstrip("@") for p in defense_room.get("players", []) if str(p).strip()]
             team1_score, team2_score = attack_score, defense_score
@@ -889,7 +892,9 @@ class CricketGame:
             team1_name=team1_name, team1_players=team1_players,
             team1_score=team1_score, team2_name=team2_name,
             team2_players=team2_players, team2_score=team2_score,
-            player_scores=player_scores, player_awards=player_awards, winner=winner,
+            team1_label=locals().get("team1_label", "الفريق البشري"),
+            team2_label=locals().get("team2_label", self.bot_name),
+            player_scores=player_scores, player_balls=match.get("player_balls") or {}, player_awards=player_awards, winner=winner,
             prize=prize if winning_players else 0,
         )
         images = (result_image,) if result_image else ()
@@ -909,7 +914,7 @@ class CricketGame:
         match: dict[str, Any],
         team1_name: str, team1_players: list[str], team1_score: int,
         team2_name: str, team2_players: list[str], team2_score: int,
-        player_scores: dict[str, int], player_awards: dict[str, int], winner: str, prize: int,
+        player_scores: dict[str, int], player_balls: dict[str, int], player_awards: dict[str, int], winner: str, prize: int,
     ) -> str | None:
         try:
             from cricket_result import render_result_image
@@ -917,7 +922,7 @@ class CricketGame:
                 match_id=str(match.get("id") or uuid.uuid4().hex),
                 team1_name=team1_name, team1_players=team1_players, team1_score=team1_score,
                 team2_name=team2_name, team2_players=team2_players, team2_score=team2_score,
-                player_scores=player_scores, player_awards=player_awards,
+                player_scores=player_scores, player_balls=player_balls, player_awards=player_awards,
                 winner=winner, prize=prize,
                 output_dir=self.state.path.parent / "cricket_media",
             )
