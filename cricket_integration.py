@@ -326,7 +326,9 @@ class CricketIntegration:
                 self._send_private(sender, room, "🔒 تسجيل فرق الدوري للماستر المحدد فقط.")
                 return True
             team, team_room, raw_players = register.groups()
-            players = [item.strip() for item in re.split(r"[,،|]", raw_players) if item.strip()]
+            # Players may be sent one per line or separated by spaces; commas
+            # remain accepted for backward compatibility.
+            players = [item.strip() for item in re.split(r"[\s,،|]+", raw_players) if item.strip()]
             result = self.league.register(team, team_room, players)
             self._send_private(sender, room, (f"✅ تم تسجيل فريق {team} في الغرفة {team_room} ({len(players)}/4)." if result.get("ok") else f"❌ {result.get('error')}"))
             return True
@@ -390,10 +392,16 @@ class CricketIntegration:
             self._send_private(sender, room, message) if is_private else self.send_room_text(room, message)
             return True
         if low in {"ابطال الكركيت", "أبطال الكركيت", "cricket champions", "cricket top"}:
-            rows = self.game.champions(10)
-            lines = ["🏆 أبطال الكركيت — التوب"]
-            lines.extend(f"{i}. @{row.get('username')} — فاز {int(row.get('wins', 0))} | خسر {int(row.get('losses', 0))}" for i, row in enumerate(rows, 1))
-            self._send_private(sender, room, "\n".join(lines)) if is_private else self.send_room_text(room, "\n".join(lines))
+            rows = self.game.champions(15)
+            lines = ["🏆 أبطال الكركيت — أفضل 15 لاعبًا"]
+            lines.extend(
+                f"{i}. @{str(row.get('username', ''))[:18]} ف:{int(row.get('wins', 0))} خ:{int(row.get('losses', 0))}"
+                for i, row in enumerate(rows, 1)
+            )
+            message = "\n".join(lines)
+            if len(message.encode("utf-8")) > 980:
+                message = message.encode("utf-8")[:977].decode("utf-8", "ignore") + "..."
+            self._send_private(sender, room, message) if is_private else self.send_room_text(room, message)
             return True
         join_command = low in {"join", "انضمام"}
         defer_resume = not is_private and join_command

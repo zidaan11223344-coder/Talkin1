@@ -32,7 +32,7 @@
 
 - ملف الحالة: `BOT_DATA_DIR/cricket_state.json`.
 - بطاقات النتيجة: `BOT_DATA_DIR/cricket_media/`، وتُرسل عبر `/cricket-media/<filename>`.
-- الصور الثابتة: `assets/cricket_number_0.png` إلى `assets/cricket_number_6.png`، و`assets/cricket_duck.png`، و`assets/cricket_hattrick.png` عبر `/assets/<filename>`.
+- الصور الثابتة الجديدة: لاعب هجوم أزرق `cricket_attack_blue.png`، لاعب دفاع أحمر `cricket_defense_red.png`، وصورة أوت `cricket_out.png` عبر `/assets/<filename>`.
 - في Railway أو RavenHost: اربط Volume عند `/data` واضبط `BOT_DATA_DIR=/data/talkin2`. من دون Volume قد تضيع الحالة عند استبدال الحاوية.
 - بعد إعادة التشغيل، يقرأ المحرك كل المباريات المحفوظة ويعيد إرسال تذكير الدور المناسب لكل غرفة مشاركة، بما في ذلك استكمال دور الدفاع إذا كان اختيار الهجوم محفوظًا.
 
@@ -45,8 +45,7 @@
 1. `cricket_game.py` — قواعد المباراة والفرق والأدوار والنقاط.
 2. `cricket_state.py` — حفظ JSON ذريًّا واستعادة الحالة.
 3. `cricket_result.py` — رسم بطاقة النتيجة.
-4. `assets/cricket_number_0.png` إلى `assets/cricket_number_6.png`.
-5. `assets/cricket_duck.png` و`assets/cricket_hattrick.png`.
+4. `assets/cricket_attack_blue.png` و`assets/cricket_defense_red.png` و`assets/cricket_out.png`.
 6. `assets/NotoSansArabic-Regular.ttf` و`assets/NotoSansArabic-SemiBold.ttf` لعرض العربية في بطاقة النتيجة.
 
 اعتماديات البطاقة: `Pillow` و`arabic-reshaper` و`python-bidi`.

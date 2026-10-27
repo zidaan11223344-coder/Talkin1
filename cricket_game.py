@@ -10,9 +10,7 @@ from typing import Any
 from cricket_state import JsonState, normalize
 
 
-ASSET_FILES = tuple(f"cricket_number_{number}.png" for number in range(0, 7)) + (
-    "cricket_duck.png",
-    "cricket_hattrick.png",
+ASSET_FILES = (
     "cricket_attack_blue.png",
     "cricket_defense_red.png",
     "cricket_out.png",
@@ -1006,7 +1004,6 @@ class CricketGame:
                 duck_counts = match.setdefault("player_ducks", {})
                 duck_counts[out_name] = int(duck_counts.get(out_name, 0)) + 1
                 outcome += " 🦆 بطّة"
-                images.append("cricket_duck.png")
             # Talkin2's cricket rule counts a hat-trick when the same defender
             # dismisses two batters consecutively in the current innings. The
             # bowler key prevents two different defenders from being credited.
@@ -1021,14 +1018,12 @@ class CricketGame:
                 hat_tricks = match.setdefault("player_hat_tricks", {})
                 hat_tricks[bowler_name] = int(hat_tricks.get(bowler_name, 0)) + 1
                 outcome += f" 🔥 هاتريك — @{bowler_name}"
-                images.append("cricket_hattrick.png")
         else:
             match["wicket_streak"] = 0
             match["wicket_streak_bowler"] = ""
             scores[batting] = int(scores.get(batting, 0)) + bat_value
             player_scores[out_name] = int(player_scores.get(out_name, 0)) + bat_value
             outcome = f"🏏 +{bat_value} نقطة"
-            images.append(f"cricket_number_{bat_value}.png")
 
         match["balls"] = ball_no
         player_balls = match.setdefault("player_balls", {})

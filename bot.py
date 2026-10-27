@@ -10138,7 +10138,7 @@ class TalkinBot:
             "أثناء الجولة, مزايده تعني أن المزاد شغال؛ wait انتهاءه. فاتح الجولة or الماستر يستطيع إقفاله بأمر «اقفل المزاد»." :
                 "While a round is running, registration is closed; wait until it ends. The host or master may end it with “close auction”.",
             "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 5%.":
-                "sv — view auction collectibles; red auction <code> — redeem after the round for a 30% profit.",
+                "sv — view auction collectibles; red auction <code> — redeem after the round for a 5% profit.",
         }
         for old, new in auction_help_fixes.items():
             value = value.replace(old, new)
