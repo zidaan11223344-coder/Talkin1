@@ -156,3 +156,30 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
         _text(draw, (W // 2, H - 50), f"الجائزة: {prize:,} نقطة", _font(22), anchor="mm", fill=white, rtl=True)
     img.convert("RGB").save(path, "PNG", optimize=True)
     return path.name
+
+
+def render_ball_image(*, match_id: str, ball_no: int, number: int, out: bool = False,
+                      output_dir: str | Path | None = None) -> str:
+    """Create the per-ball card: the batter's number is visibly above the action image."""
+    target_dir = Path(output_dir) if output_dir else OUTPUT_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    safe_id = "".join(ch for ch in str(match_id) if ch.isalnum())[:20] or "match"
+    path = target_dir / f"cricket_result_ball_{safe_id}_{int(ball_no)}.png"
+    canvas = Image.new("RGBA", (900, 760), (8, 15, 30, 255))
+    draw = ImageDraw.Draw(canvas)
+    accent = (232, 62, 83, 255) if out else (35, 157, 255, 255)
+    title = "خروج اللاعب — OUT" if out else "كرة الهجوم"
+    _text(draw, (450, 52), title, _font(42), anchor="mm", fill=(247, 201, 92, 255), rtl=True)
+    image_name = "cricket_out.png" if out else "cricket_attack_blue.png"
+    hero = _asset(image_name, (760, 535))
+    if hero is not None:
+        hero.thumbnail((760, 535), Image.Resampling.LANCZOS)
+        canvas.alpha_composite(hero, ((900 - hero.width) // 2, 125))
+    else:
+        draw.rounded_rectangle((70, 125, 830, 660), radius=25, fill=(18, 35, 60, 255))
+    box = (330, 92, 570, 214)
+    draw.rounded_rectangle(box, radius=24, fill=(7, 16, 31, 245), outline=accent, width=6)
+    _text(draw, (450, 153), "OUT" if out else str(int(number)), _latin_font(76), anchor="mm", fill=(255, 255, 255, 255), rtl=False)
+    _text(draw, (450, 708), f"الكرة رقم {int(ball_no)}", _font(28), anchor="mm", fill=(220, 230, 245, 255), rtl=True)
+    canvas.convert("RGB").save(path, "PNG", optimize=True)
+    return path.name

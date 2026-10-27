@@ -1015,9 +1015,9 @@ class CricketGame:
         wickets = match.setdefault("wickets", {"attack": 0, "defense": 0})
         scores = match.setdefault("scores", {"attack": 0, "defense": 0})
         player_scores = match.setdefault("player_scores", {})
-        # Every resolved ball carries the two action views.  A dismissal uses
-        # the dedicated OUT card instead of the ordinary number tile.
-        images = ["cricket_attack_blue.png", "cricket_defense_red.png"]
+        # The per-ball card writes the submitted number over the action image.
+        # A dismissal uses the dedicated OUT card instead of a number tile.
+        images = []
         out_name = str(bat_choice.get("sender") or "اللاعب").strip().lstrip("@")
         bowler_name = str(bowl_choice.get("sender") or "المدافع").strip().lstrip("@")
 
@@ -1052,6 +1052,19 @@ class CricketGame:
             scores[batting] = int(scores.get(batting, 0)) + bat_value
             player_scores[out_name] = int(player_scores.get(out_name, 0)) + bat_value
             outcome = f"🏏 +{bat_value} نقطة"
+
+        try:
+            from cricket_result import render_ball_image
+            images.append(render_ball_image(
+                match_id=str(match.get("id") or "match"),
+                ball_no=ball_no,
+                number=bat_value,
+                out=(bat_value == bowl_value),
+                output_dir=self.state.path.parent / "cricket_media",
+            ))
+        except Exception:
+            # Gameplay must never fail if an optional image renderer is unavailable.
+            images = ["cricket_attack_blue.png" if bat_value != bowl_value else "cricket_out.png"]
 
         match["balls"] = ball_no
         player_balls = match.setdefault("player_balls", {})
