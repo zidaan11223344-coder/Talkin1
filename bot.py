@@ -5324,21 +5324,19 @@ def _clean_name_for_image(text):
 def _compact_name_for_image(text):
     """Keep the readable name while dropping width-heavy decoration.
 
-    This is used only for image display. NFKC turns mathematical/styled Latin
-    letters into ordinary letters; combining marks, format controls, symbols,
-    and ornamental punctuation are removed when a card cannot fit the exact
-    decorated spelling. Account identity and saved correction records remain
-    based on the original text.
+    This is used only for image display. Preserve all visible letters, symbols,
+    and punctuation in their original order; remove only tiny combining marks,
+    format controls, and tatweel. Account identity and saved correction records
+    remain based on the original text.
     """
     raw = _clean_name_for_image(text)
-    normalized = unicodedata.normalize("NFKC", raw)
+    normalized = raw
     kept = []
     for ch in normalized:
         category = unicodedata.category(ch)
         if category.startswith(("M", "C")) or ch == "ـ":
             continue
-        if category.startswith(("L", "N")) or ch in " ._-":
-            kept.append(ch)
+        kept.append(ch)
     compact = "".join(kept)
     return compact.strip() or normalized.strip()
 
@@ -5918,11 +5916,10 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                 width += metrics(ch, font, ch)
         if width <= max_width:
             break
-        # English/decorative usernames must remain exact. For those names,
-        # keep every ornament and let the fitted font size shrink instead.
-        # Compacting is reserved for Arabic-containing names whose tiny
-        # stacked marks can otherwise make the text unreadable.
-        if not compacted and _has_arabic(raw_text):
+        # Use the same light cleanup for Arabic and English names. Visible
+        # ornaments stay untouched; only tiny marks are removed when the
+        # unmodified name cannot fit at the current size.
+        if not compacted:
             compact = _compact_name_for_image(raw_text)
             if compact and compact != raw_text:
                 raw_text = compact
