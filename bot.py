@@ -15838,6 +15838,23 @@ class TalkinBot:
             str(active.get("opener_name") or ""),
             apply_delta=_apply_points_delta_once,
         )
+        # At the end of the one-minute round, charge the participant whose
+        # turn was left unanswered. The winner is already charged by close(),
+        # so exclude that user to keep the ledger idempotent and avoid a
+        # double deduction. This also covers a round with no bids: the silent
+        # player is charged the selected item's starting price.
+        idle_user_id = str(active.get("turn_user_id") or "")
+        idle_name = str(active.get("turn_username") or "").strip().lstrip("@")
+        highest_user_id = str(active.get("highest_bidder_id") or "")
+        item = active.get("item") if isinstance(active.get("item"), dict) else {}
+        reached_amount = int(active.get("current_bid", 0) or 0) or int(item.get("starting_price", 0) or 0)
+        if idle_user_id and idle_name and idle_user_id != highest_user_id and reached_amount > 0:
+            _apply_points_delta_once(
+                idle_name,
+                -reached_amount,
+                f"auction:{auction_id}:round-idle:{idle_user_id}",
+                "auction inactive-round penalty",
+            )
         if not self._auction_broadcast_close_result(result, rooms=rooms, expired=True) and result.get("error"):
             self._auction_broadcast(
                 "⌛ انتهت مدة المزايدة، لكن تعذرت التسوية الآن؛ لم يُعلن فائز.",
