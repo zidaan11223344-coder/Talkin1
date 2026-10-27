@@ -21357,16 +21357,24 @@ class TalkinBot:
                 return True
             if pending_name.get("mode") == "awaiting_method":
                 manual_match = re.fullmatch(r"(?:تعديل الاسم|النص الصحيح)\s*[:：]\s*(.+)", text, re.S)
-                if not manual_match:
+                if manual_match:
+                    candidate_name = manual_match.group(1).strip()
+                else:
+                    # Accept the corrected spelling as a plain next message
+                    # too.  The old flow required a prefix and consequently
+                    # rejected a perfectly valid new name that differed from
+                    # the original source name.
+                    candidate_name = _clean_name_for_image(text).strip()
+                if not candidate_name or len(candidate_name) > 256:
                     _name_text(
-                        "أرسل النص المصحح يدويًا فقط بصيغة:\n"
+                        "أرسل الاسم الجديد مباشرة، أو بصيغة:\n"
                         "«تعديل الاسم: النص الصحيح»\n"
                         "بعد المعاينة أرسل «اعتماد الاسم» للحفظ."
                     )
                     return True
                 pending_name["mode"] = "repair_ready"
                 pending_name["created_at"] = time.time()
-                text = manual_match.group(1).strip()
+                text = candidate_name
             if pending_name.get("mode") == "delete":
                 username = _clean_name_for_image(text).strip()
                 if not username or len(username) > 256:
@@ -21428,7 +21436,7 @@ class TalkinBot:
                     candidate_name=display_name, created_at=time.time(),
                 )
                 _name_text(
-                    "✅ تم استلام اسم المستخدم الأساسي. أرسل تعديل الاسم يدويًا فقط بصيغة:\n"
+                    "✅ تم استلام اسم المستخدم الأساسي. أرسل الاسم الجديد مباشرة، أو بصيغة:\n"
                     "«تعديل الاسم: النص الصحيح»\n"
                     "بعد المعاينة أرسل «اعتماد الاسم» للحفظ."
                 )
@@ -21446,7 +21454,10 @@ class TalkinBot:
                 if mode in {"repair", "repair_ready"}:
                     name_requests[_norm_user(sender)] = {
                         "mode": "awaiting_approval",
-                        "source_name": display_name,
+                        # Keep the original chat username as the lookup key;
+                        # the candidate may intentionally be completely
+                        # different from it.
+                        "source_name": pending_name.get("source_name") or display_name,
                         "candidate_name": display_name,
                         "created_at": time.time(),
                         "is_private": request_private, "room": request_room,
