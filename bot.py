@@ -5740,7 +5740,10 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
     # Decorative names often mix Arabic with Egyptian glyphs, chess symbols,
     # musical symbols, and tatweel. No single font contains all of them. Shape
     # and resolve the complete bidi string once before splitting it by font.
-    visual = _shape_name_for_ltr(raw_text) if direction == "ltr" else _shape_name_for_fallback(raw_text)
+    # Mixed decorative usernames are already received in the exact order the
+    # chat displayed. Preserve that order while only reshaping Arabic glyphs;
+    # applying a second base-direction reversal makes the card read backwards.
+    visual = _shape_name_for_ltr(raw_text)
     if not visual:
         return xy[0]
     base=_gift_font(visual,int(size))
@@ -5866,7 +5869,10 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                     return value
             except Exception:
                 pass
-        return _shape_name_for_ltr(value) if force_ltr else _shape_name_for_fallback(value)
+        # Fallback names containing symbols must remain in the chat's logical
+        # order. _shape_name_for_fallback reverses mixed runs and is suitable
+        # only for legacy callers, not for winner cards.
+        return _shape_name_for_ltr(value)
 
     while size > 14:
         visual = visual_for_centered(raw_text, size)
@@ -5887,6 +5893,34 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
     visual = visual_for_centered(raw_text, size)
     base = _gift_font(visual, size)
     fallbacks = _fallback_fonts(size)
+    # When one Arabic-capable font contains the complete name, let libraqm
+    # draw the whole logical string in one operation. The previous per-
+    # character path advanced a right-to-left run from left to right, which
+    # made winner names appear reversed on million/billion cards.
+    native_rtl = False
+    if visual == raw_text and not force_ltr and _has_arabic(raw_text):
+        try:
+            native_rtl = bool(PIL_AVAILABLE and features.check("raqm") and all(
+                _font_has_glyph(base, ch) or unicodedata.category(ch).startswith("M")
+                for ch in raw_text if not ch.isspace()
+            ))
+        except Exception:
+            native_rtl = False
+    if native_rtl:
+        try:
+            bbox = draw.textbbox(
+                (0, 0), raw_text, font=base, direction="rtl", language="ar",
+                stroke_width=2,
+            )
+            x = float(center[0]) - (bbox[2] - bbox[0]) / 2 - bbox[0]
+            y = float(center[1]) - (bbox[3] - bbox[1]) / 2 - bbox[1]
+            draw.text(
+                (x, y), raw_text, font=base, fill=fill, stroke_width=2,
+                stroke_fill=(0, 0, 0, 220), direction="rtl", language="ar",
+            )
+            return
+        except Exception:
+            pass
     width = 0.0
     top, bottom = 999999, -999999
     for ch in visual:
@@ -5910,6 +5944,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
 
     cursor = float(center[0]) - width / 2
     y = float(center[1]) - (bottom - top) / 2 - top
+    run_direction = "rtl" if visual == raw_text and not force_ltr else "ltr"
     normal = []
     normal_width = 0.0
     for ch in visual:
@@ -5918,7 +5953,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                 _draw_name_visual(
                     draw, (cursor, y), "".join(normal), size, fill,
                     stroke_width=2, stroke_fill=(0, 0, 0, 220),
-                    direction="ltr" if force_ltr else "rtl",
+                    direction=run_direction,
                 )
                 cursor += normal_width
                 normal = []
@@ -5933,7 +5968,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         _draw_name_visual(
             draw, (cursor, y), "".join(normal), size, fill,
             stroke_width=2, stroke_fill=(0, 0, 0, 220),
-            direction="ltr" if force_ltr else "rtl",
+            direction=run_direction,
         )
 
 def render_name_preview_card(name, *, corrected=False):
@@ -17910,8 +17945,10 @@ class TalkinBot:
                 _paste_avatar_safe(img, avatar, (36, 41))
             d.text((W//2,38), "🏆 الفائز" if state.get("lang")!="en" else "🏆 WINNER",
                    fill=(255,215,80), font=small, anchor="ma")
-            d.text((W//2,80), str(winner_name).lstrip('@'),
-                   fill=(255,255,255), font=title_font, anchor="ma")
+            _draw_name_centered(
+                d, (W//2, 80), str(winner_name).lstrip('@'), 34,
+                (255,255,255), W - 180, apply_correction=False,
+            )
         else:
             d.text((W//2,38), "السلم والثعبان" if state.get("lang")!="en" else "SNAKE & LADDERS", fill=(255,215,80), font=title_font, anchor="ma")
             roll=state.get("last_roll")
@@ -18142,10 +18179,12 @@ class TalkinBot:
             avatar = _load_sender_avatar(winner_photo, 72) if winner_photo else None
             if avatar is not None:
                 _paste_avatar_safe(img, avatar, (left+20, panel_y0+14))
-            d.text((W//2, panel_y0+31), "🏆 الفائز" if state.get("lang")!="en" else "🏆 WINNER",
-                   fill=(245,205,80), font=_gift_font("1",22), anchor="ma")
-            d.text((W//2, panel_y0+70), str(winner_name).lstrip('@'),
-                   fill=(255,255,255), font=_gift_font("1",26), anchor="ma")
+            d.text((W//2, panel_y0+23), "🏆 الفائز" if state.get("lang")!="en" else "🏆 WINNER",
+                   fill=(245,205,80), font=_gift_font("1",18), anchor="ma")
+            _draw_name_centered(
+                d, (W//2, panel_y0+80), str(winner_name).lstrip('@'), 24,
+                (255,255,255), W - 180, apply_correction=False,
+            )
 
         out=BASE_DIR/"generated_games"/f"snake_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
         img.save(out,"JPEG",quality=86,optimize=True); return out
@@ -18390,10 +18429,12 @@ class TalkinBot:
             avatar = _load_sender_avatar(winner_photo, 72) if winner_photo else None
             if avatar is not None:
                 _paste_avatar_safe(img, avatar, (ox+20, panel_y0+14))
-            d.text((ox+15*cell//2, panel_y0+31), "🏆 Winner" if state.get("lang") == "en" else "🏆 الفائز",
-                   fill=(245,205,80), font=_gift_font("1",22), anchor="ma")
-            d.text((ox+15*cell//2, panel_y0+70), str(winner_name).lstrip('@'),
-                   fill=(255,255,255), font=_gift_font("1",26), anchor="ma")
+            d.text((ox+15*cell//2, panel_y0+23), "🏆 Winner" if state.get("lang") == "en" else "🏆 الفائز",
+                   fill=(245,205,80), font=_gift_font("1",18), anchor="ma")
+            _draw_name_centered(
+                d, (ox+15*cell//2, panel_y0+80), str(winner_name).lstrip('@'), 24,
+                (255,255,255), 15*cell - 180, apply_correction=False,
+            )
         out=BASE_DIR/"generated_games"/f"ludo_{uuid.uuid4().hex}.jpg"; out.parent.mkdir(parents=True,exist_ok=True)
         img.save(out,"JPEG",quality=88,optimize=True); return out
 
