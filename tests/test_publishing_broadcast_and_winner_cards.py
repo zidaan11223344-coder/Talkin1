@@ -111,7 +111,7 @@ def test_master_private_name_repair_and_check_commands_send_preview_image(tmp_pa
         assert bot._handle_management_command_impl("", ornate, "Master", is_private=True)
         assert "أرسل تعديل الاسم يدويًا فقط" in sent_text[-1][1]
         assert bot._handle_management_command_impl("", f"تعديل الاسم: {ornate}", "Master", is_private=True)
-        assert bot._handle_management_command_impl("", "اعتماد الاسم", "Master", is_private=True)
+        assert bot._handle_management_command_impl("", "اعتمد التعديل", "Master", is_private=True)
         assert bot._handle_management_command_impl("", "فحص اسم", "Master", is_private=True)
         assert bot._handle_management_command_impl("", ornate, "Master", is_private=True)
 

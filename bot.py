@@ -21122,7 +21122,10 @@ class TalkinBot:
                 )
                 return True
             if pending_name.get("mode") == "awaiting_approval":
-                if low in {"اعتماد الاسم", "اعتمد الاسم", "اعتماد", "نعم", "yes"}:
+                if low in {
+                    "اعتماد الاسم", "اعتمد الاسم", "اعتماد التعديل", "اعتمد التعديل",
+                    "اعتماد التصحيح", "اعتمد التصحيح", "اعتماد", "نعم", "yes",
+                }:
                     try:
                         _save_image_name_correction(
                             pending_name.get("source_name", ""),
