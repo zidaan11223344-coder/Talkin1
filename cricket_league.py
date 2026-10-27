@@ -15,7 +15,7 @@ class CricketLeague:
     TEAM_SIZE = 4
     MAX_TEAMS = 16
     QUALIFYING_PRIZE = 1_000_000_000
-    FINAL_PRIZE = 100_000_000_000
+    FINAL_PRIZE = 1_000_000_000_000
 
     def __init__(self, path: str | Path, persist=None, match_hour: int = 20):
         self.state = JsonState(path, self._blank, persist=persist)

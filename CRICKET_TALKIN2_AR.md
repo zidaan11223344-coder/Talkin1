@@ -68,3 +68,8 @@
 python3 -m compileall -q bot.py cricket_integration.py cricket_game.py cricket_result.py
 python3 -m unittest discover -s tests -v
 ```
+
+
+## قائمة أوامر الماستر
+
+من خاص الماستر أرسل `أوامر الدوري والمزاد` لعرض القائمة الخاصة. لا تظهر القائمة للحسابات الأخرى.

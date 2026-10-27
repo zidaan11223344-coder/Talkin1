@@ -304,6 +304,32 @@ class CricketIntegration:
     def _private_league_command(self, room: str, sender: str, text: str) -> bool:
         """Master-only league administration; registration stays in DM."""
         low = self._control_key(text)
+        if low in {"اوامر الدوري", "أوامر الدوري", "اوامر المزاد", "أوامر المزاد", "اوامر الدوري والمزاد", "أوامر الدوري والمزاد", "league auction commands"}:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 قائمة أوامر الدوري والمزاد للماستر المحدد فقط.")
+                return True
+            menu = (
+                "📋 أوامر الماستر — الدوري والمزاد\n"
+                "━━━━━━━━━━━━\n"
+                "🏏 دوري الكركيت\n"
+                "• سجل فريق@اسم الفريق@الغرفة@لاعب1\n"
+                "  لاعب2 لاعب3 لاعب4\n"
+                "• حالة الدوري\n"
+                "• فتح الدوري\n"
+                "• افتح مباراة الدوري@رمز المباراة\n"
+                "• تغيير غرفة فريق@اسم الفريق@الغرفة الجديدة\n"
+                "━━━━━━━━━━━━\n"
+                "🔨 المزاد العالمي\n"
+                "• تشغيل لعبة مزاد\n"
+                "• إيقاف لعبة مزاد\n"
+                "• افتح المزاد — من الغرفة\n"
+                "• ابدأ المزاد — من الغرفة\n"
+                "• اغلاق المزاد — من الغرفة\n"
+                "━━━━━━━━━━━━\n"
+                "⏱️ المزايدة: أرسل الرقم فقط مثل 120m أو 10b أو 120000000."
+            )
+            self._send_private(sender, room, menu)
+            return True
         if low in {"حاله الدوري", "حالة الدوري", "league status", "دوري الكركيت"}:
             if not self.is_configured_master(sender):
                 self._send_private(sender, room, "🔒 إدارة دوري الكركيت للماستر المحدد فقط.")
