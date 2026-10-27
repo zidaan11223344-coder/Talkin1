@@ -5246,9 +5246,18 @@ def _shape_name_for_fallback(text):
             edge_prefix, core, edge_suffix = "", raw, ""
         if not core:
             return raw
-        # In framed names, use the inner ornament (for example 𓏺𓏺) as the
-        # pivot. The edge frame stays fixed while the run after that ornament
-        # moves before it.
+        # In framed names, use the inner heh-like letter as the pivot. The run
+        # between the opening frame/inner ornament and heh moves after heh,
+        # while the run after heh moves before it. The edge frame stays fixed.
+        if edge_prefix and edge_suffix:
+            pivot = next(
+                (index for index, ch in enumerate(core)
+                 if ch in {"ه", "ھ", "ہ", "ۿ", "ۀ", "ە"}
+                 and index > 0 and index < len(core) - 1),
+                None,
+            )
+            if pivot is not None:
+                return edge_prefix + core[pivot + 1:] + core[pivot:pivot + 1] + core[:pivot] + edge_suffix
         internal = next(
             (index for index, ch in enumerate(core)
              if is_ornament(ch) and index > 0 and index < len(core) - 1),
