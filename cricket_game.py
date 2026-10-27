@@ -914,6 +914,7 @@ class CricketGame:
         match: dict[str, Any],
         team1_name: str, team1_players: list[str], team1_score: int,
         team2_name: str, team2_players: list[str], team2_score: int,
+        team1_label: str, team2_label: str,
         player_scores: dict[str, int], player_balls: dict[str, int], player_awards: dict[str, int], winner: str, prize: int,
     ) -> str | None:
         try:
@@ -922,6 +923,7 @@ class CricketGame:
                 match_id=str(match.get("id") or uuid.uuid4().hex),
                 team1_name=team1_name, team1_players=team1_players, team1_score=team1_score,
                 team2_name=team2_name, team2_players=team2_players, team2_score=team2_score,
+                team1_label=team1_label, team2_label=team2_label,
                 player_scores=player_scores, player_balls=player_balls, player_awards=player_awards,
                 winner=winner, prize=prize,
                 output_dir=self.state.path.parent / "cricket_media",
@@ -1060,16 +1062,26 @@ class CricketGame:
 
         try:
             from cricket_result import render_ball_image
+            batting_room = self._room_for_team(match, batting)
+            first_room_key = str(participants[0].get("key") or "") if participants else ""
+            # Team identity is fixed by roster order, not by the current role:
+            # room/team 1 is always blue and room/team 2 (or the bot) is red.
+            team_asset = (
+                "cricket_attack_blue.png"
+                if batting_room is not None and str(batting_room.get("key") or "") == first_room_key
+                else "cricket_defense_red.png"
+            )
             images.append(render_ball_image(
                 match_id=str(match.get("id") or "match"),
                 ball_no=ball_no,
                 number=bat_value,
                 out=(bat_value == bowl_value),
+                team_asset=team_asset,
                 output_dir=self.state.path.parent / "cricket_media",
             ))
         except Exception:
             # Gameplay must never fail if an optional image renderer is unavailable.
-            images = ["cricket_attack_blue.png" if bat_value != bowl_value else "cricket_out.png"]
+            images = [team_asset if bat_value != bowl_value else "cricket_out.png"]
 
         match["balls"] = ball_no
         player_balls = match.setdefault("player_balls", {})

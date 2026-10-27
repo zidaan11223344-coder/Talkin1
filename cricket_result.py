@@ -176,8 +176,9 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
 
 
 def render_ball_image(*, match_id: str, ball_no: int, number: int, out: bool = False,
+                      team_asset: str | None = None,
                       output_dir: str | Path | None = None) -> str:
-    """Create the per-ball card: the batter's number is visibly above the action image."""
+    """Create a per-ball card using the fixed team identity (team 1 blue, team 2 red)."""
     target_dir = Path(output_dir) if output_dir else OUTPUT_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(ch for ch in str(match_id) if ch.isalnum())[:20] or "match"
@@ -187,7 +188,7 @@ def render_ball_image(*, match_id: str, ball_no: int, number: int, out: bool = F
     accent = (232, 62, 83, 255) if out else (35, 157, 255, 255)
     title = "خروج اللاعب — OUT" if out else "كرة الهجوم"
     _text(draw, (450, 52), title, _font(42), anchor="mm", fill=(247, 201, 92, 255), rtl=True)
-    image_name = "cricket_out.png" if out else "cricket_attack_blue.png"
+    image_name = "cricket_out.png" if out else (team_asset or "cricket_attack_blue.png")
     hero = _asset(image_name, (760, 535))
     if hero is not None:
         hero.thumbnail((760, 535), Image.Resampling.LANCZOS)
