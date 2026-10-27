@@ -5282,53 +5282,10 @@ def _shape_name_for_fallback(text):
     raw = _clean_name_for_image(text)
     if not raw or not _has_arabic(raw):
         return raw
-    has_decoration = any(
-        unicodedata.category(ch) in {"So", "Sk", "Sm"}
-        or 0x13000 <= ord(ch) <= 0x1342F  # Egyptian hieroglyphs
-        or 0x1D100 <= ord(ch) <= 0x1D1FF  # musical symbols
-        for ch in raw
-    )
-    if has_decoration:
-        # Talkin renders an ornamented username as two visual runs around the
-        # ornament: the run after the symbol is placed before it, and the run
-        # before it is placed after it. Apply this rule only to names that
-        # really contain an internal ornament; ordinary Arabic stays on the
-        # normal bidi path below.
-        def is_ornament(ch):
-            return (
-                unicodedata.category(ch) in {"So", "Sk", "Sm"}
-                or 0x13000 <= ord(ch) <= 0x1342F
-                or 0x1D100 <= ord(ch) <= 0x1D1FF
-            )
-        # Strip only the ornamental frame at both edges. It must be restored
-        # unchanged after the internal text runs are rearranged.
-        left = 0
-        while left < len(raw) and is_ornament(raw[left]):
-            left += 1
-        right = len(raw)
-        while right > left and is_ornament(raw[right - 1]):
-            right -= 1
-        if left and right < len(raw):
-            edge_prefix, core, edge_suffix = raw[:left], raw[left:right], raw[right:]
-        else:
-            edge_prefix, core, edge_suffix = "", raw, ""
-        if not core:
-            return raw
-        # Framed names already arrive in the exact order requested by the
-        # room. Keep every inner run, heh, and ornament unchanged.
-        if edge_prefix and edge_suffix:
-            return raw
-        internal = next(
-            (index for index, ch in enumerate(core)
-             if is_ornament(ch) and index > 0 and index < len(core) - 1),
-            None,
-        )
-        if internal is not None:
-            end = internal + 1
-            while end < len(core) and is_ornament(core[end]):
-                end += 1
-            return edge_prefix + core[end:] + core[internal:end] + core[:internal] + edge_suffix
-        return raw
+    # A fallback is needed only when the base Arabic font cannot render every
+    # symbol. Shape and reorder the complete mixed string exactly once before
+    # splitting it between fonts; otherwise a name such as ``مرحبا ☀🐎`` is
+    # drawn left-to-right in separate runs and appears visually reversed.
     if arabic_reshaper is not None and get_display is not None:
         try:
             return get_display(arabic_reshaper.reshape(raw), base_dir="R")
@@ -5879,8 +5836,25 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         except Exception:
             return float(font.getlength(value))
 
+    def visual_for_centered(value, current_size):
+        # Keep ordinary Arabic logical text for libraqm: draw.text(direction=rtl)
+        # will shape and order it. Only pre-shape when a mixed-font fallback is
+        # genuinely required, otherwise the title itself gets reversed twice.
+        if _has_arabic(value):
+            candidate = _gift_font(value, current_size)
+            complete = all(
+                _font_has_glyph(candidate, ch) or unicodedata.category(ch).startswith("M")
+                for ch in value if not ch.isspace()
+            )
+            try:
+                if complete and PIL_AVAILABLE and features.check("raqm"):
+                    return value
+            except Exception:
+                pass
+        return _shape_name_for_fallback(value)
+
     while size > 14:
-        visual = _shape_name_for_fallback(raw_text)
+        visual = visual_for_centered(raw_text, size)
         base = _gift_font(visual, size)
         fallbacks = _fallback_fonts(size)
         width = 0.0
@@ -5895,7 +5869,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
             break
         size -= 2
 
-    visual = _shape_name_for_fallback(raw_text)
+    visual = visual_for_centered(raw_text, size)
     base = _gift_font(visual, size)
     fallbacks = _fallback_fonts(size)
     width = 0.0
