@@ -100,5 +100,20 @@ class CricketLeague:
         for team in teams:
             lines.append(f"• {team.get('name')} — {team.get('room')} — {len(team.get('players', []))}/4")
         for match in data.get("matches", []):
-            lines.append(f"📅 الجولة {match.get('round')}: {match.get('team1')} × {match.get('team2')} — {match.get('at')}")
+            lines.append(f"📅 الجولة {match.get('round')} [{str(match.get('id', ''))[:6]}] {match.get('team1')} × {match.get('team2')} — {match.get('at')} — {match.get('status')}")
+        if data.get("matches"):
+            lines.append("لفتح مباراة يدويًا: افتح مباراة الدوري@رمز المباراة")
         return "\n".join(lines)
+
+    def open_match(self, selector):
+        """Mark one scheduled match as master-opened; never opens by time."""
+        token = str(selector or "").strip().lstrip("#")
+        def mutate(data):
+            for match in data.get("matches", []):
+                if str(match.get("id", "")).startswith(token) or token in {str(match.get("team1", "")), str(match.get("team2", ""))}:
+                    if match.get("status") not in {"scheduled", "open"}:
+                        return {"ok": False, "error": "هذه المباراة ليست مجدولة أو مفتوحة حاليًا."}
+                    match["status"] = "open"
+                    return {"ok": True, "match": copy.deepcopy(match)}
+            return {"ok": False, "error": "لم أجد رقم المباراة في جدول الدوري."}
+        return self.state.mutate(mutate)

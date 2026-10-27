@@ -320,6 +320,32 @@ class CricketIntegration:
             else:
                 self._send_private(sender, room, "✅ تم فتح دوري الكركيت وتحديد جدول التصفيات:\n" + self.league.summary())
             return True
+        open_match = re.fullmatch(r"(?:افتح مباراة الدوري|فتح مباراة الدوري|ابدأ مباراة الدوري|start league match)@?\s*([a-f0-9]{4,}|[^@\s]+)", str(text or "").strip(), re.I)
+        if open_match:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 فتح مباريات الدوري للماستر المحدد فقط.")
+                return True
+            selected = self.league.open_match(open_match.group(1))
+            if not selected.get("ok"):
+                self._send_private(sender, room, f"❌ {selected.get('error')}")
+                return True
+            match = selected["match"]
+            teams = {str(item.get("name")): item for item in self.league.status().get("teams", {}).values()}
+            team1, team2 = teams.get(str(match.get("team1"))), teams.get(str(match.get("team2")))
+            if not team1 or not team2:
+                self._send_private(sender, room, "❌ بيانات فريقي المباراة غير مكتملة.")
+                return True
+            previous = self.game.current(str(team1.get("room") or ""))
+            result = self.game.open_league_match(
+                team1.get("room"), team2.get("room"), team1.get("name"), team2.get("name"),
+                team1.get("players", []), team2.get("players", []),
+            )
+            if result:
+                self._send_private(sender, room, result)
+            else:
+                self._deliver_transition(previous, str(team1.get("room") or ""))
+                self._send_private(sender, room, f"✅ فُتحت المباراة {match.get('id', '')[:6]} في الغرفتين، وتم إرسال أسماء اللاعبين وطلب Join.")
+            return True
         register = re.fullmatch(r"(?:سجل فريق|تسجيل فريق|register team)@([^@]+)@([^@]+)@(.+)", str(text or "").strip(), re.I | re.S)
         if register:
             if not self.is_configured_master(sender):
@@ -408,7 +434,11 @@ class CricketIntegration:
         if not defer_resume:
             self._resume_after_restart()
 
-        if is_private and self._private_league_command(room, sender, text):
+        manual_league_open = re.fullmatch(
+            r"(?:افتح مباراة الدوري|فتح مباراة الدوري|ابدأ مباراة الدوري|start league match)@?\s*([a-f0-9]{4,}|[^@\s]+)",
+            str(text or "").strip(), re.I,
+        )
+        if (is_private or manual_league_open) and self._private_league_command(room, sender, text):
             return True
 
         if control in self.PRIVATE_START_COMMANDS | self.PRIVATE_STOP_COMMANDS:

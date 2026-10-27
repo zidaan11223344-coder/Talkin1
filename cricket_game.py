@@ -411,6 +411,34 @@ class CricketGame:
 
         return self.state.mutate(mutate)
 
+    def open_league_match(self, room1: str, room2: str, team1: str, team2: str, players1, players2) -> str | None:
+        """Create a league lobby only after the master explicitly opens it."""
+        room1, room2 = str(room1 or "").strip(), str(room2 or "").strip()
+        key1, key2 = _key(room1), _key(room2)
+        roster1 = [str(p).strip().lstrip("@") for p in players1 if str(p).strip()]
+        roster2 = [str(p).strip().lstrip("@") for p in players2 if str(p).strip()]
+        def mutate(data):
+            if not data.get("enabled"):
+                return "⛔ لعبة الكركيت غير مفعلة؛ شغلها الماستر أولاً."
+            if not key1 or not key2 or key1 == key2:
+                return "❌ غرفتا مباراة الدوري يجب أن تكونا مختلفتين."
+            if self._match_for_room(data, key1) or self._match_for_room(data, key2):
+                return "⏳ إحدى غرف مباراة الدوري مشاركة في مباراة مفتوحة بالفعل."
+            match = self._new_match(room1, key1, "lobby", self.MAX_PLAYERS)
+            match["mode"] = "rooms"
+            match["league"] = True
+            match["league_team_names"] = {key1: str(team1), key2: str(team2)}
+            match["rooms"].append({"key": key2, "name": room2, "players": []})
+            self._matches(data)[match["id"]] = match
+            names1 = "، ".join(f"@{p}" for p in roster1)
+            names2 = "، ".join(f"@{p}" for p in roster2)
+            self._emit(data, self._participants(match),
+                f"🏏 دوري الكركيت — فتح الماستر للمباراة\n"
+                f"👥 {team1}: {names1}\n👥 {team2}: {names2}\n"
+                "📣 أرسل كل لاعب Join داخل غرفة فريقه. لا تبدأ المباراة إلا بعد اكتمال الفريقين.")
+            return None
+        return self.state.mutate(mutate)
+
     def _maybe_start_teams(self, data: dict[str, Any], match: dict[str, Any]) -> bool:
         rooms = self._participants(match)
         target = int(match.get("target_players") or 0)
