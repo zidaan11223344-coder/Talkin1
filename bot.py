@@ -5321,6 +5321,34 @@ def _clean_name_for_image(text):
     raw = str(text or "").lstrip("@")
     return "".join(ch for ch in raw if ch not in _NAME_BIDI_CONTROLS)
 
+def _compact_name_for_image(text):
+    """Keep the readable name while dropping width-heavy decoration.
+
+    This is used only for image display. NFKC turns mathematical/styled Latin
+    letters into ordinary letters; combining marks, format controls, symbols,
+    and ornamental punctuation are removed when a card cannot fit the exact
+    decorated spelling. Account identity and saved correction records remain
+    based on the original text.
+    """
+    raw = _clean_name_for_image(text)
+    normalized = unicodedata.normalize("NFKC", raw)
+    kept = []
+    for ch in normalized:
+        category = unicodedata.category(ch)
+        if category.startswith(("M", "C")) or ch == "ـ":
+            continue
+        if category.startswith("N") or ch in " ._-":
+            kept.append(ch)
+        elif category.startswith("L"):
+            # Keep common readable scripts after NFKC, but drop obscure
+            # letter-like ornament blocks (for example ꪻ/𖹭) that render as
+            # oversized glyphs or tofu in chat fonts.
+            script_name = unicodedata.name(ch, "")
+            if any(script in script_name for script in ("LATIN", "ARABIC", "GREEK", "CYRILLIC", "HEBREW")):
+                kept.append(ch)
+    compact = "".join(kept)
+    return compact.strip() or normalized.strip()
+
 def _name_for_chat_text(text):
     """Isolate a decorated username inside mixed Arabic chat sentences."""
     raw = str(text or "")
@@ -5882,6 +5910,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         # moving internal symbol-separated Arabic runs to the readable order.
         return _shape_name_for_fallback(value)
 
+    compacted = False
     while size > 14:
         visual = visual_for_centered(raw_text, size)
         base = _gift_font(visual, size)
@@ -5896,6 +5925,12 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
                 width += metrics(ch, font, ch)
         if width <= max_width:
             break
+        if not compacted:
+            compact = _compact_name_for_image(raw_text)
+            if compact and compact != raw_text:
+                raw_text = compact
+                compacted = True
+                continue
         size -= 2
 
     visual = visual_for_centered(raw_text, size)
