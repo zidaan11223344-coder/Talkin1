@@ -5559,6 +5559,8 @@ def _verify_secret_export_password(password):
 _GIFT_FONT_CACHE = {}
 _GLYPH_CACHE = {}
 _FONT_CMAP_CACHE = {}
+_EMOJI_FONT_PATH = BASE_DIR / "assets" / "NotoColorEmoji.ttf"
+_EMOJI_FONT_CACHE = {}
 
 try:
     from fontTools.ttLib import TTFont
@@ -5572,6 +5574,59 @@ def _load_font(path, size):
     if key not in _GIFT_FONT_CACHE:
         _GIFT_FONT_CACHE[key]=ImageFont.truetype(str(path),int(size))
     return _GIFT_FONT_CACHE[key]
+
+
+def _emoji_font():
+    """Load the bundled color emoji font at its supported bitmap strike."""
+    key = str(_EMOJI_FONT_PATH)
+    if key in _EMOJI_FONT_CACHE:
+        return _EMOJI_FONT_CACHE[key]
+    if not _EMOJI_FONT_PATH.is_file():
+        return None
+    try:
+        # NotoColorEmoji exposes a fixed 109px strike; Pillow rejects arbitrary
+        # sizes for this font, so the rendered glyph is resized below.
+        font = ImageFont.truetype(str(_EMOJI_FONT_PATH), 109)
+    except Exception:
+        font = None
+    _EMOJI_FONT_CACHE[key] = font
+    return font
+
+
+def _is_emoji_base(ch):
+    codepoint = ord(ch)
+    return (
+        0x1F000 <= codepoint <= 0x1FAFF
+        or 0x1FC00 <= codepoint <= 0x1FFFD
+    )
+
+
+def _draw_color_emoji(draw, xy, token, size):
+    """Draw one emoji token without losing color emoji unsupported by TTF fonts."""
+    font = _emoji_font()
+    target = getattr(draw, "_image", None)
+    if font is None or target is None:
+        return None
+    try:
+        bbox = font.getbbox(token)
+        if not bbox or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+            return None
+        pad = 12
+        layer = Image.new("RGBA", (bbox[2] - bbox[0] + pad * 2, bbox[3] - bbox[1] + pad * 2), (0, 0, 0, 0))
+        layer_draw = ImageDraw.Draw(layer)
+        layer_draw.text((pad - bbox[0], pad - bbox[1]), token, font=font, embedded_color=True)
+        alpha_box = layer.getchannel("A").getbbox()
+        if not alpha_box:
+            return None
+        layer = layer.crop(alpha_box)
+        wanted_h = max(14, int(size * 1.08))
+        wanted_w = max(14, int(round(layer.width * wanted_h / max(1, layer.height))))
+        layer = layer.resize((wanted_w, wanted_h), Image.Resampling.LANCZOS)
+        x, y = int(xy[0]), int(xy[1] + (size - wanted_h) * 0.08)
+        target.paste(layer, (x, y), layer)
+        return float(wanted_w)
+    except Exception:
+        return None
 
 def _font_cmap(path):
     """Return a real Unicode cmap so .notdef/tofu glyphs are never mistaken
@@ -5618,6 +5673,8 @@ def _fallback_font_paths():
         BASE_DIR/"assets"/"Symbola.ttf",
         BASE_DIR/"assets"/"NotoSansEgyptianHieroglyphs-Regular.ttf",
         BASE_DIR/"assets"/"NotoMusic-Regular.ttf",
+        BASE_DIR/"assets"/"NotoSansSinhala-Regular.ttf",
+        BASE_DIR/"assets"/"NotoSansKhmer-Regular.ttf",
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-SemiBold.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
@@ -5754,6 +5811,9 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
             x += draw.textlength(run,font=font,direction="ltr")
         except Exception:
             x += font.getlength(run)
+    # Color emoji are rendered separately because NotoColorEmoji is a fixed
+    # bitmap font and cannot be loaded as a normal arbitrary-size TTF run.
+    # This path is used by the token-aware pass below for new cards.
     if unsupported:
         try:
             # Keep a concise diagnostic in the log without exposing the full name.
@@ -5792,15 +5852,14 @@ def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
 def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True):
-    """Center the username using actual mixed-font glyph widths."""
+    """Center the exact username using mixed fonts and color emoji."""
     raw_text = _clean_name_for_image(raw_text)
     if apply_correction:
         raw_text = _display_name_for_image(raw_text)
-    size=int(size)
+    size = int(size)
+    if not raw_text:
+        return
     if grow_short:
-        # The old renderer only shrank text, making short usernames look tiny
-        # beside long decorated names. Increase short names first, then let
-        # the fitting loop reduce long names when they approach the frame.
         meaningful = [
             ch for ch in raw_text
             if unicodedata.category(ch)[0] not in {"M", "C", "P", "S"}
@@ -5813,40 +5872,78 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
             size = int(size * 1.20)
         elif count <= 22:
             size = int(size * 1.08)
-    while size>14:
-        visual=_shape_name_for_fallback(raw_text)
-        base=_gift_font(visual,size)
-        fallbacks=_fallback_fonts(size)
-        width=0
-        for ch in visual:
-            font=_pick_font_for_char(base,fallbacks,ch)
-            if font is None:
-                continue
-            try: width += draw.textlength(ch,font=font,direction='ltr')
-            except Exception: width += font.getlength(ch)
-        if width<=max_width:
-            break
-        size-=2
-    visual=_shape_name_for_fallback(raw_text)
-    base=_gift_font(visual,size)
-    fallbacks=_fallback_fonts(size)
-    width=0
-    top=999999; bottom=-999999
-    for ch in visual:
-        font=_pick_font_for_char(base,fallbacks,ch)
-        if font is None: continue
-        try: width += draw.textlength(ch,font=font,direction='ltr')
-        except Exception: width += font.getlength(ch)
+
+    def metrics(value, font, ch):
         try:
-            b=font.getbbox(ch)
-            top=min(top,b[1]); bottom=max(bottom,b[3])
+            return float(draw.textlength(value, font=font, direction="ltr"))
+        except Exception:
+            return float(font.getlength(value))
+
+    while size > 14:
+        visual = _shape_name_for_fallback(raw_text)
+        base = _gift_font(visual, size)
+        fallbacks = _fallback_fonts(size)
+        width = 0.0
+        for ch in visual:
+            if _is_emoji_base(ch):
+                width += size
+                continue
+            font = _pick_font_for_char(base, fallbacks, ch)
+            if font is not None:
+                width += metrics(ch, font, ch)
+        if width <= max_width:
+            break
+        size -= 2
+
+    visual = _shape_name_for_fallback(raw_text)
+    base = _gift_font(visual, size)
+    fallbacks = _fallback_fonts(size)
+    width = 0.0
+    top, bottom = 999999, -999999
+    for ch in visual:
+        if _is_emoji_base(ch):
+            width += size
+            top = min(top, 0)
+            bottom = max(bottom, size)
+            continue
+        font = _pick_font_for_char(base, fallbacks, ch)
+        if font is None:
+            continue
+        width += metrics(ch, font, ch)
+        try:
+            bbox = font.getbbox(ch)
+            top = min(top, bbox[1])
+            bottom = max(bottom, bbox[3])
         except Exception:
             pass
-    if top==999999:
+    if top == 999999:
         return
-    x=center[0]-width/2
-    y=center[1]-(bottom-top)/2-top
-    _draw_name_visual(draw,(x,y),raw_text,size,fill,stroke_width=2,stroke_fill=(0,0,0,220))
+
+    cursor = float(center[0]) - width / 2
+    y = float(center[1]) - (bottom - top) / 2 - top
+    normal = []
+    normal_width = 0.0
+    for ch in visual:
+        if _is_emoji_base(ch):
+            if normal:
+                _draw_name_visual(
+                    draw, (cursor, y), "".join(normal), size, fill,
+                    stroke_width=2, stroke_fill=(0, 0, 0, 220),
+                )
+                cursor += normal_width
+                normal = []
+                normal_width = 0.0
+            cursor += _draw_color_emoji(draw, (cursor, y), ch, size) or size
+            continue
+        normal.append(ch)
+        font = _pick_font_for_char(base, fallbacks, ch)
+        if font is not None:
+            normal_width += metrics(ch, font, ch)
+    if normal:
+        _draw_name_visual(
+            draw, (cursor, y), "".join(normal), size, fill,
+            stroke_width=2, stroke_fill=(0, 0, 0, 220),
+        )
 
 def render_name_preview_card(name, *, corrected=False):
     """Create a private visual check using the same username renderer as cards."""
@@ -6190,7 +6287,8 @@ def render_billion_card(winner_name, winner_photo_url=""):
                    (255, 224, 145, 255), max(80, text_right - text_left))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
                         str(winner_name or "").lstrip("@"), max(24, int(h * 0.065)),
-                        (255, 255, 255, 255), max(80, text_right - text_left))
+                        (255, 255, 255, 255), max(80, text_right - text_left),
+                        apply_correction=False)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
@@ -6260,8 +6358,11 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     _draw_centered(draw, text_center, "🏆 " + title, max(28, int(h * .038)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
     source_name = str(winner_name or "").strip().lstrip("@")
-    approved_name = _has_image_name_correction(source_name)
-    raw_name = _display_name_for_image(source_name)
+    # Game cards must show the exact username received in the chat event.
+    # Master-approved image-name corrections are intentionally not applied
+    # here; they belong to the separate name-repair flow, not game results.
+    approved_name = False
+    raw_name = source_name
     clusters = []
     for char in raw_name:
         is_mark = unicodedata.category(char).startswith("M") or char in {"\u200d", "\ufe0e", "\ufe0f"}
@@ -6448,6 +6549,7 @@ def render_rare_diamond_winner_card(winner_name, winner_photo_url="", source_pat
         draw, (center_x, panel_box[1] + (panel_box[3] - panel_box[1]) * .70),
         str(winner_name or "").lstrip("@"), max(34, int(h * .045)),
         (255, 255, 255, 255), max(80, text_right - text_left),
+        apply_correction=False,
     )
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
@@ -6552,6 +6654,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
         38,
         (126, 226, 255, 255),
         text_max_w,
+        apply_correction=False,
     )
 
     try:
