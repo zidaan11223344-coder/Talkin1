@@ -5294,6 +5294,17 @@ def _display_name_for_image(text):
         return source
     records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
     record = records.get(key) if isinstance(records, dict) else None
+    if record is None and isinstance(records, dict):
+        compact_key = _game_name_key(source)
+        for candidate in records.values():
+            if not isinstance(candidate, dict):
+                continue
+            if compact_key in {
+                _game_name_key(candidate.get("source_name", "")),
+                _game_name_key(candidate.get("display_name", "")),
+            }:
+                record = candidate
+                break
     corrected = record.get("display_name") if isinstance(record, dict) else record
     return _clean_name_for_image(corrected) if isinstance(corrected, str) and corrected else source
 
@@ -5309,6 +5320,7 @@ def _save_image_name_correction(source_name, display_name):
     # Replace the user's previous correction chain instead of accumulating
     # stale aliases when the master uses "تعديل اسم" again.
     related_names = {key, _image_name_key(display)}
+    related_game_names = {_game_name_key(source), _game_name_key(display)}
     changed = True
     while changed:
         changed = False
@@ -5319,13 +5331,25 @@ def _save_image_name_correction(source_name, display_name):
                 _image_name_key(record.get("source_name", "")),
                 _image_name_key(record.get("display_name", "")),
             }
-            overlap = record_names & related_names
+            record_game_names = {
+                _game_name_key(record.get("source_name", "")),
+                _game_name_key(record.get("display_name", "")),
+            }
+            overlap = (record_names & related_names) or (record_game_names & related_game_names)
             if overlap and not record_names.issubset(related_names):
-                before = len(related_names)
+                before = (len(related_names), len(related_game_names))
                 related_names.update(record_names)
-                changed = len(related_names) != before
-    for old_key in related_names:
-        records.pop(old_key, None)
+                related_game_names.update(record_game_names)
+                changed = (len(related_names), len(related_game_names)) != before
+    for old_key, record in list(records.items()):
+        if old_key in related_names or (
+            isinstance(record, dict)
+            and (
+                _game_name_key(record.get("source_name", "")) in related_game_names
+                or _game_name_key(record.get("display_name", "")) in related_game_names
+            )
+        ):
+            records.pop(old_key, None)
     correction = {
         "source_name": source,
         "display_name": display,

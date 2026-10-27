@@ -144,6 +144,14 @@ def test_new_approved_correction_replaces_previous_alias_chain(tmp_path):
         assert bot_module._display_name_for_image(previous) == previous
 
 
+def test_edit_replaces_old_decorated_approval_even_with_tatweel_variation(tmp_path):
+    with patch.object(bot_module, "NAME_IMAGE_CORRECTIONS_FILE", tmp_path / "names.json"):
+        bot_module._save_image_name_correction("الهـيبه", "الهــيبه")
+        bot_module._save_image_name_correction("الهــيبه", "الهہيبه")
+        assert bot_module._display_name_for_image("الهــيبه") == "الهہيبه"
+        assert bot_module._display_name_for_image("الهـيبه") == "الهہيبه"
+
+
 def test_master_can_post_personalized_million_and_billion_preview_to_command_room(tmp_path):
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot.stock_pending = {}
