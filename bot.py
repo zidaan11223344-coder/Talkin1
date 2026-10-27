@@ -7821,6 +7821,7 @@ class TalkinBot:
         # Global wager queues, crop timers, and fruit-match state. A wager
         # reserves points immediately, so it must survive a process restart.
         self.wager_waiting = self._load_wager_state()
+        self._recover_pending_wager_debits()
         # Global fixed-prize PvP queues: one open challenge per game name.
         self.fixed_game_waiting = {}
         # Temporary one-minute anti-steal protection granted by the حصانه command.
@@ -14805,6 +14806,43 @@ class TalkinBot:
             restored[str(key).casefold()] = item
         return restored
 
+    def _recover_pending_wager_debits(self):
+        """Finish a wager debit interrupted by a process/platform restart."""
+        recovered = []
+        with self.game_lock:
+            rows = [
+                (key, dict(value)) for key, value in self.wager_waiting.items()
+                if isinstance(value, dict) and value.get("status") == "pending_debit"
+            ]
+        for key, waiting in rows:
+            user = str(waiting.get("user") or "").strip()
+            stake = int(waiting.get("stake", 0) or 0)
+            challenge_id = str(waiting.get("id") or "")
+            txid = str(waiting.get("debit_transaction_id") or f"wager-debit:{challenge_id}")
+            if not user or stake <= 0 or not challenge_id:
+                continue
+            debit = _apply_points_delta_once(
+                user, -stake, txid, f"reserve {waiting.get('game', 'wager')} stake"
+            )
+            if not debit.get("ok"):
+                if debit.get("error") == "insufficient":
+                    with self.game_lock:
+                        current = self.wager_waiting.get(key)
+                        if current and str(current.get("id") or "") == challenge_id:
+                            self.wager_waiting.pop(key, None)
+                            self._save_wager_state()
+                continue
+            with self.game_lock:
+                current = self.wager_waiting.get(key)
+                if current and str(current.get("id") or "") == challenge_id:
+                    current["status"] = "active"
+                    current["reserved"] = True
+                    current["debit_transaction_id"] = txid
+                    recovered.append(key)
+                    self._save_wager_state()
+        if recovered:
+            self.log("[GAME] recovered wager reservations after restart", len(recovered))
+
     def _save_wager_state(self):
         """Persist open wagers through the shared atomic JSON writer."""
         with self.game_lock:
@@ -15024,19 +15062,36 @@ class TalkinBot:
                 self.wager_waiting.pop(key, None)
                 self._save_wager_state()
             elif error is None:
-                # Reserve the stake immediately. This prevents spending the same
-                # balance in another game while the challenge is open.
-                _add_points(sender, -amount)
+                # Persist the reservation before debiting. If the platform
+                # stops between these two operations, startup resumes the
+                # pending debit with the same idempotent transaction id.
+                challenge_id = uuid.uuid4().hex
                 self.wager_waiting[key] = {
-                    "id": uuid.uuid4().hex,
+                    "id": challenge_id,
                     "user": sender,
                     "room": room,
                     "stake": amount,
                     "reserved": True,
+                    "status": "pending_debit",
+                    "debit_transaction_id": f"wager-debit:{challenge_id}",
                     "game": game_name,
                     "created": time.time(),
                 }
                 self._save_wager_state()
+                debit = _apply_points_delta_once(
+                    sender, -amount, f"wager-debit:{challenge_id}",
+                    f"reserve {game_name} stake",
+                )
+                if not debit.get("ok"):
+                    self.wager_waiting.pop(key, None)
+                    self._save_wager_state()
+                    error = _reply_template(
+                        "game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"],
+                        balance=_fmt_points(_get_points(sender)),
+                    ) if debit.get("error") == "insufficient" else "❌ تعذر حفظ حجز الرهان بأمان."
+                else:
+                    self.wager_waiting[key]["status"] = "active"
+                    self._save_wager_state()
 
         if error:
             self.send_room_text(room, error)
