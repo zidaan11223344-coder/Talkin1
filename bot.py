@@ -5246,11 +5246,18 @@ def _shape_name_for_fallback(text):
             edge_prefix, core, edge_suffix = "", raw, ""
         if not core:
             return raw
-        # Framed names already arrive in the room's intended order. Keep the
-        # complete inner text unchanged; only unframed names use the internal
-        # ornament swap below.
+        # In framed names, use the inner heh-like letter as the pivot: the
+        # text after it moves to the beginning and the text before it moves to
+        # the end. The ornamental frame itself stays fixed.
         if edge_prefix and edge_suffix:
-            return raw
+            pivot = next(
+                (index for index, ch in enumerate(core)
+                 if ch in {"ه", "ھ", "ہ", "ۿ", "ۀ", "ە"}
+                 and index > 0 and index < len(core) - 1),
+                None,
+            )
+            if pivot is not None:
+                return edge_prefix + core[pivot + 1:] + core[pivot:pivot + 1] + core[:pivot] + edge_suffix
         internal = next(
             (index for index, ch in enumerate(core)
              if is_ornament(ch) and index > 0 and index < len(core) - 1),
