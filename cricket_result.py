@@ -117,7 +117,7 @@ def render_result_image(*, match_id: str, team1_name: str = "الفريق الأ
 
     # Four-player teams need vertical room for the hero area plus four
     # two-line player rows; the previous 960px canvas clipped the lower rows.
-    W, H = 1600, 1240
+    W, H = 1600, 1400
     img = Image.new("RGBA", (W, H), (7, 13, 27, 255))
     bg = Image.new("RGBA", (W, H), (7, 13, 27, 255))
     bg = bg.filter(ImageFilter.GaussianBlur(1))
