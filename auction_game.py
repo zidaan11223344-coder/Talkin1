@@ -20,7 +20,7 @@ BID_INCREMENT = 10_000_000
 MAX_PARTICIPANTS = 5
 MIN_PARTICIPANTS_TO_START_EARLY = 3
 BIDDING_DURATION_SECONDS = 60
-REDEMPTION_BONUS_PERCENT = 30
+REDEMPTION_BONUS_PERCENT = 5
 MAX_IMAGE_BYTES = 50_000
 
 # These existing Talkin2 treasure images are already below MAX_IMAGE_BYTES.
@@ -640,7 +640,7 @@ class AuctionGame:
             str(username or record.get("username") or "").strip().lstrip("@"),
             int(record.get("redemption_value", 0) or 0),
             str(record.get("redemption_transaction_id") or f"auction-redemption:{record.get('id')}"),
-            "world auction collectible redemption with 30 percent bonus",
+            "world auction collectible redemption with 5 percent bonus",
         )
         if not isinstance(result, dict) or not result.get("ok"):
             return {"ok": False, "error": (result.get("error") if isinstance(result, dict) else "persistence_failed"), "pending": True, "item": record}

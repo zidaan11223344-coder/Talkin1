@@ -1,16 +1,16 @@
-"""Cricket result-card renderer. Kept separate from the bot runtime."""
+"""Elegant cricket result-card renderer for the Talkin game."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
-except ImportError:  # Keep older deployments readable until dependencies are installed.
+except ImportError:
     arabic_reshaper = None
     get_display = None
 
@@ -20,9 +20,6 @@ FONT_CANDIDATES = (
     os.getenv("CRICKET_FONT", "").strip(),
     str(ROOT / "assets" / "NotoSansArabic-SemiBold.ttf"),
     str(ROOT / "assets" / "NotoSansArabic-Regular.ttf"),
-    str(ROOT / "vendor" / "assets" / "NotoSansArabic-CondensedSemiBold.ttf"),
-    "/usr/share/fonts/truetype/noto/NotoSansArabic-SemiCondensedMedium.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSansArabic-CondensedSemiBold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 )
 
@@ -35,21 +32,17 @@ def _font(size: int):
 
 
 def _latin_font(size: int):
-    candidates = (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    )
-    for candidate in candidates:
+    for candidate in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
         if Path(candidate).is_file():
             return ImageFont.truetype(candidate, size)
     return _font(size)
+
 
 def _has_arabic(value: str) -> bool:
     return any("\u0600" <= ch <= "\u06ff" for ch in str(value))
 
 
 def _shape_rtl(value: str) -> str:
-    """Return shaped, visually ordered text for Pillow's left-to-right API."""
     text = str(value)
     if not _has_arabic(text) or arabic_reshaper is None or get_display is None:
         return text
@@ -59,112 +52,107 @@ def _shape_rtl(value: str) -> str:
         return text
 
 
-def _text(draw: ImageDraw.ImageDraw, xy, value: str, font, anchor="la", fill=(245, 247, 250), rtl: bool | None = None):
-    if rtl is None:
-        rtl = _has_arabic(value)
+def _text(draw, xy, value, font, anchor="la", fill=(245, 247, 250), rtl=None):
+    value = str(value)
+    rtl = _has_arabic(value) if rtl is None else rtl
     try:
-        if rtl:
-            # Pillow's RAQM engine shapes Arabic and resolves bidirectional text
-            # when given the original string and explicit RTL direction. Do not
-            # pass a pre-reordered string to Pillow: that reverses it a second time.
-            draw.text(xy, str(value), font=font, fill=fill, anchor=anchor, direction="rtl", language="ar")
-        else:
-            draw.text(xy, value, font=font, fill=fill, anchor=anchor)
+        draw.text(xy, value, font=font, fill=fill, anchor=anchor,
+                  direction="rtl" if rtl else "ltr", language="ar" if rtl else None)
     except Exception:
-        if rtl:
-            draw.text(xy, _shape_rtl(value), font=font, fill=fill, anchor=anchor)
-        else:
-            draw.text(xy, value, font=font, fill=fill, anchor=anchor)
+        draw.text(xy, _shape_rtl(value) if rtl else value, font=font, fill=fill, anchor=anchor)
 
 
-def render_result_image(
-    *,
-    match_id: str,
-    team1_name: str = "الفريق الأول",
-    team1_players: Iterable[str] = (),
-    team1_score: int = 0,
-    team2_name: str = "الفريق الثاني",
-    team2_players: Iterable[str] = (),
-    team2_score: int = 0,
-    player_scores: dict[str, int] | None = None,
-    player_awards: dict[str, int] | None = None,
-    winner: str = "تعادل",
-    prize: int = 0,
-    output_dir: str | Path | None = None,
-    # Backward-compatible arguments for older integrations.
-    players: Iterable[str] | None = None,
-    human_score: int | None = None,
-    bot_score: int | None = None,
-) -> str:
-    """Render a reusable two-team cricket result card."""
+def _asset(name: str, size: tuple[int, int]) -> Image.Image | None:
+    path = ROOT / "assets" / name
+    if not path.is_file():
+        return None
+    try:
+        image = Image.open(path).convert("RGBA")
+        image.thumbnail(size, Image.Resampling.LANCZOS)
+        return image
+    except Exception:
+        return None
+
+
+def _paste_cover(canvas, source: Image.Image | None, box, tint):
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    if source is None:
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle(box, radius=26, fill=tint)
+        return
+    source = source.copy()
+    source.thumbnail((w - 30, h - 30), Image.Resampling.LANCZOS)
+    backdrop = Image.new("RGBA", (w, h), tint)
+    backdrop.alpha_composite(source, ((w - source.width) // 2, (h - source.height) // 2))
+    canvas.alpha_composite(backdrop, (x1, y1))
+
+
+def render_result_image(*, match_id: str, team1_name: str = "الفريق الأول",
+                        team1_players: Iterable[str] = (), team1_score: int = 0,
+                        team2_name: str = "الفريق الثاني", team2_players: Iterable[str] = (),
+                        team2_score: int = 0, player_scores: dict[str, int] | None = None,
+                        player_awards: dict[str, int] | None = None, winner: str = "تعادل",
+                        prize: int = 0, output_dir: str | Path | None = None,
+                        players: Iterable[str] | None = None, human_score: int | None = None,
+                        bot_score: int | None = None) -> str:
+    """Render a cinematic two-team card; scores sit in high-contrast boxes above imagery."""
     target_dir = Path(output_dir) if output_dir else OUTPUT_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(ch for ch in str(match_id) if ch.isalnum())[:24] or "match"
-    filename = f"cricket_result_{safe_id}.png"
-    path = target_dir / filename
-
+    path = target_dir / f"cricket_result_{safe_id}.png"
     if players is not None:
         team1_players = players
     if human_score is not None:
         team1_score = human_score
     if bot_score is not None:
         team2_score = bot_score
-
     p1 = [str(p).lstrip("@") for p in team1_players if str(p).strip()]
     p2 = [str(p).lstrip("@") for p in team2_players if str(p).strip()]
     scores = {str(k).lstrip("@"): int(v) for k, v in (player_scores or {}).items()}
     awards = {str(k).lstrip("@"): int(v) for k, v in (player_awards or {}).items()}
 
-    W, H = 1500, 900
-    img = Image.new("RGB", (W, H), (13, 18, 28))
+    W, H = 1600, 960
+    img = Image.new("RGBA", (W, H), (7, 13, 27, 255))
+    bg = Image.new("RGBA", (W, H), (7, 13, 27, 255))
+    bg = bg.filter(ImageFilter.GaussianBlur(1))
+    img.alpha_composite(bg)
     draw = ImageDraw.Draw(img)
-    title = _font(60)
-    team = _font(34)
-    name = _font(27)
-    latin_name = _latin_font(27)
-    score = _font(48)
-    small = _font(24)
+    gold, white = (247, 201, 92, 255), (245, 248, 252, 255)
+    blue, red = (35, 157, 255, 255), (232, 62, 83, 255)
+    draw.rounded_rectangle((24, 20, W - 24, H - 20), radius=34, fill=(16, 25, 43, 255), outline=(67, 91, 126, 255), width=3)
+    _text(draw, (W // 2, 70), "نتيجة مباراة الكركيت", _font(58), anchor="mm", fill=gold, rtl=True)
+    _text(draw, (W // 2, 132), f"الفائز: {winner}", _font(30), anchor="mm", fill=white, rtl=True)
 
-    draw.rounded_rectangle((30, 25, W - 30, H - 25), radius=30, fill=(20, 27, 41), outline=(88, 103, 130), width=3)
-    _text(draw, (W // 2, 90), "نتيجة مباراة الكركيت", title, anchor="mm", rtl=True)
-    _text(draw, (W // 2, 150), f"الفائز: {winner}", team, anchor="mm", rtl=True)
-
-    left = (55, 205, W // 2 - 18, H - 55)
-    right = (W // 2 + 18, 205, W - 55, H - 55)
-    draw.rounded_rectangle(left, radius=26, fill=(27, 48, 67), outline=(73, 155, 220), width=4)
-    draw.rounded_rectangle(right, radius=26, fill=(45, 35, 48), outline=(191, 105, 165), width=4)
-
-    def panel(box, title_text, players_list, total, rtl_title=True):
-        cx = (box[0] + box[2]) // 2
-        _text(draw, (cx, 255), title_text, team if _has_arabic(title_text) else _latin_font(34), anchor="mm", rtl=rtl_title)
-        draw.text((cx - 12, 320), f"{int(total):,}", font=score, fill=(245, 247, 250), anchor="rm")
-        _text(draw, (cx + 12, 320), "نقطة", score, anchor="lm", rtl=True)
-        y = 390
-        _text(draw, (box[0] + 82, y - 25), "اللاعب", small, anchor="lm", rtl=True)
-        _text(draw, (box[2] - 38, y - 25), "النقاط والجائزة", small, anchor="rm", rtl=True)
-        if not players_list:
-            _text(draw, (cx, y), "لا يوجد لاعبين", small, anchor="mm", rtl=True)
+    panels = [
+        ((55, 190, W // 2 - 18, 875), str(team1_name), p1, int(team1_score), blue, "cricket_attack_blue.png"),
+        ((W // 2 + 18, 190, W - 55, 875), str(team2_name), p2, int(team2_score), red, "cricket_defense_red.png"),
+    ]
+    for box, team_name, players_list, total, accent, hero in panels:
+        draw.rounded_rectangle(box, radius=28, fill=(24, 35, 56, 255), outline=accent, width=5)
+        _text(draw, ((box[0] + box[2]) // 2, box[1] + 42), team_name, _font(34), anchor="mm", fill=white, rtl=_has_arabic(team_name))
+        # Number is deliberately placed in a bright box above the player image.
+        score_box = (box[0] + 32, box[1] + 70, box[2] - 32, box[1] + 158)
+        draw.rounded_rectangle(score_box, radius=18, fill=(8, 14, 27, 245), outline=accent, width=3)
+        _text(draw, ((score_box[0] + score_box[2]) // 2, score_box[1] + 44), f"{total:,} نقطة", _latin_font(42), anchor="mm", fill=white, rtl=False)
+        hero_box = (box[0] + 28, box[1] + 178, box[2] - 28, box[1] + 430)
+        _paste_cover(img, _asset(hero, (hero_box[2] - hero_box[0], hero_box[3] - hero_box[1])), hero_box, (11, 24, 45, 255) if accent == blue else (45, 15, 29, 255))
+        _text(draw, (box[0] + 38, box[1] + 462), "اللاعب", _font(23), anchor="la", fill=gold, rtl=True)
+        _text(draw, (box[2] - 38, box[1] + 462), "النقاط / الجائزة", _font(23), anchor="ra", fill=gold, rtl=True)
+        y = box[1] + 510
         for index, player in enumerate(players_list, 1):
+            player = str(player).strip()
             value = int(scores.get(player, 0))
-            player_text = str(player).lstrip("@").strip()
-            player_font = name if _has_arabic(player_text) else latin_name
-            # Do not mix Arabic with the Latin index/@ in one RTL draw call.
-            # Drawing them separately prevents Arabic names from appearing
-            # reversed or with punctuation in the wrong place.
-            draw.text((box[0] + 38, y), f"{index}.", font=_latin_font(25), fill=(245, 247, 250), anchor="lm")
-            _text(draw, (box[0] + 82, y), player_text, player_font, anchor="lm", rtl=_has_arabic(player_text))
             award = int(awards.get(player, 0))
-            metric = f"{value} / {award:,}"
-            _text(draw, (box[2] - 38, y), metric, _latin_font(23), anchor="rm", rtl=False)
-            y += 65
-
-    panel(left, str(team1_name), p1, team1_score, _has_arabic(str(team1_name)))
-    panel(right, str(team2_name), p2, team2_score, _has_arabic(str(team2_name)))
-
-    draw.line((W // 2, 225, W // 2, H - 75), fill=(115, 125, 145), width=2)
+            draw.ellipse((box[0] + 35, y - 18, box[0] + 69, y + 16), fill=accent)
+            _text(draw, (box[0] + 52, y - 1), str(index), _latin_font(18), anchor="mm", fill=white, rtl=False)
+            _text(draw, (box[0] + 82, y), player, _font(25) if _has_arabic(player) else _latin_font(25), anchor="la", fill=white, rtl=_has_arabic(player))
+            _text(draw, (box[2] - 38, y), f"{value} / {award:,}", _latin_font(22), anchor="ra", fill=white, rtl=False)
+            y += 50
+        if not players_list:
+            _text(draw, ((box[0] + box[2]) // 2, y), "لا يوجد لاعبين", _font(23), anchor="mm", fill=white, rtl=True)
     if prize:
-        draw.rounded_rectangle((W // 2 - 205, H - 125, W // 2 + 205, H - 65), radius=18, fill=(31, 67, 51), outline=(102, 170, 119), width=2)
-        _text(draw, (W // 2, H - 95), f"الجائزة: {prize:,} نقطة", small, anchor="mm", rtl=True)
-
-    img.save(path, "PNG", optimize=True)
-    return filename
+        draw.rounded_rectangle((W // 2 - 245, H - 70, W // 2 + 245, H - 30), radius=15, fill=(26, 84, 53, 255), outline=(107, 194, 132, 255), width=2)
+        _text(draw, (W // 2, H - 50), f"الجائزة: {prize:,} نقطة", _font(22), anchor="mm", fill=white, rtl=True)
+    img.convert("RGB").save(path, "PNG", optimize=True)
+    return path.name

@@ -13,6 +13,9 @@ from cricket_state import JsonState, normalize
 ASSET_FILES = tuple(f"cricket_number_{number}.png" for number in range(0, 7)) + (
     "cricket_duck.png",
     "cricket_hattrick.png",
+    "cricket_attack_blue.png",
+    "cricket_defense_red.png",
+    "cricket_out.png",
 )
 BOT_TEAM_KEY = "__sboot_cricket_bot__"
 _TERMINAL_MATCH_STAGES = {
@@ -32,6 +35,7 @@ def _blank() -> dict[str, Any]:
         "events": [],
         "points": {},
         "wins": {},
+        "stats": {},
     }
 
 
@@ -741,6 +745,9 @@ class CricketGame:
             for player in item.get("players", [])
             if str(player).strip()
         }
+        match["player_balls"] = {str(player).lstrip("@"): 0 for item in participants for player in item.get("players", []) if str(player).strip()}
+        match["player_hat_tricks"] = {str(player).lstrip("@"): 0 for item in participants for player in item.get("players", []) if str(player).strip()}
+        match["player_ducks"] = {str(player).lstrip("@"): 0 for item in participants for player in item.get("players", []) if str(player).strip()}
         start_text = (
             "🏏 بدأت مباراة الكريكيت\n"
             + self._team_summary(match, "attack") + "\n"
@@ -786,6 +793,25 @@ class CricketGame:
         attack_score = int(scores.get("attack", 0))
         defense_score = int(scores.get("defense", 0))
         winner_team = "attack" if attack_score > defense_score else "defense" if defense_score > attack_score else "tie"
+        stats = data.setdefault("stats", {})
+        teams_for_stats = match.get("teams") or {}
+        def update_stats(players, won):
+            for player in players:
+                name = str(player).strip().lstrip("@")
+                key = _user_key(name)
+                row = stats.setdefault(key, {"username": name, "wins": 0, "losses": 0, "matches": 0, "attack_balls": 0, "runs": 0, "hat_tricks": 0, "ducks": 0})
+                row["username"] = name
+                row["matches"] = int(row.get("matches", 0)) + 1
+                row["wins" if won else "losses"] = int(row.get("wins" if won else "losses", 0)) + 1
+                row["runs"] = int(row.get("runs", 0)) + int((match.get("player_scores") or {}).get(name, 0) or 0)
+                row["attack_balls"] = int(row.get("attack_balls", 0)) + int((match.get("player_balls") or {}).get(name, 0) or 0)
+                row["hat_tricks"] = int(row.get("hat_tricks", 0)) + int((match.get("player_hat_tricks") or {}).get(name, 0) or 0)
+                row["ducks"] = int(row.get("ducks", 0)) + int((match.get("player_ducks") or {}).get(name, 0) or 0)
+        for team_name, team_code in (("attack", "attack"), ("defense", "defense")):
+            participant = self._room_for_team(match, team_code)
+            players = [str(p).strip() for p in (participant or {}).get("players", []) if str(p).strip()]
+            if players:
+                update_stats(players, winner_team == team_code)
         teams = match.get("teams") or {}
         player_scores = {str(k).lstrip("@"): int(v) for k, v in (match.get("player_scores") or {}).items()}
         prize = 1_000_000_000
@@ -963,17 +989,22 @@ class CricketGame:
         wickets = match.setdefault("wickets", {"attack": 0, "defense": 0})
         scores = match.setdefault("scores", {"attack": 0, "defense": 0})
         player_scores = match.setdefault("player_scores", {})
-        images = [f"cricket_number_{bat_value}.png"]
+        # Every resolved ball carries the two action views.  A dismissal uses
+        # the dedicated OUT card instead of the ordinary number tile.
+        images = ["cricket_attack_blue.png", "cricket_defense_red.png"]
         out_name = str(bat_choice.get("sender") or "اللاعب").strip().lstrip("@")
         bowler_name = str(bowl_choice.get("sender") or "المدافع").strip().lstrip("@")
 
         if bat_value == bowl_value:
+            images.append("cricket_out.png")
             wickets[batting] = int(wickets.get(batting, 0)) + 1
             match.setdefault("out_players", {"attack": [], "defense": []}).setdefault(batting, []).append(out_name)
             outcome = f"💥 OUT — @{out_name}"
             # A duck is a dismissal before the batter has scored, even when
             # it happens after earlier balls by other players or in innings 2.
             if int(player_scores.get(out_name, 0)) == 0:
+                duck_counts = match.setdefault("player_ducks", {})
+                duck_counts[out_name] = int(duck_counts.get(out_name, 0)) + 1
                 outcome += " 🦆 بطّة"
                 images.append("cricket_duck.png")
             # Talkin2's cricket rule counts a hat-trick when the same defender
@@ -987,6 +1018,8 @@ class CricketGame:
                 match["wicket_streak"] = 1
             match["wicket_streak_bowler"] = bowler_name
             if int(match["wicket_streak"]) == 2:
+                hat_tricks = match.setdefault("player_hat_tricks", {})
+                hat_tricks[bowler_name] = int(hat_tricks.get(bowler_name, 0)) + 1
                 outcome += f" 🔥 هاتريك — @{bowler_name}"
                 images.append("cricket_hattrick.png")
         else:
@@ -995,8 +1028,11 @@ class CricketGame:
             scores[batting] = int(scores.get(batting, 0)) + bat_value
             player_scores[out_name] = int(player_scores.get(out_name, 0)) + bat_value
             outcome = f"🏏 +{bat_value} نقطة"
+            images.append(f"cricket_number_{bat_value}.png")
 
         match["balls"] = ball_no
+        player_balls = match.setdefault("player_balls", {})
+        player_balls[out_name] = int(player_balls.get(out_name, 0)) + 1
         match["choices"] = {}
         turns = match.setdefault("turns", {"attack": 0, "defense": 0})
         turns[batting] = int(turns.get(batting, 0)) + 1
@@ -1058,6 +1094,38 @@ class CricketGame:
         wins = data.get("wins") or {}
         rows = [(str(name), int(value), int(wins.get(name, 0))) for name, value in points.items()]
         rows.sort(key=lambda item: (-item[1], -item[2], item[0]))
+        return rows[:max(1, int(limit))]
+
+    @staticmethod
+    def player_title(attack_balls: int) -> str:
+        if 20 <= attack_balls <= 24:
+            return "أسطورة المضرب"
+        if 15 <= attack_balls <= 18:
+            return "ملك الكرات"
+        if 8 <= attack_balls <= 12:
+            return "محترف الهجوم"
+        return "لاعب كركيت"
+
+    def player_stats(self, username: str) -> dict[str, Any]:
+        key = _user_key(username)
+        data = self.state.load()
+        row = dict((data.get("stats") or {}).get(key) or {})
+        row.setdefault("username", str(username).strip().lstrip("@"))
+        for field in ("wins", "losses", "matches", "attack_balls", "runs", "hat_tricks", "ducks"):
+            row[field] = int(row.get(field, 0) or 0)
+        row["title"] = self.player_title(row["attack_balls"])
+        return row
+
+    def champions(self, limit: int = 10) -> list[dict[str, Any]]:
+        data = self.state.load()
+        rows = []
+        for row in (data.get("stats") or {}).values():
+            if isinstance(row, dict):
+                item = dict(row)
+                item["wins"] = int(item.get("wins", 0) or 0)
+                item["losses"] = int(item.get("losses", 0) or 0)
+                rows.append(item)
+        rows.sort(key=lambda item: (-item["wins"], item["losses"], str(item.get("username", ""))))
         return rows[:max(1, int(limit))]
 
     def current(self, room: str | None = None) -> dict[str, Any] | None:

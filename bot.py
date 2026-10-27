@@ -5089,7 +5089,7 @@ def _default_help_sections():
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
             '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n14. رهان@مبلغ — bet/wager\n15. مضاربة@مبلغ — duel\n16. حظي@مبلغ — my luck\n17. استثمار@مبلغ — investment\n18. حظ@مبلغ — luck@amount\n📌 حدد المبلغ بعد الاسم.',
             '🎮 A3 — الألعاب — 3: البنك والجوائز\n━━━━━━━━━━━━\n19. بنك مليون — bank million\n20. مليار — billion\n21. زرع@رمز — farm/crop@item\n22. فيس@اسم — face@name\n📌 زرع أو farm يعرض المحاصيل؛ 30 محصولاً كحد أقصى في كل قائمة، ثم ns للتالي. الأسماء العربية والإنجليزية مقبولة.',
-            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 30%.',
+            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 5%.',
             '🎮 A3 — ألعاب إضافية\n━━━━━━━━━━━━\n30. زواج / marriage\n31. تحدي / challenge\n32. لغز / riddle\n33. مزاج / mood\n34. حصانه / horse\n35. تسليه / entertainment\n36. بورصة / stock — استثمار تلقائي بالذهب بعد التحذير؛ بورصتي لسجلك\n37. اسرق@اسم / steal\n38. شبيه@اسم / lookalike\n39. Shot / شوت — صيد عادي؛ التنين بعد الإعلان\n40. صيد مزه / صيد مز — اختيار عضو عشوائي وصورة عامة\n41. طليقي — اختيار طليق عشوائي\n42. خلع — حكم مزاح ورد النفقات\n43. طلاق — حكم مزاح بالثلاث\n📌 ns للقائمة التالية.',
             '🏏 A3 — الألعاب — 6: الكركيت\n━━━━━━━━━━━━\nللماستر في الخاص: تشغيل لعبة الكركيت / start cricket game لتفعيل الملفات؛ الإيقاف .cr 0 / stop cricket game.\nللموثقين داخل الغرفة: أرسل .cr 1 لفتح الإعداد، ثم أرسل رقمًا من 1 إلى 4 (مثل .cr 4) وبعدها يرسل كل لاعب Join. عند بدء المباراة يعلن البوت أسماء الفريقين والغرفتين في جميع غرفه، ثم تنضم الغرفة الثانية بـ Join.\nبعد اكتمال الفريقين: 1 هجوم أو 2 دفاع. كل لاعب 6 كرات؛ أرسل 0–6. bot أو cricket 1..4 مباراة فردية. الجائزة 200,000 نقطة، مع صور الكرات والبطّة والهتريك.',
         ],
@@ -10137,7 +10137,7 @@ class TalkinBot:
                 "After bidding starts, turns last 60 seconds. On your turn, enter “bid <amount>”; the first bid must meet the starting price, and each later bid must exceed the current high bid by at least 10,000,000 points. Pass with “pass”. Amounts accept shorthand such as 10m (10 million), 10b or 1b (billions), or combined forms like 10m10b. Out-of-turn bid commands are ignored silently.",
             "أثناء الجولة, مزايده تعني أن المزاد شغال؛ wait انتهاءه. فاتح الجولة or الماستر يستطيع إقفاله بأمر «اقفل المزاد»." :
                 "While a round is running, registration is closed; wait until it ends. The host or master may end it with “close auction”.",
-            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 30%.":
+            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 5%.":
                 "sv — view auction collectibles; red auction <code> — redeem after the round for a 30% profit.",
         }
         for old, new in auction_help_fixes.items():
@@ -15785,8 +15785,8 @@ class TalkinBot:
             item = sale["item"]
             short_id = str(sale["auction_id"])[:8]
             self._auction_broadcast(
-                f"{prefix_ar}🏆 انتهى المزاد! فاز @{sale['winner']} بـ{item.get('icon', '💎')} {item.get('name_ar', 'الجائزة')} بسعر {_fmt_points(sale['bid'])} نقطة.\n✅ أضيفت لمخزون الألماس؛ الاستبدال بعد الجولة: {_fmt_points(sale['redemption_value'])} نقطة (ربح 30%).\nللمخزون: sv — للاستبدال: red auction {short_id}",
-                f"{prefix_en}🏆 Auction complete! @{sale['winner']} won {item.get('icon', '💎')} {item.get('name_en', 'the prize')} for {_fmt_points(sale['bid'])} points.\n✅ Added to diamond inventory; redemption after the round: {_fmt_points(sale['redemption_value'])} points (30% profit).\nInventory: sv — redeem: red auction {short_id}",
+                f"{prefix_ar}🏆 انتهى المزاد! فاز @{sale['winner']} بـ{item.get('icon', '💎')} {item.get('name_ar', 'الجائزة')} بسعر {_fmt_points(sale['bid'])} نقطة.\n✅ أضيفت لمخزون الألماس؛ الاستبدال بعد الجولة: {_fmt_points(sale['redemption_value'])} نقطة (ربح 5%).\nللمخزون: sv — للاستبدال: red auction {short_id}",
+                f"{prefix_en}🏆 Auction complete! @{sale['winner']} won {item.get('icon', '💎')} {item.get('name_en', 'the prize')} for {_fmt_points(sale['bid'])} points.\n✅ Added to diamond inventory; redemption after the round: {_fmt_points(sale['redemption_value'])} points (5% profit).\nInventory: sv — redeem: red auction {short_id}",
                 fallback_room,
                 rooms=rooms,
             )
@@ -19375,13 +19375,13 @@ class TalkinBot:
                         prize_name = prize.get("item_name_en") or prize.get("item_name_ar") or "Auction prize"
                         response = (
                             f"✅ Redeemed {prize.get('icon', '💎')} {prize_name} from the auction.\n"
-                            f"💰 Added {int(redeemed.get('points', 0) or 0):,} points to your balance, including the 30% post-round profit."
+                            f"💰 Added {int(redeemed.get('points', 0) or 0):,} points to your balance, including the 5% post-round profit."
                         )
                     else:
                         prize_name = prize.get("item_name_ar") or prize.get("item_name_en") or "جائزة المزاد"
                         response = (
                             f"✅ استبدلت {prize.get('icon', '💎')} {prize_name} من المزاد.\n"
-                            f"💰 أضيف إلى رصيدك {int(redeemed.get('points', 0) or 0):,} نقطة، متضمنة ربح 30% بعد الجولة."
+                            f"💰 أضيف إلى رصيدك {int(redeemed.get('points', 0) or 0):,} نقطة، متضمنة ربح 5% بعد الجولة."
                         )
                     self.send_room_text(room, response)
                 elif redeemed.get("pending"):

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from cricket_game import CricketGame
+from cricket_league import CricketLeague
 
 
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -55,6 +56,7 @@ class CricketIntegration:
             reward=reward,
             bot_name=bot_name,
         )
+        self.league = CricketLeague(Path(data_dir) / "cricket_league.json", persist=persist)
         self.is_master = is_master
         self.is_configured_master = is_configured_master or is_master
         self.is_verified = is_verified or (lambda _username: True)
@@ -299,6 +301,45 @@ class CricketIntegration:
         self._send_private(sender, room, confirmation)
         return True
 
+    def _private_league_command(self, room: str, sender: str, text: str) -> bool:
+        """Master-only league administration; registration stays in DM."""
+        low = self._control_key(text)
+        if low in {"حاله الدوري", "حالة الدوري", "league status", "دوري الكركيت"}:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 إدارة دوري الكركيت للماستر المحدد فقط.")
+                return True
+            self._send_private(sender, room, self.league.summary())
+            return True
+        if low in {"فتح الدوري", "افتح الدوري", "open cricket league", "open league"}:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 فتح دوري الكركيت للماستر المحدد فقط.")
+                return True
+            result = self.league.open()
+            if not result.get("ok"):
+                self._send_private(sender, room, f"❌ {result.get('error')}")
+            else:
+                self._send_private(sender, room, "✅ تم فتح دوري الكركيت وتحديد جدول التصفيات:\n" + self.league.summary())
+            return True
+        register = re.fullmatch(r"(?:سجل فريق|تسجيل فريق|register team)@([^@]+)@([^@]+)@(.+)", str(text or "").strip(), re.I | re.S)
+        if register:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 تسجيل فرق الدوري للماستر المحدد فقط.")
+                return True
+            team, team_room, raw_players = register.groups()
+            players = [item.strip() for item in re.split(r"[,،|]", raw_players) if item.strip()]
+            result = self.league.register(team, team_room, players)
+            self._send_private(sender, room, (f"✅ تم تسجيل فريق {team} في الغرفة {team_room} ({len(players)}/4)." if result.get("ok") else f"❌ {result.get('error')}"))
+            return True
+        change = re.fullmatch(r"(?:غير غرفة فريق|تغيير غرفة فريق|change league room)@([^@]+)@(.+)", str(text or "").strip(), re.I | re.S)
+        if change:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 تغيير غرف الدوري للماستر المحدد فقط.")
+                return True
+            result = self.league.change_room(change.group(1), change.group(2).strip())
+            self._send_private(sender, room, "✅ تم تغيير غرفة الفريق." if result.get("ok") else f"❌ {result.get('error')}")
+            return True
+        return False
+
     def _verified_room_setup(self, room: str, sender: str, *, bot_match: bool = False) -> bool:
         if not self.is_verified(sender):
             self.send_room_text(room, "🔒 لعبة الكركيت متاحة للأعضاء الموثقين فقط.")
@@ -339,10 +380,28 @@ class CricketIntegration:
         control = self._control_key(text)
         room = str(room or "").strip()
         sender = str(sender or "").strip().lstrip("@")
+        if low in {"لعبي", "my cricket", "my cricket stats"}:
+            stats = self.game.player_stats(sender)
+            message = (f"🏏 إحصائيات @{stats['username']}\n"
+                       f"🏆 الفوز: {stats['wins']} | الخسارة: {stats['losses']} | المباريات: {stats['matches']}\n"
+                       f"🎯 كرات الهجوم: {stats['attack_balls']} | النقاط: {stats['runs']}\n"
+                       f"🔥 هاتريك: {stats['hat_tricks']} | 🦆 بطّة: {stats['ducks']}\n"
+                       f"👑 اللقب: {stats['title']}")
+            self._send_private(sender, room, message) if is_private else self.send_room_text(room, message)
+            return True
+        if low in {"ابطال الكركيت", "أبطال الكركيت", "cricket champions", "cricket top"}:
+            rows = self.game.champions(10)
+            lines = ["🏆 أبطال الكركيت — التوب"]
+            lines.extend(f"{i}. @{row.get('username')} — فاز {int(row.get('wins', 0))} | خسر {int(row.get('losses', 0))}" for i, row in enumerate(rows, 1))
+            self._send_private(sender, room, "\n".join(lines)) if is_private else self.send_room_text(room, "\n".join(lines))
+            return True
         join_command = low in {"join", "انضمام"}
         defer_resume = not is_private and join_command
         if not defer_resume:
             self._resume_after_restart()
+
+        if is_private and self._private_league_command(room, sender, text):
+            return True
 
         if control in self.PRIVATE_START_COMMANDS | self.PRIVATE_STOP_COMMANDS:
             if is_private:
