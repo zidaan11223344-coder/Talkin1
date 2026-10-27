@@ -5333,6 +5333,50 @@ def _clear_image_name_corrections():
     """Remove all previously approved image-name overrides."""
     _save_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
 
+def _delete_image_name_correction(username):
+    """Delete one user's correction chain and return whether anything changed."""
+    source = _clean_name_for_image(username).strip()
+    if not source:
+        return False
+    records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
+    if not isinstance(records, dict):
+        return False
+    related_names = {_image_name_key(source)}
+    related_game_names = {_game_name_key(source)}
+    changed = True
+    while changed:
+        before = (len(related_names), len(related_game_names))
+        for record in records.values():
+            if not isinstance(record, dict):
+                continue
+            record_names = {
+                _image_name_key(record.get("source_name", "")),
+                _image_name_key(record.get("display_name", "")),
+            }
+            record_game_names = {
+                _game_name_key(record.get("source_name", "")),
+                _game_name_key(record.get("display_name", "")),
+            }
+            if ((record_names & related_names) or
+                    (record_game_names & related_game_names)):
+                related_names.update(record_names)
+                related_game_names.update(record_game_names)
+        changed = (len(related_names), len(related_game_names)) != before
+    removed = False
+    for key, record in list(records.items()):
+        if key in related_names or (
+            isinstance(record, dict)
+            and (
+                _game_name_key(record.get("source_name", "")) in related_game_names
+                or _game_name_key(record.get("display_name", "")) in related_game_names
+            )
+        ):
+            records.pop(key, None)
+            removed = True
+    if removed:
+        _save_local_json(NAME_IMAGE_CORRECTIONS_FILE, records)
+    return removed
+
 def _save_image_name_correction(source_name, display_name):
     source = _clean_name_for_image(source_name).strip()
     display = _clean_name_for_image(display_name).strip()
@@ -20997,6 +21041,7 @@ class TalkinBot:
             "فحص اسم": "preview",
             "اصلاح اسم": "repair", "إصلاح اسم": "repair",
             "تعديل اسم": "edit", "تعديل الاسم": "edit",
+            "حذف تصحيح اسم": "delete", "حذف تصحيح الاسم": "delete",
         }
         name_image_mode = name_image_commands.get(low)
         if name_image_mode:
@@ -21020,6 +21065,8 @@ class TalkinBot:
                 "أرسل اسم المستخدم الحقيقي المراد تعديلُه كما يظهر في المحادثة (من دون @). "
                 "بعد ذلك سأطلب منك نص التعديل اليدوي، وعند «اعتماد الاسم» سأحذف التصحيح السابق وأحفظ الجديد."
                 if name_image_mode == "edit" else
+                "أرسل اسم المستخدم الذي تريد حذف تصحيحه (من دون @). سيعود للظهور كما يصل من المحادثة."
+                if name_image_mode == "delete" else
                 "أرسل الاسم الذي عدّله البوت سابقًا والمراد تعديلُه مرة أخرى كما يظهر في المحادثة (من دون @). "
                 "بعد ذلك سأطلب منك نص التعديل اليدوي، ثم أرسل المعاينة ولا يُحفظ الاسم إلا بعد إرسال «اعتماد الاسم»."
                 if name_image_mode == "repair" else
@@ -21062,6 +21109,18 @@ class TalkinBot:
                 pending_name["mode"] = "repair_ready"
                 pending_name["created_at"] = time.time()
                 text = manual_match.group(1).strip()
+            if pending_name.get("mode") == "delete":
+                username = _clean_name_for_image(text).strip()
+                if not username or len(username) > 256:
+                    _name_text("❌ أرسل اسم المستخدم من 1 إلى 256 حرفًا، أو اكتب إلغاء.")
+                    return True
+                deleted = _delete_image_name_correction(username)
+                name_requests.pop(_norm_user(sender), None)
+                _name_text(
+                    "✅ تم حذف تصحيح الاسم، وسيظهر المستخدم كما في المحادثة."
+                    if deleted else "ℹ️ لا يوجد تصحيح محفوظ لهذا المستخدم، وسيظهر كما في المحادثة."
+                )
+                return True
             if pending_name.get("mode") == "awaiting_approval":
                 if low in {"اعتماد الاسم", "اعتمد الاسم", "اعتماد", "نعم", "yes"}:
                     try:

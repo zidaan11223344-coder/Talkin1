@@ -161,6 +161,17 @@ def test_clear_all_image_name_corrections_removes_stale_approvals(tmp_path):
         assert bot_module._display_name_for_image("user") == "user"
 
 
+def test_delete_image_name_correction_restores_original_display(tmp_path):
+    original = "∫♚∫اسم_المستخدم∫♚∫"
+    corrected = "الاسم_المصحح"
+    with patch.object(bot_module, "NAME_IMAGE_CORRECTIONS_FILE", tmp_path / "names.json"):
+        bot_module._save_image_name_correction(original, corrected)
+        assert bot_module._display_name_for_image(original) == corrected
+        assert bot_module._delete_image_name_correction(original) is True
+        assert bot_module._display_name_for_image(original) == original
+        assert bot_module._delete_image_name_correction(original) is False
+
+
 def test_master_can_post_personalized_million_and_billion_preview_to_command_room(tmp_path):
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot.stock_pending = {}
