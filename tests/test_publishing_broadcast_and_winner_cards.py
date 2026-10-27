@@ -152,6 +152,15 @@ def test_edit_replaces_old_decorated_approval_even_with_tatweel_variation(tmp_pa
         assert bot_module._display_name_for_image("الهـيبه") == "الهہيبه"
 
 
+def test_clear_all_image_name_corrections_removes_stale_approvals(tmp_path):
+    path = tmp_path / "names.json"
+    with patch.object(bot_module, "NAME_IMAGE_CORRECTIONS_FILE", path):
+        bot_module._save_image_name_correction("user", "الهــيبه")
+        assert bot_module._display_name_for_image("user") == "الهــيبه"
+        bot_module._clear_image_name_corrections()
+        assert bot_module._display_name_for_image("user") == "user"
+
+
 def test_master_can_post_personalized_million_and_billion_preview_to_command_room(tmp_path):
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot.stock_pending = {}

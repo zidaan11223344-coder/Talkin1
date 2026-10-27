@@ -5308,6 +5308,10 @@ def _display_name_for_image(text):
     corrected = record.get("display_name") if isinstance(record, dict) else record
     return _clean_name_for_image(corrected) if isinstance(corrected, str) and corrected else source
 
+def _clear_image_name_corrections():
+    """Remove all previously approved image-name overrides."""
+    _save_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
+
 def _save_image_name_correction(source_name, display_name):
     source = _clean_name_for_image(source_name).strip()
     display = _clean_name_for_image(display_name).strip()
@@ -20981,6 +20985,10 @@ class TalkinBot:
             requests_by_master = getattr(self, "_master_name_image_requests", None)
             if not isinstance(requests_by_master, dict):
                 requests_by_master = self._master_name_image_requests = {}
+            if name_image_mode == "repair":
+                # "اصلاح اسم" starts a clean correction cycle so stale
+                # approvals such as الهــيبه cannot reappear in new cards.
+                _clear_image_name_corrections()
             requests_by_master[_norm_user(sender)] = {
                 "mode": name_image_mode, "created_at": time.time(),
                 "is_private": bool(is_private), "room": str(room or ""),
