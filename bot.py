@@ -5321,6 +5321,19 @@ def _clean_name_for_image(text):
     raw = str(text or "").lstrip("@")
     return "".join(ch for ch in raw if ch not in _NAME_BIDI_CONTROLS)
 
+def _strip_hidden_image_decorations(text):
+    """Remove invisible/combining decoration that can become tofu boxes.
+
+    Visible letters, symbols, and punctuation are intentionally preserved.
+    This runs after the correction-file lookup so it cannot change account
+    identity or the key used to find a saved display-name correction.
+    """
+    raw = str(text or "")
+    return "".join(
+        ch for ch in raw
+        if not unicodedata.category(ch).startswith(("M", "C"))
+    )
+
 def _compact_name_for_image(text):
     """Keep the readable name while dropping width-heavy decoration.
 
@@ -5856,6 +5869,7 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
     raw_text = _clean_name_for_image(raw_text)
     if apply_correction:
         raw_text = _display_name_for_image(raw_text)
+    raw_text = _strip_hidden_image_decorations(raw_text)
     size = int(size)
     if not raw_text:
         return
