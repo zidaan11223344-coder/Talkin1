@@ -24085,7 +24085,7 @@ class TalkinBot:
             _draw_name_centered(
                 draw, (w / 2, banner_y + banner_h * .70), str(username or "").lstrip("@"),
                 max(20, int(banner_h * .25)), (255, 255, 255, 255), int(w * .88),
-                apply_correction=True,
+                apply_correction=True, force_ltr=True,
             )
             image = Image.alpha_composite(image, overlay).convert("RGB")
             out_dir = BASE_DIR / "generated_welcomes"
