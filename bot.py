@@ -5308,6 +5308,27 @@ def _display_name_for_image(text):
     corrected = record.get("display_name") if isinstance(record, dict) else record
     return _clean_name_for_image(corrected) if isinstance(corrected, str) and corrected else source
 
+def _has_image_name_correction(text):
+    """Return whether this username has an approved image spelling."""
+    source = _clean_name_for_image(text)
+    key = _image_name_key(source)
+    records = _load_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
+    record = records.get(key) if isinstance(records, dict) else None
+    if record is None and isinstance(records, dict):
+        compact_key = _game_name_key(source)
+        record = next(
+            (
+                candidate for candidate in records.values()
+                if isinstance(candidate, dict)
+                and compact_key in {
+                    _game_name_key(candidate.get("source_name", "")),
+                    _game_name_key(candidate.get("display_name", "")),
+                }
+            ),
+            None,
+        )
+    return isinstance(record, dict) and bool(record.get("display_name"))
+
 def _clear_image_name_corrections():
     """Remove all previously approved image-name overrides."""
     _save_local_json(NAME_IMAGE_CORRECTIONS_FILE, {})
@@ -6106,7 +6127,9 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .22)
     _draw_centered(draw, text_center, "🏆 " + title, max(28, int(h * .038)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
-    raw_name = _display_name_for_image(str(winner_name or "").strip().lstrip("@"))
+    source_name = str(winner_name or "").strip().lstrip("@")
+    approved_name = _has_image_name_correction(source_name)
+    raw_name = _display_name_for_image(source_name)
     clusters = []
     for char in raw_name:
         is_mark = unicodedata.category(char).startswith("M") or char in {"\u200d", "\ufe0e", "\ufe0f"}
@@ -6114,7 +6137,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
             clusters[-1] += char
         else:
             clusters.append(char)
-    if len(clusters) > 24:
+    if len(clusters) > 24 and not approved_name:
         split_at = len(clusters) // 2
         name_lines = ["".join(clusters[:split_at]), "".join(clusters[split_at:])]
         line_ys = (.59, .82)
