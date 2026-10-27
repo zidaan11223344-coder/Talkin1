@@ -6323,9 +6323,9 @@ def render_billion_card(winner_name, winner_photo_url=""):
     _draw_centered(d, text_center, "🏆 الفائز بالمليار", max(22, int(h * 0.055)),
                    (255, 224, 145, 255), max(80, text_right - text_left))
     _draw_name_centered(d, ((text_left + text_right) / 2, panel_y + panel_h * 0.68),
-                        str(winner_name or "").lstrip("@"), max(24, int(h * 0.065)),
+                        str(winner_name or "").lstrip("@"), max(30, int(h * 0.045)),
                         (255, 255, 255, 255), max(80, text_right - text_left),
-                        apply_correction=True, force_ltr=True)
+                        apply_correction=True, force_ltr=False)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_billion"
@@ -6393,7 +6393,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     )
     text_center = ((text_left + text_right) / 2, panel_box[1] + (panel_box[3] - panel_box[1]) * .22)
     _draw_centered(draw, text_center, title, max(28, int(h * .038)),
-                   (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=True)
+                   (255, 224, 145, 255), max(80, text_right - text_left), force_ltr=False)
     source_name = str(winner_name or "").strip().lstrip("@")
     # Game cards must show the exact username received in the chat event.
     # Master-approved image-name corrections are intentionally not applied
@@ -6414,12 +6414,14 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     else:
         name_lines = [raw_name]
         line_ys = (.68,)
+    # Keep the million name a little smaller so decorated names remain clear.
+    name_size = max(29, int(h * (.038 if game_key == "million" else .042)))
     for line, y_ratio in zip(name_lines, line_ys):
         name_center = ((text_left + text_right) / 2,
                        panel_box[1] + (panel_box[3] - panel_box[1]) * y_ratio)
-        _draw_name_centered(draw, name_center, line, max(32, int(h * .042)),
+        _draw_name_centered(draw, name_center, line, name_size,
                             (255, 255, 255, 255), max(80, text_right - text_left),
-                            apply_correction=True, force_ltr=True)
+                            apply_correction=True, force_ltr=False)
 
     image = Image.alpha_composite(image, overlay).convert("RGB")
     out_dir = BASE_DIR / "generated_games"
