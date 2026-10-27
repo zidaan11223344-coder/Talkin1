@@ -492,15 +492,19 @@ STOCK_MARKET_ASSETS = {
 STOCK_MARKET_MAX_INVESTMENT = 30_000_000_000
 
 def _parse_compact_amount(value):
-    """Convert plain or compact stakes (1k/1m/1b) to whole points."""
+    """Convert plain/compact amounts, including compounds such as 10m10b."""
     token = str(value or "").strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    token = token.translate(str.maketrans({"ك": "k", "م": "m", "ب": "b"}))
     token = token.replace(",", "")
-    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([kmb]?)", token, re.I)
-    if not match:
+    parts = re.findall(r"[0-9]+(?:\.[0-9]+)?[kmb]?", token, re.I)
+    if not parts or "".join(parts).casefold() != token.casefold():
         return None
-    multiplier = {"": 1, "k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[match.group(2).casefold()]
+    multipliers = {"": 1, "k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+    amount = Decimal(0)
     try:
-        amount = Decimal(match.group(1)) * multiplier
+        for part in parts:
+            match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([kmb]?)", part, re.I)
+            amount += Decimal(match.group(1)) * multipliers[match.group(2).casefold()]
     except InvalidOperation:
         return None
     if amount != amount.to_integral_value() or amount <= 0:
@@ -896,6 +900,7 @@ BOT_BANS_FILE = DATA_DIR / "bot_bans.json"
 LAST_BOT_BANS_FILE = DATA_DIR / "last_bot_bans.json"
 MONEY_GAME_WIN_STATE_FILE = DATA_DIR / "money_game_win_state.json"
 MONEY_GAME_SETTINGS_FILE = DATA_DIR / "money_game_settings.json"
+MONEY_GAME_WIN_HISTORY_FILE = DATA_DIR / "money_game_win_history.json"
 PUBLISH_BANS_FILE = DATA_DIR / "publish_bans.json"
 PROTECTION_FILE = DATA_DIR / "room_protection.json"
 SNAKE_FILE = DATA_DIR / "snake_games.json"
@@ -4377,6 +4382,59 @@ def _fmt_points(value):
         return f"{sign}{text}k"
     return f"{sign}{number}"
 
+
+def _record_money_game_win(game, username):
+    """Persist one win for the rolling monthly money-game leaderboard."""
+    game = "billion" if str(game).casefold() in {"billion", "مليار"} else "million"
+    username = str(username or "").strip().lstrip("@")
+    if not username:
+        return
+    history = _load_local_json(MONEY_GAME_WIN_HISTORY_FILE, {})
+    if not isinstance(history, dict):
+        history = {}
+    rows = history.get(game) if isinstance(history.get(game), list) else []
+    rows.append({"username": username, "at": int(time.time())})
+    cutoff = int(time.time()) - 31 * 86400
+    history[game] = [row for row in rows if isinstance(row, dict) and int(row.get("at", 0) or 0) >= cutoff][-5000:]
+    _queue_local_json_save(MONEY_GAME_WIN_HISTORY_FILE, history)
+
+def _money_game_winner_rows(game, days=30, limit=15):
+    game = "billion" if str(game).casefold() in {"billion", "مليار"} else "million"
+    history = _load_local_json(MONEY_GAME_WIN_HISTORY_FILE, {})
+    rows = history.get(game, []) if isinstance(history, dict) else []
+    cutoff = time.time() - max(1, int(days)) * 86400
+    counts = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or float(row.get("at", 0) or 0) < cutoff:
+            continue
+        username = str(row.get("username") or "").strip().lstrip("@")
+        key = _game_name_key(username)
+        if username and key:
+            counts.setdefault(key, {"username": username, "wins": 0, "latest": 0})
+            counts[key]["wins"] += 1
+            counts[key]["latest"] = max(counts[key]["latest"], int(row.get("at", 0) or 0))
+    ordered = sorted(counts.values(), key=lambda row: (-row["wins"], -row["latest"], _game_name_key(row["username"])))
+    return [(row["wins"], row["username"]) for row in ordered[:max(1, int(limit))]]
+
+def _money_game_top_text(game, *, english=False):
+    game = "billion" if str(game).casefold() in {"billion", "مليار"} else "million"
+    label = "Billion" if game == "billion" else "Million"
+    label_ar = "المليار" if game == "billion" else "المليون"
+    rows = _money_game_winner_rows(game)
+    lines = [
+        f"🏆 Top {label} winners — last 30 days" if english
+        else f"🏆 توب الفائزين بلعبة {label_ar} — خلال آخر 30 يومًا",
+        "━━━━━━━━━━━━",
+    ]
+    for rank, (wins, username) in enumerate(rows, 1):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}️⃣")
+        lines.append(
+            f"{medal} @{username} — {wins} wins" if english
+            else f"{medal} @{username} — {wins} فوز"
+        )
+    if not rows:
+        lines.append("No wins recorded in the last 30 days." if english else "لا توجد انتصارات خلال آخر 30 يومًا.")
+    return "\n".join(lines)
 
 def _money_game_win_text(game, username, language="ar"):
     game = "billion" if str(game).casefold() in {"billion", "مليار"} else "million"
@@ -17401,6 +17459,7 @@ class TalkinBot:
             # محاولة الحصول على المليون تبقى داخل الغرفة التي أُرسلت منها.
             self.send_room_text(room, loss_text)
             return True
+        _record_money_game_win("million", sender_name)
         self._game_award(sender_name, reward)
         winner_photo = self.user_photos.get(_norm_user(sender_name), "") or self._lookup_profile_photo(sender_name)
 
@@ -19565,6 +19624,7 @@ class TalkinBot:
             _record_game(sender_name, "billion", reward, 0)
 
             if won:
+                _record_money_game_win("billion", sender_name)
                 self._game_award(sender_name, reward)
                 # Prefer the latest live profile URL; DB lookup is only a fallback.
                 winner_key = _norm_user(sender_name)
@@ -20013,8 +20073,8 @@ class TalkinBot:
             or re.fullmatch(r"(?:ترحيب|welcome)@.+", shop_command_text, re.I | re.S)
             or pending_welcome_text
         )
-        points_transfer_command = bool(re.fullmatch(r"sb@([^@]+)@(\d+)", str(body or "").strip(), re.I))
-        master_points_transfer_command = bool(re.fullmatch(r"msb@([^@]+)@(\d+)", str(body or "").strip(), re.I))
+        points_transfer_command = bool(re.fullmatch(r"sb@([^@]+)@([^@]+)", str(body or "").strip(), re.I))
+        master_points_transfer_command = bool(re.fullmatch(r"msb@([^@]+)@([^@]+)", str(body or "").strip(), re.I))
         master_points_deduction_command = str(body or "").strip().casefold().startswith("-sb@")
         if master_points_deduction_command and (not is_private or not _is_primary_master(sender)):
             if not _is_primary_master(sender):
@@ -20032,6 +20092,18 @@ class TalkinBot:
                 self.send_private_text(sender, message)
             elif room:
                 self.send_room_text(room, message)
+            return True
+        m_master_transfer = re.fullmatch(r"msb@([^@]+)@([^@]+)", str(body or "").strip(), re.I)
+        if m_master_transfer and is_private and _is_primary_master(sender):
+            target = m_master_transfer.group(1).strip().lstrip("@")
+            amount = _parse_compact_amount(m_master_transfer.group(2))
+            if not target or amount is None or amount <= 0:
+                self.send_private_text(sender, "❌ الصيغة: msb@اسم المستخدم@عدد النقاط مثل 10m10b")
+                return True
+            new = _add_points(target, amount)
+            self.send_private_text(sender, f"✅ تم تحويل {_fmt_points(amount)} نقطة إلى @{target} من رصيد الماستر.\n💳 رصيد المستلم: {_fmt_points(new)}")
+            if _norm_user(target) != _norm_user(sender):
+                self.send_private_text(target, f"💰 إشعار تحويل: استلمت {_fmt_points(amount)} نقطة من الماستر. رصيدك الحالي: {_fmt_points(new)}")
             return True
         public_top_command = str(body or "").strip().casefold() in {
             "توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top", "ملياري", "مليارات", "مليوني", "ملايين"
@@ -21974,16 +22046,36 @@ class TalkinBot:
             (self.send_private_text if is_private else self.send_room_text)(sender if is_private else room, message)
             return True
         balance_top_aliases = {
-            "ملياري": (1_000_000_000, "المليار"),
-            "مليارات": (1_000_000_000, "المليار"),
-            "مليوني": (1_000_000, "المليون"),
-            "ملايين": (1_000_000, "المليون"),
+            "ملياري": "billion", "مليارات": "billion", "مليارت": "billion",
+            "مليوني": "million", "ملايين": "million",
         }
         if low in balance_top_aliases:
-            threshold, label = balance_top_aliases[low]
             english = _detect_text_language(text) == "en"
-            message = _points_threshold_top_message(threshold, label, english=english)
+            message = _money_game_top_text(balance_top_aliases[low], english=english)
             if is_private:
+                reserve = "\n📄 القائمة 999/999\n\n📌 اكتب ns للقائمة التالية."
+                def _fits(value):
+                    return len(encode_query("chat_message", type_="text", to=str(sender), body=value + reserve)) <= min(_ws_payload_limit(), SAFE_COMMAND_REPLY_BYTES)
+                raw_pages, current = [], []
+                for line in message.splitlines():
+                    candidate = "\n".join(current + [line])
+                    if current and not _fits(candidate):
+                        raw_pages.append("\n".join(current)); current = [line]
+                    else:
+                        current.append(line)
+                if current:
+                    raw_pages.append("\n".join(current))
+                pages = [f"{page}\n📄 القائمة {i}/{len(raw_pages)}" for i, page in enumerate(raw_pages, 1)]
+                result_key = ("chat_message", "", str(sender))
+                result_pages = getattr(self, "_result_pages", {})
+                if len(pages) > 1:
+                    result_pages[result_key] = {"pages": pages, "part": 1, "kwargs": {"to": str(sender)}, "language": "ar"}
+                    self._result_pages = result_pages
+                    message = pages[0] + "\n\n📌 اكتب ns للقائمة التالية."
+                else:
+                    result_pages.pop(result_key, None)
+                    self._result_pages = result_pages
+                    message = pages[0] + "\n\n✅ انتهت القوائم."
                 self.send_private_text(sender, message)
             else:
                 self.send_room_text(room, message)
@@ -22358,18 +22450,6 @@ class TalkinBot:
                 self.send_private_text(sender, confirm_msg)
                 
             return True
-        m_master_transfer = re.fullmatch(r"msb@([^@]+)@(\d+)", text, re.I)
-        if m_master_transfer and is_private and _is_primary_master(sender):
-            target, amount = m_master_transfer.group(1).strip().lstrip("@"), int(m_master_transfer.group(2))
-            if not target or amount <= 0:
-                self.send_private_text(sender, "❌ الصيغة: msb@اسم المستخدم@عدد النقاط")
-                return True
-            new = _add_points(target, amount)
-            self.send_private_text(sender, f"✅ تم تحويل {_fmt_points(amount)} نقطة إلى @{target} من رصيد الماستر.\n💳 رصيد المستلم: {_fmt_points(new)}")
-            if _norm_user(target) != _norm_user(sender):
-                self.send_private_text(target, f"💰 إشعار تحويل: استلمت {_fmt_points(amount)} نقطة من الماستر. رصيدك الحالي: {_fmt_points(new)}")
-            return True
-
         if text.casefold().startswith("-sb@"):
             if not _is_primary_master(sender):
                 message = "🚫 أمر -sb مخصص للماستر المحدد في BOT_MASTER فقط."
@@ -22382,11 +22462,15 @@ class TalkinBot:
                 if room:
                     self.send_room_text(room, "🚫 أرسل أمر -sb في خاص البوت فقط.")
                 return True
-            match = re.fullmatch(r"-sb@([^@]+)@(\d+)", text, re.I)
+            match = re.fullmatch(r"-sb@([^@]+)@([^@]+)", text, re.I)
             if not match:
                 self.send_private_text(sender, "❌ الصيغة: -sb@اسم المستخدم@عدد النقاط")
                 return True
-            target, amount = match.group(1).strip().lstrip("@"), int(match.group(2))
+            target = match.group(1).strip().lstrip("@")
+            amount = _parse_compact_amount(match.group(2))
+            if amount is None or amount <= 0:
+                self.send_private_text(sender, "❌ مبلغ غير صالح. استخدم رقمًا مثل 1000000 أو 10m10b.")
+                return True
             result = _deduct_points(target, amount, actor=sender)
             english = _detect_text_language(text) == "en"
             if not result.get("ok"):
@@ -22412,11 +22496,12 @@ class TalkinBot:
             self.send_private_text(sender, message)
             return True
 
-        m_transfer = re.fullmatch(r"sb@([^@]+)@(\d+)", text, re.I)
+        m_transfer = re.fullmatch(r"sb@([^@]+)@([^@]+)", text, re.I)
         if m_transfer and _is_verified_user(sender):
-            target, amount = m_transfer.group(1).strip().lstrip("@"), int(m_transfer.group(2))
-            if not target or amount <= 0:
-                self.send_private_text(sender, "❌ الصيغة: sb@اسم المستخدم@عدد النقاط")
+            target = m_transfer.group(1).strip().lstrip("@")
+            amount = _parse_compact_amount(m_transfer.group(2))
+            if not target or amount is None or amount <= 0:
+                self.send_private_text(sender, "❌ الصيغة: sb@اسم المستخدم@عدد النقاط مثل 10m10b")
                 return True
             result = _transfer_points(sender, target, amount)
             if not result.get("ok"):
