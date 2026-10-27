@@ -5701,7 +5701,7 @@ def _fit_crop(im,size):
     im=im.convert("RGB"); tw,th=size; scale=max(tw/im.width,th/im.height); nw,nh=max(tw,int(im.width*scale)),max(th,int(im.height*scale)); im=im.resize((nw,nh),Image.LANCZOS); left=max(0,(nw-tw)//2); top=max(0,(nh-th)//2); return im.crop((left,top,left+tw,top+th))
 
 def _draw_centered(draw,center,raw_text,size,fill,max_width):
-    return _draw_name_centered(draw, center, raw_text, size, fill, max_width)
+    return _draw_name_centered(draw, center, raw_text, size, fill, max_width, grow_short=False)
 
 def _visual_rtl_text(text):
     """Return logical text unchanged when Pillow/Raqm can shape Arabic.
@@ -5723,12 +5723,28 @@ def _visual_rtl_text(text):
 def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
-def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True):
+def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True):
     """Center the username using actual mixed-font glyph widths."""
     raw_text = _clean_name_for_image(raw_text)
     if apply_correction:
         raw_text = _display_name_for_image(raw_text)
     size=int(size)
+    if grow_short:
+        # The old renderer only shrank text, making short usernames look tiny
+        # beside long decorated names. Increase short names first, then let
+        # the fitting loop reduce long names when they approach the frame.
+        meaningful = [
+            ch for ch in raw_text
+            if unicodedata.category(ch)[0] not in {"M", "C", "P", "S"}
+            and ch != "ـ"
+        ]
+        count = len(meaningful)
+        if count <= 8:
+            size = int(size * 1.38)
+        elif count <= 14:
+            size = int(size * 1.20)
+        elif count <= 22:
+            size = int(size * 1.08)
     while size>14:
         visual=_shape_name_for_fallback(raw_text)
         base=_gift_font(visual,size)
@@ -5816,7 +5832,7 @@ def _draw_exact_text(draw, xy, raw_text, size, fill, stroke_width=1, stroke_fill
     return _draw_name_centered(draw, (xy[0], xy[1]+size/2), raw_text, size, fill, 10000)
 
 def _draw_centered(draw, center, raw_text, size, fill, max_width):
-    return _draw_name_centered(draw, center, raw_text, size, fill, max_width)
+    return _draw_name_centered(draw, center, raw_text, size, fill, max_width, grow_short=False)
 
 
 def _load_sender_avatar(photo_url, size=190):
