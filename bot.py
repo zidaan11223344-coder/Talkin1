@@ -5322,24 +5322,24 @@ def _clean_name_for_image(text):
     return "".join(ch for ch in raw if ch not in _NAME_BIDI_CONTROLS)
 
 def _strip_hidden_image_decorations(text):
-    """Remove invisible/combining decoration that can become tofu boxes.
+    """Remove only invisible controls that can become tofu boxes.
 
-    Visible letters, symbols, and punctuation are intentionally preserved.
+    Combining marks and visible decoration are intentionally preserved.
     This runs after the correction-file lookup so it cannot change account
     identity or the key used to find a saved display-name correction.
     """
     raw = str(text or "")
     return "".join(
         ch for ch in raw
-        if not unicodedata.category(ch).startswith(("M", "C"))
+        if not unicodedata.category(ch).startswith("C")
     )
 
 def _compact_name_for_image(text):
     """Keep the readable name while dropping width-heavy decoration.
 
     This is used only for image display. Preserve all visible letters, symbols,
-    and punctuation in their original order; remove only tiny combining marks,
-    format controls, and tatweel. Account identity and saved correction records
+    punctuation, combining marks, and tatweel in their original order; remove
+    only hidden format controls. Account identity and saved correction records
     remain based on the original text.
     """
     raw = _clean_name_for_image(text)
@@ -5347,7 +5347,7 @@ def _compact_name_for_image(text):
     kept = []
     for ch in normalized:
         category = unicodedata.category(ch)
-        if category.startswith(("M", "C")) or ch == "ـ":
+        if category.startswith("C"):
             continue
         kept.append(ch)
     compact = "".join(kept)
