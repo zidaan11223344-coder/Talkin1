@@ -3078,7 +3078,7 @@ def _looks_like_bot_command(text):
         "sa@", "sav@", "bom@", "work", "salary", "عمل", "راتبي", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@",
         ".u", "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
-        "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "points", "توب", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
+        "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
         ".دخول غرفي", "دخول غرفي", "دخولغرفي", "my rooms", "start verification", "stop verification", "تشغيل التوثيق", "إيقاف التوثيق", "ايقاف التوثيق",
@@ -4605,6 +4605,23 @@ def _points_summary_text(username):
             f"┃ 🎮 مرات اللعب: {plays}\n"
             f"┃ {rank_label}: {rank_text}\n"
             f"╰━━━━━━━━━━━━━━╯")
+
+def _named_points_text(username):
+    """Return the current points balance for a requested username."""
+    requested = str(username or "").strip().lstrip("@").strip()
+    safe_name = _transfer_log_safe_field(requested, max_bytes=80)
+    resolved = _resolve_points_account(_points_data(), requested) if requested else None
+    if resolved:
+        shown_name = str(resolved[1].get("username") or requested).strip().lstrip("@")
+        balance = _points_balance(resolved[1])
+    else:
+        shown_name = safe_name
+        balance = 0
+    return (
+        f"💰 نقاط المستخدم\n"
+        f"👤 @{shown_name}\n"
+        f"💎 الرصيد: {_fmt_points(balance)} نقطة"
+    )
 
 def _ensure_replies_file():
     data = _load_local_json(REPLIES_FILE, {})
@@ -10545,7 +10562,7 @@ class TalkinBot:
         is_command = bool(
             _looks_like_admin_command(text)
             or re.match(r"^(?:بث|\.تشغيل|\.sa|sher@|is@|vip@|\+vip@|-vip@|mf@|\+mf@|-mf@)\s*.+", text, re.I | re.S)
-            or re.match(r"^(?:sa|هدايا|gifts|gv|نقاطي|points|صعود|اصعد|إصعد|\.صعود)$", text, re.I)
+            or re.match(r"^(?:sa|هدايا|gifts|gv|نقاطي|points|نقاط\s+@?.+|points\s+@?.+|صعود|اصعد|إصعد|\.صعود)$", text, re.I)
             or re.fullmatch(r"a[1-6]", text, re.I)
         )
         if not is_command:
@@ -10605,6 +10622,10 @@ class TalkinBot:
                 return bool(self.handle_music_command(target_room, command, original_sender))
             if low in ("نقاطي", "points"):
                 self.send_room_text(target_room, _points_summary_text(original_sender))
+                return True
+            named_points = re.fullmatch(r"(?:نقاط|points)\s+@?(.+?)", command, re.I)
+            if named_points:
+                self.send_room_text(target_room, _named_points_text(named_points.group(1)))
                 return True
             if self._run_game_command_async(target_room, command, original_sender):
                 return True
@@ -25151,6 +25172,12 @@ class TalkinBot:
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
+        named_points = re.fullmatch(r"(?:نقاط|points)\s+@?(.+?)", body.strip(), re.I)
+        if named_points:
+            self.send_room_text(room, _named_points_text(named_points.group(1)))
+            if not getattr(self, "_replaying_bot_action", False):
+                self._remember_bot_action(room, body, frm, is_private=False)
+            return
 
         # Cricket handles its own verified-member gate and turn flow before the
         # normal bot-command verification gate. Some Talkin builds put the
@@ -25825,6 +25852,10 @@ class TalkinBot:
                         return
                     if body and body.casefold() in ("نقاطي", "points"):
                         self.send_private_text(frm, _points_summary_text(frm))
+                        return
+                    named_points = re.fullmatch(r"(?:نقاط|points)\s+@?(.+?)", body.strip(), re.I)
+                    if named_points:
+                        self.send_private_text(frm, _named_points_text(named_points.group(1)))
                         return
                     if body:
                         # A pending multi-room join language choice has priority
