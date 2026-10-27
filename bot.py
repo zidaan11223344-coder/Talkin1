@@ -5347,16 +5347,18 @@ def _delete_image_name_correction(username):
     while changed:
         before = (len(related_names), len(related_game_names))
         for record in records.values():
-            if not isinstance(record, dict):
-                continue
-            record_names = {
-                _image_name_key(record.get("source_name", "")),
-                _image_name_key(record.get("display_name", "")),
-            }
-            record_game_names = {
-                _game_name_key(record.get("source_name", "")),
-                _game_name_key(record.get("display_name", "")),
-            }
+            if isinstance(record, dict):
+                record_names = {
+                    _image_name_key(record.get("source_name", "")),
+                    _image_name_key(record.get("display_name", "")),
+                }
+                record_game_names = {
+                    _game_name_key(record.get("source_name", "")),
+                    _game_name_key(record.get("display_name", "")),
+                }
+            else:
+                record_names = {_image_name_key(str(record or ""))}
+                record_game_names = {_game_name_key(str(record or ""))}
             if ((record_names & related_names) or
                     (record_game_names & related_game_names)):
                 related_names.update(record_names)
@@ -5365,11 +5367,11 @@ def _delete_image_name_correction(username):
     removed = False
     for key, record in list(records.items()):
         if key in related_names or (
-            isinstance(record, dict)
-            and (
+            (
                 _game_name_key(record.get("source_name", "")) in related_game_names
                 or _game_name_key(record.get("display_name", "")) in related_game_names
-            )
+            ) if isinstance(record, dict) else
+            _game_name_key(str(record or "")) in related_game_names
         ):
             records.pop(key, None)
             removed = True
@@ -5394,16 +5396,18 @@ def _save_image_name_correction(source_name, display_name):
     while changed:
         changed = False
         for record in records.values():
-            if not isinstance(record, dict):
-                continue
-            record_names = {
-                _image_name_key(record.get("source_name", "")),
-                _image_name_key(record.get("display_name", "")),
-            }
-            record_game_names = {
-                _game_name_key(record.get("source_name", "")),
-                _game_name_key(record.get("display_name", "")),
-            }
+            if isinstance(record, dict):
+                record_names = {
+                    _image_name_key(record.get("source_name", "")),
+                    _image_name_key(record.get("display_name", "")),
+                }
+                record_game_names = {
+                    _game_name_key(record.get("source_name", "")),
+                    _game_name_key(record.get("display_name", "")),
+                }
+            else:
+                record_names = {_image_name_key(str(record or ""))}
+                record_game_names = {_game_name_key(str(record or ""))}
             overlap = (record_names & related_names) or (record_game_names & related_game_names)
             if overlap and not record_names.issubset(related_names):
                 before = (len(related_names), len(related_game_names))
@@ -5412,11 +5416,11 @@ def _save_image_name_correction(source_name, display_name):
                 changed = (len(related_names), len(related_game_names)) != before
     for old_key, record in list(records.items()):
         if old_key in related_names or (
-            isinstance(record, dict)
-            and (
+            (
                 _game_name_key(record.get("source_name", "")) in related_game_names
                 or _game_name_key(record.get("display_name", "")) in related_game_names
-            )
+            ) if isinstance(record, dict) else
+            _game_name_key(str(record or "")) in related_game_names
         ):
             records.pop(old_key, None)
     correction = {
@@ -21042,6 +21046,7 @@ class TalkinBot:
             "اصلاح اسم": "repair", "إصلاح اسم": "repair",
             "تعديل اسم": "edit", "تعديل الاسم": "edit",
             "حذف تصحيح اسم": "delete", "حذف تصحيح الاسم": "delete",
+            "حذف تصحييح اسم": "delete", "حذف تصحييح الاسم": "delete",
         }
         name_image_mode = name_image_commands.get(low)
         if name_image_mode:

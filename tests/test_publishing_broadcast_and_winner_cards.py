@@ -172,6 +172,17 @@ def test_delete_image_name_correction_restores_original_display(tmp_path):
         assert bot_module._delete_image_name_correction(original) is False
 
 
+def test_delete_supports_legacy_string_correction_records(tmp_path):
+    original = "اسم_قديم"
+    with patch.object(bot_module, "NAME_IMAGE_CORRECTIONS_FILE", tmp_path / "names.json"):
+        bot_module._save_local_json(
+            bot_module.NAME_IMAGE_CORRECTIONS_FILE,
+            {bot_module._image_name_key(original): "الهــيبه"},
+        )
+        assert bot_module._delete_image_name_correction(original) is True
+        assert bot_module._display_name_for_image(original) == original
+
+
 def test_master_can_post_personalized_million_and_billion_preview_to_command_room(tmp_path):
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     bot.stock_pending = {}
