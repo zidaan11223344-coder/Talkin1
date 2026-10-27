@@ -6400,20 +6400,10 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
     # here; they belong to the separate name-repair flow, not game results.
     approved_name = False
     raw_name = source_name
-    clusters = []
-    for char in raw_name:
-        is_mark = unicodedata.category(char).startswith("M") or char in {"\u200d", "\ufe0e", "\ufe0f"}
-        if clusters and (is_mark or clusters[-1].endswith("\u200d")):
-            clusters[-1] += char
-        else:
-            clusters.append(char)
-    if len(clusters) > 24 and not approved_name:
-        split_at = len(clusters) // 2
-        name_lines = ["".join(clusters[:split_at]), "".join(clusters[split_at:])]
-        line_ys = (.59, .82)
-    else:
-        name_lines = [raw_name]
-        line_ys = (.68,)
+    # Keep the username on one line. _draw_name_centered will reduce the
+    # fitted size when a decorated name is wider than the winner panel.
+    name_lines = [raw_name]
+    line_ys = (.68,)
     # Keep the million name a little smaller so decorated names remain clear.
     name_size = max(27, int(h * (.034 if game_key == "million" else .038)))
     for line, y_ratio in zip(name_lines, line_ys):
