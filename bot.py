@@ -6432,6 +6432,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
         38,
         sender_color,
         text_max_w,
+        native_arabic_runs=True,
     )
     _draw_name_centered(
         d,
@@ -6440,6 +6441,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
         38,
         receiver_color,
         text_max_w,
+        native_arabic_runs=True,
     )
 
     # A light unsharp mask improves the apparent clarity of the ORIGINAL
