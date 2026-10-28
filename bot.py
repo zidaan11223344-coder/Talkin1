@@ -5118,7 +5118,7 @@ def _default_help_sections():
         ],
         4: [
             '🎁 الهدايا — 1\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nهدايا — عرض/فتح نظام الهدايا (حتى 30 هدية في القائمة)\ngifts / gv — قائمة الهدايا؛ اكتب ns للتالي\n\n🔒 المرسل والمستلم يجب أن يكونا موثقين/مسموحاً لهما بالنظام.\n💰 يتم خصم قيمة الهدية من رصيد النقاط.',
-            '📢 النشر — 2\n━━━━━━━━━━━━\nبوست أو انشر — تجهيز ونشر صورة\nبوست@وصف أو انشر@وصف — نشر صورة مع وصف\n📌 الوصف يمر عبر فلتر الكلمات المسيئة، ومن يخالفه يُمنع من النشر حتى mbp@اسم\n\n📌 أرسل الصورة بعد أمر بوست أو انشر عندما يطلب البوت ذلك.\n📌 النشر متاح للحسابات المسموح لها حسب إعدادات البوت.',
+            '📢 النشر — 2\n━━━━━━━━━━━━\nبوست أو انشر — تجهيز ونشر صورة\nبوست@وصف أو انشر@وصف — نشر صورة مع وصف\nax@النص — إنشاء بطاقة اكسبلور بصورة حسابك ونشرها في الغرف\nx@كود — إعادة نشر منشور اكسبلور مع اسم من أعاد نشره\n👍 lk@كود / 👎 dl@كود / ❤️ lv@كود — تفاعل؛ يصل الرد إلى الغرفة والناشر\n🚨 report@كود نص — إرسال بلاغ للماستر\n📌 الوصف يمر عبر فلتر الكلمات المسيئة، ومن يخالفه يُمنع من النشر حتى mbp@اسم\n\n📌 أرسل الصورة بعد أمر بوست أو انشر عندما يطلب البوت ذلك.\n📌 النشر متاح للحسابات المسموح لها حسب إعدادات البوت.',
         ],
         5: [
             '💰 النقاط — 1\n━━━━━━━━━━━━\nنقاطي — عرض الرصيد والمستوى وإحصاءات اللعب\npoints — عرض النقاط\nتوب — المتصدرين العام\ntop — المتصدرين العام\n\nتوب رهان — متصدروا الرهان\nتوب مضاربة — متصدروا المضاربة\nتوب حظي — متصدروا حظي\nتوب استثمار — متصدروا الاستثمار',
@@ -6865,6 +6865,90 @@ def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
         if out.stat().st_size <= 350 * 1024: break
     return out
 
+
+def render_explore_card(text, username, photo_url=""):
+    """Render a fresh Explore card with the author avatar clipped to a heart."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير متاح")
+    width, height = 960, 1180
+    image = Image.new("RGB", (width, height), (15, 18, 39))
+    gradient = ImageDraw.Draw(image)
+    top, bottom = (19, 29, 65), (65, 31, 83)
+    for y in range(height):
+        t = y / max(1, height - 1)
+        color = tuple(int(top[i] * (1-t) + bottom[i] * t) for i in range(3))
+        gradient.line((0, y, width, y), fill=color)
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.ellipse((-180, -150, 500, 520), fill=(255, 94, 153, 24))
+    draw.ellipse((540, 20, 1190, 650), fill=(104, 187, 255, 20))
+    # Heart mask is drawn at 3x resolution to keep a smooth silhouette.
+    size = 330
+    avatar = _load_sender_avatar(photo_url, size)
+    if avatar is None:
+        avatar = Image.new("RGBA", (size, size), (53, 65, 98, 255))
+        ad = ImageDraw.Draw(avatar)
+        ad.ellipse((108, 55, 222, 170), fill=(215, 224, 241, 255))
+        ad.rounded_rectangle((62, 160, 268, 315), radius=75, fill=(215, 224, 241, 255))
+    mask = Image.new("L", (size, size), 0)
+    md = ImageDraw.Draw(mask)
+    md.polygon([(size*.5,size*.91),(size*.08,size*.49),(size*.02,size*.35),
+                (size*.06,size*.20),(size*.18,size*.10),(size*.32,size*.10),
+                (size*.50,size*.28),(size*.68,size*.10),(size*.82,size*.10),
+                (size*.94,size*.20),(size*.98,size*.35),(size*.92,size*.49)], fill=255)
+    avatar = avatar.convert("RGBA")
+    avatar.putalpha(mask)
+    x0, y0 = (width-size)//2, 140
+    _paste_avatar_safe(image, avatar, (x0, y0))
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.line([(x0+size*.5,y0+size*.91),(x0+size*.08,y0+size*.49),
+               (x0+size*.02,y0+size*.35),(x0+size*.06,y0+size*.20),
+               (x0+size*.18,y0+size*.10),(x0+size*.32,y0+size*.10),
+               (x0+size*.5,y0+size*.28),(x0+size*.68,y0+size*.10),
+               (x0+size*.82,y0+size*.10),(x0+size*.94,y0+size*.20),
+               (x0+size*.98,y0+size*.35),(x0+size*.92,y0+size*.49),
+               (x0+size*.5,y0+size*.91)], fill=(255,218,150,235), width=5, joint="curve")
+    # A restrained label below the heart contains the exact account name.
+    name_y = 540
+    draw.rounded_rectangle((150, name_y-34, 810, name_y+34), radius=34,
+                           fill=(10,16,35,190), outline=(245,190,112,230), width=2)
+    name = str(username or "").strip().lstrip("@")[:80]
+    _draw_name_centered(draw, (width/2, name_y), name, 34, (255,255,255,255), 610)
+    # Caption panel with wrapped, right-to-left Arabic-friendly text.
+    box = (92, 640, 868, 1050)
+    draw.rounded_rectangle(box, radius=38, fill=(255,255,255,239), outline=(255,220,170,255), width=3)
+    try:
+        font_path = ASSETS_DIR / "NotoSansArabic-Regular.ttf"
+        font = ImageFont.truetype(str(font_path), 37) if font_path.exists() else ImageFont.load_default()
+    except Exception:
+        font = ImageFont.load_default()
+    raw = str(text or "").strip()[:1200]
+    words = raw.split() or [raw]
+    lines, current = [], ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        if current and draw.textlength(candidate, font=font) > 680:
+            lines.append(current); current = word
+        else:
+            current = candidate
+    if current: lines.append(current)
+    max_lines = 8
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip("…") + "…"
+    line_h = 54
+    y = box[1] + max(35, (box[3]-box[1]-(len(lines)*line_h))//2)
+    for line in lines:
+        shown = _visual_rtl_text(line)
+        draw.text((width/2, y), shown, font=font, fill=(36,39,58,255), anchor="mt", align="center")
+        y += line_h
+    draw.text((width/2, 1110), "T A L K I N   •   E X P L O R E",
+              font=ImageFont.truetype(str(ASSETS_DIR / "NotoSans-Regular.ttf"), 20),
+              fill=(235,218,244,210), anchor="mm")
+    out_dir = BASE_DIR / "generated_publish"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"explore_{uuid.uuid4().hex}.jpg"
+    image.save(out, "JPEG", quality=88, optimize=True, progressive=True)
+    return out
 
 # ============================================================
 # شبيه المستخدم: بحث تلقائي عن صورة من الويب وإرسالها للغرفة.
@@ -8936,6 +9020,9 @@ class TalkinBot:
                 break
         if room_key in getattr(self, "_intentional_leaves", set()):
             self.log(f"[USER_LEFT_DETECTED] Bot left {room} intentionally; skipping auto-rejoin.")
+            self._send_master_room_departure_notice(
+                room, "user_left", reason="مغادرة مقصودة بأمر البوت", actor=BOT_ID,
+            )
         else:
             # Only the explicit role_changed:kicked event is authoritative
             # enough to clear room presence and trigger automatic re-entry.
@@ -9494,13 +9581,23 @@ class TalkinBot:
             len(packet),
             f"حزمة النص تجاوزت الحد الصلب ({limit} بايت)؛ أُسقطت محلياً",
         )
-        if len(packet) > 1008 and notify_oversize:
-            self._send_oversize_notice(
-                packet_type,
-                target=str(kwargs.get("to") or ""),
-                room=str(kwargs.get("room") or ""),
-                username=oversize_notice_user,
+        if len(packet) > 1008:
+            telegram_sent = self._send_long_text_to_telegram(
+                text, title=f"رسالة Talkin طويلة ({packet_type}) — {len(packet)} بايت"
             )
+            master = str(BOT_MASTER or "").strip()
+            if master and telegram_sent:
+                try:
+                    self.send_private_text(master, f"📨 تم إرسال الرسالة الطويلة إلى Telegram لتجنب فصل البوت.\n📦 الحجم: {len(packet)} بايت\n📍 الوجهة: {kwargs.get('room') or kwargs.get('to') or 'غير محددة'}")
+                except Exception as exc:
+                    self.log("[TELEGRAM] master notice failed:", repr(exc))
+            elif not telegram_sent:
+                self.log("[TELEGRAM] oversized Talkin response was not forwarded")
+            if notify_oversize:
+                self._send_oversize_notice(
+                    packet_type, target=str(kwargs.get("to") or ""),
+                    room=str(kwargs.get("room") or ""), username=oversize_notice_user,
+                )
         return False
 
     def _send_help_chunks(self, packet_type: str, text: str, limit: int = 320, **kwargs):
@@ -24511,57 +24608,86 @@ class TalkinBot:
         return False
 
     def _handle_reaction_command(self, room, command, sender):
-        """Deliver media reactions to their owner and reports to the master."""
-        reaction = re.fullmatch(
-            r"(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?",
-            str(command or "").strip(), re.I,
-        )
+        """Route reactions privately and acknowledge them in the originating room."""
+        value = str(command or "").strip()
+        repost = re.fullmatch(r"x@([A-Za-z0-9]{4})", value, re.I)
+        if repost:
+            code = repost.group(1).lower()
+            info = getattr(self, "reaction_targets", {}).get(code)
+            if not isinstance(info, dict) or info.get("kind") != "explore":
+                return False
+            if time.time() - float(info.get("created_at", 0) or 0) > 86400:
+                return False
+            media_url = str(info.get("media_url") or "")
+            if not media_url or self.send_room_media(room, media_url, "image") is False:
+                self.send_room_text(room, "تعذر إعادة نشر هذا المنشور الآن.")
+                return True
+            original = str(info.get("caption") or "")
+            original = re.sub(r"\n🔁 أعاد النشر:.*$", "", original, flags=re.S)
+            self.send_room_text(room, original + f"\n🔁 أعاد النشر: @{str(sender or '').lstrip('@')}")
+            return True
+        reaction = re.fullmatch(r"(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?", value, re.I)
         if not reaction:
             return False
-
-        action = reaction.group(1).lower()
-        code = reaction.group(2).lower()
+        action, code = reaction.group(1).lower(), reaction.group(2).lower()
         extra = (reaction.group(3) or "").strip()
         info = getattr(self, "reaction_targets", {}).get(code)
         if not isinstance(info, dict) or time.time() - float(info.get("created_at", 0) or 0) > 86400:
             return False
-
         publisher = str(info.get("publisher") or "").strip()
         source_kind = str(info.get("kind") or "").lower()
         source_desc = str(info.get("description") or info.get("title") or "").strip()
-        labels = {
-            "lk": "👍 إعجاب",
-            "lv": "❤️ حب",
-            "dl": "👎 عدم إعجاب",
-            "cm": "💬 تعليق",
-            "report": "🚨 بلاغ",
-        }
+        labels = {"lk": "👍 إعجاب", "lv": "❤️ حب", "dl": "👎 عدم إعجاب", "cm": "💬 تعليق", "report": "🚨 بلاغ"}
         owner_label = "صاحب الأغنية" if source_kind == "music" else "ناشر الصورة"
-        notice = (
-            f"{labels[action]} على المحتوى المنشور\n"
-            f"🆔 الرمز: {code}\n"
-            f"👤 المتفاعل: {sender}\n"
-            f"📌 {owner_label}: {publisher}"
-        )
-        if source_desc:
-            notice += f"\n📝 المحتوى: {source_desc}"
-        if extra:
-            notice += f"\n💬 رسالة التفاعل: {extra}"
+        notice = f"{labels[action]} على المحتوى المنشور\n🆔 الرمز: {code}\n👤 المتفاعل: {sender}\n📌 {owner_label}: {publisher}"
+        if source_desc: notice += f"\n📝 المحتوى: {source_desc}"
+        if extra: notice += f"\n💬 رسالة التفاعل: {extra}"
         notice += f"\n🏠 الغرفة: {room}"
-
+        room_ack = {"lk": "لقد اعجبت بمنشور", "dl": "لم تعجب", "lv": "احببت", "report": "تم ارسال البلاغ", "cm": "تم ارسال تعليقك"}[action]
+        self.send_room_text(room, f"@{str(sender or '').lstrip('@')} {room_ack}")
         if action == "report":
-            # Reports are moderation alerts and must go only to the master.
             master = str(BOT_MASTER or "").strip()
-            if master:
-                self.send_private_text(master, notice)
+            if master: self.send_private_text(master, notice)
             return True
-
-        # Every non-report reaction goes privately to the original publisher,
-        # including a reaction made by the publisher themselves.
         if publisher:
             self.send_private_text(publisher, notice)
         return True
-
+    def _handle_explore_command(self, room, command, sender):
+        match = re.fullmatch(r"ax@(.+)", str(command or "").strip(), re.I | re.S)
+        if not match:
+            return False
+        text = match.group(1).strip()[:1200]
+        if not text:
+            self.send_room_text(room, "استخدم ax@النص لنشر محتوى اكسبلور.")
+            return True
+        if self._find_publish_filter_hit(text):
+            self.send_room_text(room, "تعذر نشر النص لأنه يخالف فلتر النشر.")
+            return True
+        try:
+            key = _norm_user(sender)
+            avatar_url = getattr(self, "user_photos", {}).get(key, "") or self._lookup_profile_photo(sender)
+            card = render_explore_card(text, sender, avatar_url)
+            base = _public_base_url()
+            if not base:
+                raise RuntimeError("رابط الوسائط العام غير مضبوط")
+            media_url = f"{base}/publish/{card.name}"
+            self._verify_public_media_url(media_url, "image")
+            code = uuid.uuid4().hex[:4]
+            caption = (f"✨ اكسبلور\n👤 @{str(sender or '').lstrip('@')}\n📝 {text[:260]}\n━━━━━━━━━━━━\n"
+                       f"👍 lk@{code}   ❤️ lv@{code}   👎 dl@{code}\n💬 cm@{code} msg   🚨 report@{code} msg\n🔁 x@{code} — إعادة نشر")
+            self.reaction_targets[code] = {"publisher": str(sender), "kind": "explore", "description": text,
+                                            "media_url": media_url, "caption": caption, "created_at": time.time()}
+            rooms = self._active_rooms() or ([str(room)] if room else [])
+            delivered = 0
+            for target in rooms:
+                if self.send_room_media(target, media_url, "image") is not False:
+                    self.send_room_text(target, caption)
+                    delivered += 1
+            self.send_private_text(sender, f"✅ تم نشر اكسبلور في {delivered} غرفة.")
+        except Exception as exc:
+            self.log("[EXPLORE] publish failed:", repr(exc))
+            self.send_private_text(sender, "تعذر تجهيز منشور اكسبلور؛ تحقق من إعداد رابط الوسائط العام.")
+        return True
     def handle_room_event(self, result):
         event = (result.get("room_event") or {}) if isinstance(result, dict) else {}
         event_type = str(event.get(1, ""))
@@ -24861,6 +24987,10 @@ class TalkinBot:
                             connected for connected in self.connected_rooms
                             if _norm_room(connected) != _norm_room(room)
                         }
+                        self._send_master_room_departure_notice(
+                            room, "role_changed", reason=changed_role,
+                            actor=str(event.get(22, "") or event.get("actor", "") or ""),
+                        )
                         if changed_role == "kicked":
                             self.log(f"[KICK_DETECTED] Bot was kicked from {room}; rejoining automatically...")
                             self._schedule_auto_rejoin(room)
@@ -25256,8 +25386,9 @@ class TalkinBot:
         if self._handle_lookalike_command(room, body, frm):
             return
 
-        # Reactions go privately to the publisher; reports go privately to the
-        # master for moderation.
+        # Explore publication/repost and reactions are handled before ordinary command gates.
+        if self._handle_explore_command(room, body, frm):
+            return
         if self._handle_reaction_command(room, body, frm):
             return
 
@@ -25853,6 +25984,10 @@ class TalkinBot:
                         media_candidates = [frm, cm.get(22, ""), cm.get("sender", ""), cm.get("username", "")]
                         if self._try_publish_pending_media(media_room, media_url, media_candidates):
                             return
+                    if body and self._handle_explore_command(self.room, body, frm):
+                        return
+                    if body and self._handle_reaction_command(self.room, body, frm):
+                        return
                     if body and self._handle_telegram_log_command(body, frm, is_private=True):
                         return
                     # Every NS is a fresh navigation request. Do not suppress
