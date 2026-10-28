@@ -10620,7 +10620,7 @@ class TalkinBot:
                 self.share_last_music(original_sender, command.split("@",1)[1], target_room)
                 return True
             if low.startswith(".sa "):
-                return bool(self.handle_music_command(target_room, command, original_sender, broadcast_all=True))
+                return bool(self.handle_music_command(target_room, command, original_sender, broadcast_all=True, with_reactions=True))
             if low in ("نقاطي", "points"):
                 self.send_room_text(target_room, _points_summary_text(original_sender))
                 return True
@@ -25320,7 +25320,7 @@ class TalkinBot:
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.\n{_verification_notice()}")
                 return
-            if self.handle_music_command(room, body, frm, broadcast_all=True):
+            if self.handle_music_command(room, body, frm, broadcast_all=True, with_reactions=True):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
@@ -25912,7 +25912,7 @@ class TalkinBot:
                                 live_stream=is_room_broadcast):
                             return
                     if body.strip().lower().startswith(".sa "):
-                        if self.handle_music_command(self.room, body, frm, broadcast_all=True):
+                        if self.handle_music_command(self.room, body, frm, broadcast_all=True, with_reactions=True):
                             return
                     m_custom_gift = re.fullmatch(r"sav@([^@\s]+)", body.strip(), re.I)
                     if m_custom_gift:
