@@ -6866,59 +6866,151 @@ def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
     return out
 
 
+_EXPLORE_TEXT_COLORS = (
+    (255, 221, 163),  # warm gold
+    (137, 231, 222),  # mint
+    (255, 170, 196),  # rose
+    (176, 199, 255),  # periwinkle
+    (226, 184, 255),  # lavender
+    (255, 193, 139),  # peach
+)
+_EXPLORE_TEXT_COLOR_LOCK = threading.Lock()
+_EXPLORE_TEXT_COLOR_INDEX = random.randrange(len(_EXPLORE_TEXT_COLORS))
+
+
+def _next_explore_text_color():
+    """Cycle through refined text colors so consecutive Explore posts differ."""
+    global _EXPLORE_TEXT_COLOR_INDEX
+    with _EXPLORE_TEXT_COLOR_LOCK:
+        color = _EXPLORE_TEXT_COLORS[_EXPLORE_TEXT_COLOR_INDEX]
+        _EXPLORE_TEXT_COLOR_INDEX = (_EXPLORE_TEXT_COLOR_INDEX + 1) % len(_EXPLORE_TEXT_COLORS)
+    return color
+
+
+def _explore_heart_mask(size, scale=4):
+    """Build a smooth, symmetric heart mask from sampled cubic Bézier curves."""
+    canvas_size = int(size) * int(scale)
+    curves = (
+        ((.50, .94), (.38, .82), (.02, .60), (.02, .35)),
+        ((.02, .35), (.02, .12), (.29, .04), (.50, .24)),
+        ((.50, .24), (.71, .04), (.98, .12), (.98, .35)),
+        ((.98, .35), (.98, .60), (.62, .82), (.50, .94)),
+    )
+    points = []
+    for p0, p1, p2, p3 in curves:
+        for step in range(25):
+            t = step / 24
+            u = 1 - t
+            x = u**3*p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t**3*p3[0]
+            y = u**3*p0[1] + 3*u*u*t*p1[1] + 3*u*t*t*p2[1] + t**3*p3[1]
+            points.append((round(x * canvas_size), round(y * canvas_size)))
+    mask = Image.new("L", (canvas_size, canvas_size), 0)
+    ImageDraw.Draw(mask).polygon(points, fill=255)
+    return mask.resize((int(size), int(size)), Image.Resampling.LANCZOS)
+
+
+def _draw_explore_username(draw, center, username, max_width):
+    """Draw a username without reversing logical Arabic text."""
+    name = _display_name_for_image(str(username or "").strip().lstrip("@"))[:80]
+    if not name:
+        return
+    size = 50
+    while size >= 22:
+        font = _gift_font(name, size)
+        try:
+            if _has_arabic(name) and PIL_AVAILABLE and features.check("raqm"):
+                bounds = draw.textbbox((0, 0), name, font=font, direction="rtl", language="ar")
+            else:
+                visual = _visual_rtl_text(name)
+                bounds = draw.textbbox((0, 0), visual, font=font)
+            if bounds[2] - bounds[0] <= max_width:
+                break
+        except Exception:
+            visual = _visual_rtl_text(name)
+            bounds = draw.textbbox((0, 0), visual, font=font)
+            if bounds[2] - bounds[0] <= max_width:
+                break
+        size -= 2
+    native_rtl = bool(_has_arabic(name) and PIL_AVAILABLE and features.check("raqm"))
+    shown = name if native_rtl else _visual_rtl_text(name)
+    kwargs = {"direction": "rtl", "language": "ar"} if native_rtl else {}
+    draw.text(center, shown, font=font, fill=(255, 250, 244, 255), anchor="mm",
+              stroke_width=2, stroke_fill=(13, 18, 38, 210), **kwargs)
+
+
 def render_explore_card(text, username, photo_url=""):
-    """Render a fresh Explore card with the author avatar clipped to a heart."""
+    """Render a polished Explore card with a large heart portrait and glass caption."""
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير متاح")
-    width, height = 960, 1180
-    image = Image.new("RGB", (width, height), (15, 18, 39))
+    width, height = 1080, 1500
+    image = Image.new("RGB", (width, height), (16, 20, 43))
     gradient = ImageDraw.Draw(image)
-    top, bottom = (19, 29, 65), (65, 31, 83)
+    top, bottom = (17, 26, 58), (46, 27, 67)
     for y in range(height):
         t = y / max(1, height - 1)
-        color = tuple(int(top[i] * (1-t) + bottom[i] * t) for i in range(3))
+        color = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
         gradient.line((0, y, width, y), fill=color)
     draw = ImageDraw.Draw(image, "RGBA")
-    draw.ellipse((-180, -150, 500, 520), fill=(255, 94, 153, 24))
-    draw.ellipse((540, 20, 1190, 650), fill=(104, 187, 255, 20))
-    # Heart mask is drawn at 3x resolution to keep a smooth silhouette.
-    size = 330
-    avatar = _load_sender_avatar(photo_url, size)
+    draw.ellipse((-240, -160, 450, 520), fill=(255, 116, 159, 26))
+    draw.ellipse((710, 110, 1310, 710), fill=(113, 180, 255, 23))
+
+    # Large heart portrait: a soft shadow, a thin warm metallic rim, and a
+    # square-cropped source photo clipped directly to the heart (not a circle).
+    outer_size, photo_size = 570, 520
+    outer_mask = _explore_heart_mask(outer_size)
+    photo_mask = _explore_heart_mask(photo_size)
+    outer_x, outer_y = (width - outer_size) // 2, 88
+    photo_x, photo_y = (width - photo_size) // 2, outer_y + (outer_size-photo_size)//2
+    shadow_mask = Image.new("L", image.size, 0)
+    shadow_mask.paste(outer_mask, (outer_x, outer_y + 15))
+    shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(18))
+    shadow_layer = Image.new("RGBA", image.size, (6, 5, 18, 0))
+    shadow_layer.putalpha(shadow_mask.point(lambda value: int(value * .58)))
+    image = Image.alpha_composite(image.convert("RGBA"), shadow_layer)
+    border_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    border_layer.paste((248, 207, 142, 255), (outer_x, outer_y), outer_mask)
+    image = Image.alpha_composite(image, border_layer)
+
+    avatar = None
+    if photo_url and str(photo_url).startswith(("http://", "https://")):
+        try:
+            response = requests.get(photo_url, headers={"User-Agent": "TalkinBot/22", "Accept": "image/*"}, timeout=(3, 6))
+            if response.status_code == 200 and response.content and len(response.content) <= 8 * 1024 * 1024:
+                avatar = Image.open(io.BytesIO(response.content)).convert("RGB")
+                avatar = _fit_crop(avatar, (photo_size, photo_size)).convert("RGBA")
+        except Exception:
+            avatar = None
     if avatar is None:
-        avatar = Image.new("RGBA", (size, size), (53, 65, 98, 255))
+        avatar = Image.new("RGBA", (photo_size, photo_size), (53, 66, 100, 255))
         ad = ImageDraw.Draw(avatar)
-        ad.ellipse((108, 55, 222, 170), fill=(215, 224, 241, 255))
-        ad.rounded_rectangle((62, 160, 268, 315), radius=75, fill=(215, 224, 241, 255))
-    mask = Image.new("L", (size, size), 0)
-    md = ImageDraw.Draw(mask)
-    md.polygon([(size*.5,size*.91),(size*.08,size*.49),(size*.02,size*.35),
-                (size*.06,size*.20),(size*.18,size*.10),(size*.32,size*.10),
-                (size*.50,size*.28),(size*.68,size*.10),(size*.82,size*.10),
-                (size*.94,size*.20),(size*.98,size*.35),(size*.92,size*.49)], fill=255)
-    avatar = avatar.convert("RGBA")
-    avatar.putalpha(mask)
-    x0, y0 = (width-size)//2, 140
-    _paste_avatar_safe(image, avatar, (x0, y0))
+        ad.ellipse((photo_size*.34, photo_size*.18, photo_size*.66, photo_size*.50), fill=(221, 230, 245, 255))
+        ad.rounded_rectangle((photo_size*.20, photo_size*.49, photo_size*.80, photo_size*.94),
+                             radius=photo_size*.18, fill=(221, 230, 245, 255))
+    avatar.putalpha(photo_mask)
+    image.paste(avatar, (photo_x, photo_y), avatar)
+    image = image.convert("RGB")
     draw = ImageDraw.Draw(image, "RGBA")
-    draw.line([(x0+size*.5,y0+size*.91),(x0+size*.08,y0+size*.49),
-               (x0+size*.02,y0+size*.35),(x0+size*.06,y0+size*.20),
-               (x0+size*.18,y0+size*.10),(x0+size*.32,y0+size*.10),
-               (x0+size*.5,y0+size*.28),(x0+size*.68,y0+size*.10),
-               (x0+size*.82,y0+size*.10),(x0+size*.94,y0+size*.20),
-               (x0+size*.98,y0+size*.35),(x0+size*.92,y0+size*.49),
-               (x0+size*.5,y0+size*.91)], fill=(255,218,150,235), width=5, joint="curve")
-    # A restrained label below the heart contains the exact account name.
-    name_y = 540
-    draw.rounded_rectangle((150, name_y-34, 810, name_y+34), radius=34,
-                           fill=(10,16,35,190), outline=(245,190,112,230), width=2)
-    name = str(username or "").strip().lstrip("@")[:80]
-    _draw_name_centered(draw, (width/2, name_y), name, 34, (255,255,255,255), 610)
-    # Caption panel with wrapped, right-to-left Arabic-friendly text.
-    box = (92, 640, 868, 1050)
-    draw.rounded_rectangle(box, radius=38, fill=(255,255,255,239), outline=(255,220,170,255), width=3)
+
+    # A small title above the photo and an unboxed username directly beneath it.
+    title_font_path = ASSETS_DIR / "NotoSansArabic-SemiBold.ttf"
+    try:
+        title_font = ImageFont.truetype(str(title_font_path), 30)
+    except Exception:
+        title_font = ImageFont.load_default()
+    draw.text((width//2, 48), "اكسبلور", font=title_font, fill=(247, 222, 190, 255), anchor="mm")
+    _draw_explore_username(draw, (width//2, 700), username, 920)
+    draw.line((385, 746, 695, 746), fill=(249, 207, 143, 180), width=2)
+    draw.ellipse((width//2-4, 742, width//2+4, 750), fill=(255, 228, 180, 255))
+
+    # Translucent glass-style text panel; each new render takes the next
+    # color from the palette so consecutive posts visibly vary.
+    box = (84, 790, 996, 1334)
+    draw.rounded_rectangle(box, radius=42, fill=(13, 17, 38, 152), outline=(255, 255, 255, 92), width=2)
+    draw.rounded_rectangle((box[0]+10, box[1]+10, box[2]-10, box[3]-10),
+                           radius=34, outline=(255, 255, 255, 30), width=1)
     try:
         font_path = ASSETS_DIR / "NotoSansArabic-Regular.ttf"
-        font = ImageFont.truetype(str(font_path), 37) if font_path.exists() else ImageFont.load_default()
+        font = ImageFont.truetype(str(font_path), 38) if font_path.exists() else ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
     raw = str(text or "").strip()[:1200]
@@ -6926,28 +7018,43 @@ def render_explore_card(text, username, photo_url=""):
     lines, current = [], ""
     for word in words:
         candidate = (current + " " + word).strip()
-        if current and draw.textlength(candidate, font=font) > 680:
-            lines.append(current); current = word
+        try:
+            measured = draw.textlength(candidate, font=font, direction="rtl", language="ar") if _has_arabic(candidate) else draw.textlength(candidate, font=font)
+        except Exception:
+            measured = draw.textlength(candidate, font=font)
+        if current and measured > 790:
+            lines.append(current)
+            current = word
         else:
             current = candidate
-    if current: lines.append(current)
-    max_lines = 8
+    if current:
+        lines.append(current)
+    max_lines = 9
     if len(lines) > max_lines:
         lines = lines[:max_lines]
         lines[-1] = lines[-1].rstrip("…") + "…"
-    line_h = 54
-    y = box[1] + max(35, (box[3]-box[1]-(len(lines)*line_h))//2)
+    line_height = 55
+    first_y = box[1] + max(42, (box[3]-box[1]-(len(lines)*line_height))//2)
+    text_color = _next_explore_text_color()
     for line in lines:
-        shown = _visual_rtl_text(line)
-        draw.text((width/2, y), shown, font=font, fill=(36,39,58,255), anchor="mt", align="center")
-        y += line_h
-    draw.text((width/2, 1110), "T A L K I N   •   E X P L O R E",
-              font=ImageFont.truetype(str(ASSETS_DIR / "NotoSans-Regular.ttf"), 20),
-              fill=(235,218,244,210), anchor="mm")
+        shown = line if (_has_arabic(line) and PIL_AVAILABLE and features.check("raqm")) else _visual_rtl_text(line)
+        direction = {"direction": "rtl", "language": "ar"} if _has_arabic(line) and PIL_AVAILABLE and features.check("raqm") else {}
+        draw.text((width//2, first_y), shown, font=font, fill=(*text_color, 255), anchor="mt", align="center", **direction)
+        first_y += line_height
+
+    footer_font_path = ASSETS_DIR / "NotoSansArabic-SemiBold.ttf"
+    try:
+        footer_font = ImageFont.truetype(str(footer_font_path), 31)
+    except Exception:
+        footer_font = ImageFont.load_default()
+    draw.text((width//2, 1445), "كوفي بوت", font=footer_font,
+              fill=(245, 225, 199, 245), anchor="mm")
+    draw.line((420, 1404, 660, 1404), fill=(244, 194, 120, 115), width=2)
+
     out_dir = BASE_DIR / "generated_publish"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"explore_{uuid.uuid4().hex}.jpg"
-    image.save(out, "JPEG", quality=88, optimize=True, progressive=True)
+    image.save(out, "JPEG", quality=91, optimize=True, progressive=True)
     return out
 
 # ============================================================

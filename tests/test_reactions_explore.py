@@ -69,10 +69,39 @@ def test_explore_card_is_created_as_a_fresh_image(tmp_path):
     try:
         assert card.is_file()
         with bot_module.Image.open(card) as image:
-            assert image.size == (960, 1180)
+            assert image.size == (1080, 1500)
             assert image.format == "JPEG"
     finally:
         card.unlink(missing_ok=True)
+
+
+def test_explore_username_uses_native_right_to_left_text(monkeypatch):
+    drawn = []
+
+    class DrawRecorder:
+        def textbbox(self, _xy, text, **kwargs):
+            assert text == "المستخدم العربي"
+            assert kwargs.get("direction") == "rtl"
+            return (0, 0, 240, 50)
+
+        def text(self, _xy, text, **kwargs):
+            drawn.append((text, kwargs))
+
+    monkeypatch.setattr(bot_module, "_display_name_for_image", lambda value: value)
+    monkeypatch.setattr(bot_module, "_gift_font", lambda *_args: object())
+    monkeypatch.setattr(bot_module.features, "check", lambda _feature: True)
+
+    bot_module._draw_explore_username(DrawRecorder(), (500, 500), "المستخدم العربي", 900)
+
+    assert drawn[0][0] == "المستخدم العربي"
+    assert drawn[0][1]["direction"] == "rtl"
+    assert drawn[0][1]["language"] == "ar"
+
+
+def test_explore_text_palette_changes_between_consecutive_renders():
+    first = bot_module._next_explore_text_color()
+    second = bot_module._next_explore_text_color()
+    assert first != second
 
 
 def test_oversized_text_is_forwarded_to_telegram_and_master_not_websocket(monkeypatch):
