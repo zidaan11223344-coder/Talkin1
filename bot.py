@@ -10620,7 +10620,7 @@ class TalkinBot:
                 self.share_last_music(original_sender, command.split("@",1)[1], target_room)
                 return True
             if low.startswith(".sa "):
-                return bool(self.handle_music_command(target_room, command, original_sender))
+                return bool(self.handle_music_command(target_room, command, original_sender, broadcast_all=True))
             if low in ("نقاطي", "points"):
                 self.send_room_text(target_room, _points_summary_text(original_sender))
                 return True
@@ -14665,8 +14665,6 @@ class TalkinBot:
 
     def _send_game_result(self, room, text, game_key, winner_name="", target_rooms=None):
         """Send the text result and, when the game has artwork, its winner card."""
-        if _game_results_disabled_for_room(room):
-            return False
         self.send_room_text(room, text)
         if winner_name and game_key:
             self._send_game_winner_card(game_key, winner_name, target_rooms or [room])
@@ -15081,8 +15079,11 @@ class TalkinBot:
             if error is None and waiting:
                 # A second player may enter ANY amount, from the same room or another room.
                 # Their room and stake are both preserved for the final result.
-                self.wager_waiting.pop(key, None)
-                self._save_wager_state()
+                # Keep the first challenge persisted until the second player's
+                # debit is idempotently committed below; a restart between
+                # these operations must never lose either the challenge or the
+                # second player's points.
+                pass
             elif error is None:
                 # Persist the reservation before debiting. If the platform
                 # stops between these two operations, startup resumes the
@@ -15123,7 +15124,27 @@ class TalkinBot:
             # Mirror the first player's wager exactly; do not let a smaller
             # amount supplied by the challenger understate the loser debit.
             round_stake = int(waiting.get("stake", 0) or 0)
-            _add_points(sender, -round_stake)
+            challenge_id = str(waiting.get("id") or key)
+            join_txid = f"wager-join-debit:{challenge_id}:{_norm_user(sender)}"
+            debit = _apply_points_delta_once(
+                sender, -round_stake, join_txid,
+                f"join {game_name} wager",
+            )
+            if not debit.get("ok"):
+                self.send_room_text(
+                    room,
+                    _reply_template(
+                        "game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"],
+                        balance=_fmt_points(_get_points(sender)),
+                    ) if debit.get("error") == "insufficient" else
+                    "❌ تعذر تثبيت مبلغ الرهان بأمان؛ لم تُقبل المشاركة."
+                )
+                return True
+            with self.game_lock:
+                current = self.wager_waiting.get(key)
+                if current and str(current.get("id") or "") == challenge_id:
+                    self.wager_waiting.pop(key, None)
+                    self._save_wager_state()
             second = {
                 "user": sender,
                 "room": room,
@@ -15911,23 +15932,6 @@ class TalkinBot:
             str(active.get("opener_name") or ""),
             apply_delta=_apply_points_delta_once,
         )
-        # At the end of the one-minute round, charge the participant whose
-        # turn was left unanswered. The winner is already charged by close(),
-        # so exclude that user to keep the ledger idempotent and avoid a
-        # double deduction. This also covers a round with no bids: the silent
-        # player is charged the selected item's starting price.
-        idle_user_id = str(active.get("turn_user_id") or "")
-        idle_name = str(active.get("turn_username") or "").strip().lstrip("@")
-        highest_user_id = str(active.get("highest_bidder_id") or "")
-        item = active.get("item") if isinstance(active.get("item"), dict) else {}
-        reached_amount = int(active.get("current_bid", 0) or 0) or int(item.get("starting_price", 0) or 0)
-        if idle_user_id and idle_name and idle_user_id != highest_user_id and reached_amount > 0:
-            _apply_points_delta_once(
-                idle_name,
-                -reached_amount,
-                f"auction:{auction_id}:round-idle:{idle_user_id}",
-                "auction inactive-round penalty",
-            )
         if not self._auction_broadcast_close_result(result, rooms=rooms, expired=True) and result.get("error"):
             self._auction_broadcast(
                 "⌛ انتهت مدة المزايدة، لكن تعذرت التسوية الآن؛ لم يُعلن فائز.",
@@ -17986,8 +17990,6 @@ class TalkinBot:
 
     def _broadcast_game_start(self, title, game):
         for r in self._active_rooms():
-            if _game_results_disabled_for_room(r):
-                continue
             try:
                 self.send_room_text(r, title)
             except Exception:
@@ -17997,13 +17999,12 @@ class TalkinBot:
         url = self._game_public_image(image_path) if image_path else ""
         sent = 0
         for r in self._active_rooms():
-            if _game_results_disabled_for_room(r):
-                continue
             try:
-                if winner_photo_url:
+                if winner_photo_url and not _game_results_disabled_for_room(r):
                     self.send_room_media(r, winner_photo_url, "image")
                 if url:
-                    self.send_room_media(r, url, "image")
+                    if not _game_results_disabled_for_room(r):
+                        self.send_room_media(r, url, "image")
                 self.send_room_text(r, text)
                 sent += 1
             except Exception:
@@ -21723,7 +21724,7 @@ class TalkinBot:
 
         result_toggle = re.fullmatch(r"sf@(on|off)", text, re.I)
         if result_toggle:
-            disable_results = result_toggle.group(1).casefold() == "on"
+            enable_results = result_toggle.group(1).casefold() == "on"
             role, role_known = _room_role(self, room, sender)
             role_key = re.sub(r"[\s_-]+", "", role.casefold())
             owner_role = role_known and role_key in {"owner", "creator", "roomowner", "roomcreator", "host", "مالك", "صانع", "صانعي", "صانعالغرفة", "صانعالغرفه"}
@@ -21738,19 +21739,19 @@ class TalkinBot:
                 return True
             data = _game_control_data()
             disabled = [str(value).strip() for value in data.get("results_disabled_rooms", []) if str(value).strip()]
-            if disable_results:
-                if all(_norm_room(value) != _norm_room(room) for value in disabled):
-                    disabled.append(str(room).strip())
-            else:
+            if enable_results:
                 disabled = [value for value in disabled if _norm_room(value) != _norm_room(room)]
+            elif all(_norm_room(value) != _norm_room(room) for value in disabled):
+                disabled.append(str(room).strip())
             data["results_disabled_rooms"] = disabled
             # Clear the legacy global switch; result controls are room-scoped.
             data["all_room_results_enabled"] = True
             _save_game_control(data)
-            if disable_results:
-                response = "⛔ أُوقفت إعلانات وصور نتائج الألعاب في هذه الغرفة فقط."
-            else:
-                response = "✅ أُعيدت إعلانات وصور نتائج الألعاب في هذه الغرفة فقط."
+            response = (
+                "✅ تم تشغيل صور نتائج الألعاب في هذه الغرفة فقط."
+                if enable_results else
+                "⛔ تم إيقاف صور نتائج الألعاب في هذه الغرفة فقط."
+            )
             self.send_room_text(room, response)
             return True
 
@@ -22944,6 +22945,7 @@ class TalkinBot:
         public_welcome_command = bool(
             re.fullmatch(r"(?:ترحيب|welcome)@.+", shop_command_text, re.I | re.S)
             or shop_command_text.casefold() in {"ترحيب_صورة", "welcome_image"}
+            or shop_command_text.casefold() in {"حذف الترحيب", "حذف ترحيب", "إلغاء الترحيب", "الغاء الترحيب", "إلغاء شراء الترحيب", "الغاء شراء الترحيب", "delete welcome", "remove welcome"}
         )
         pending_welcome_text = _norm_user(sender) in getattr(self, "custom_welcome_text_pending", {})
         verified_shop_action = _is_verified_user(sender) and (public_shop_command or public_welcome_command or pending_welcome_text)
@@ -23190,6 +23192,8 @@ class TalkinBot:
             # requested the verification.
             self.send_private_text(target, f"✅ تم توثيق حسابك @{target} بنجاح.\n🎉 يمكنك الآن استخدام أوامر البوت.")
             self.send_private_text(sender, f"✅ تم توثيق @{target}.")
+            if room:
+                self.send_room_text(room, f"✅ تم توثيق @{target} بنجاح.")
             return True
         if low.startswith("ازالة توثيق@") or low.startswith("إزالة توثيق@") or low.startswith("سحب التوثيق@") or low.startswith("uns@"): 
             if not _is_verification_manager(sender):
@@ -23636,6 +23640,24 @@ class TalkinBot:
             self.auto_replies_enabled = text.strip().lower() == "sr@on"
             self._save_social_features()
             self.send_private_text(sender, "✅ تم تشغيل الردود التلقائية." if self.auto_replies_enabled else "⛔ تم إيقاف الردود التلقائية.")
+            return True
+        if low in {"حذف الترحيب", "حذف ترحيب", "إلغاء الترحيب", "الغاء الترحيب", "إلغاء شراء الترحيب", "الغاء شراء الترحيب", "delete welcome", "remove welcome"}:
+            key = _norm_user(sender)
+            removed = member_shop.remove_welcome_unlocks(
+                sender,
+                user_id=_stored_user_id(sender, room),
+                aliases=_stored_user_aliases(sender, room),
+            )
+            getattr(self, "custom_welcome_text_pending", {}).pop(key, None)
+            getattr(self, "custom_welcome_image_pending", {}).pop(key, None)
+            self.custom_welcomes.pop(key, None)
+            self._save_social_features()
+            self.send_private_text(
+                sender,
+                "✅ تم إلغاء شراء الترحيب النصي والصوري وحذف الترحيب المحفوظ."
+                if removed else
+                "ℹ️ لا يوجد ترحيب مشترى أو محفوظ لهذا الحساب."
+            )
             return True
         if low in {"متجر", "shop", "store", "story"}:
             self.send_private_text(sender, member_shop.render_catalog())
@@ -25298,7 +25320,7 @@ class TalkinBot:
             if not is_verified:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لاستخدام الأغاني.\n{_verification_notice()}")
                 return
-            if self.handle_music_command(room, body, frm):
+            if self.handle_music_command(room, body, frm, broadcast_all=True):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
@@ -25890,7 +25912,7 @@ class TalkinBot:
                                 live_stream=is_room_broadcast):
                             return
                     if body.strip().lower().startswith(".sa "):
-                        if self.handle_music_command(self.room, body, frm):
+                        if self.handle_music_command(self.room, body, frm, broadcast_all=True):
                             return
                     m_custom_gift = re.fullmatch(r"sav@([^@\s]+)", body.strip(), re.I)
                     if m_custom_gift:

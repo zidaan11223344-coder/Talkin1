@@ -111,6 +111,27 @@ def active(kind: str, *, username: str = "", room: str = "", user_id: str = "", 
         return isinstance(entry, dict) and float(entry.get("expires_at", 0) or 0) > now
 
 
+def remove_welcome_unlocks(username: str, *, user_id: str = "", aliases=()) -> int:
+    """Remove purchased text/image welcome entitlements without a refund."""
+    keys = _user_keys(username, user_id, aliases)
+    if not keys:
+        return 0
+    with SHOP_LOCK:
+        data = _load()
+        users = data.get("users") or {}
+        subject = next((candidate for candidate in keys if isinstance(users.get(candidate), dict)), "")
+        if not subject:
+            return 0
+        row = users[subject]
+        owned = set(row.get("unlocks") or [])
+        removed = len(owned.intersection({"custom_welcome", "image_welcome"}))
+        if not removed:
+            return 0
+        row["unlocks"] = sorted(owned - {"custom_welcome", "image_welcome"})
+        _save(data)
+        return removed
+
+
 def remaining(kind: str, *, username: str = "", room: str = "", user_id: str = "", aliases=()) -> int:
     keys = _user_keys(username, user_id, aliases)
     key = keys[0] if user_id and str(user_id).strip().isdigit() else (keys[0] if keys else "")
