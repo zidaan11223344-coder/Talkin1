@@ -14667,9 +14667,13 @@ class TalkinBot:
         """Send the text result and, when the game has artwork, its winner card."""
         self.send_room_text(room, text)
         if winner_name and game_key:
-            self._send_game_winner_card(game_key, winner_name, target_rooms or [room])
+            self._send_game_winner_card(
+                game_key, winner_name, target_rooms or [room],
+                respect_room_filter=False,
+            )
 
-    def _send_game_winner_card(self, game_key, winner_name, target_rooms, send_delay=0.0):
+    def _send_game_winner_card(self, game_key, winner_name, target_rooms, send_delay=0.0,
+                               respect_room_filter=True):
         """Render the existing game artwork and send it safely room-by-room.
 
         ``send_delay`` is used by multi-room game broadcasts to avoid a burst
@@ -14678,7 +14682,8 @@ class TalkinBot:
         """
         target_rooms = [
             str(room or "").strip() for room in (target_rooms or [])
-            if str(room or "").strip() and not _game_results_disabled_for_room(room)
+            if str(room or "").strip()
+            and (not respect_room_filter or not _game_results_disabled_for_room(room))
         ]
         if not target_rooms:
             return False
@@ -16539,7 +16544,7 @@ class TalkinBot:
             except Exception as exc:
                 self.log("[FISHING] dragon hunter badge registration failed:", repr(exc))
             self._queue_dragon_hunter_broadcast(username, room, reward)
-            self._send_game_winner_card("hunt_dragon", username, [room])
+            self._send_game_winner_card("hunt_dragon", username, [room], respect_room_filter=False)
             return True
 
         if language == "en":
@@ -16597,7 +16602,7 @@ class TalkinBot:
         )
         self.send_room_text(room, text)
         if reward > 0:
-            self._send_game_winner_card("luck", sender, [room])
+            self._send_game_winner_card("luck", sender, [room], respect_room_filter=False)
         return True
 
     def _save_stock_investments(self):
@@ -17188,7 +17193,7 @@ class TalkinBot:
             f"💰 الرصيد: {_fmt_points(balance)}"
         )
         if reward > 0:
-            self._send_game_winner_card("investment", sender, [room])
+            self._send_game_winner_card("investment", sender, [room], respect_room_filter=False)
         return True
 
     def _classify_picture_name(self, name):
@@ -17469,7 +17474,7 @@ class TalkinBot:
 
     def _send_steal_image(self, room, game_key, winner_name=""):
         if winner_name:
-            self._send_game_winner_card(game_key, winner_name, [room])
+            self._send_game_winner_card(game_key, winner_name, [room], respect_room_filter=False)
         else:
             base = _public_base_url()
             filename = GAME_IMAGE_FILES.get(game_key)
@@ -17546,7 +17551,7 @@ class TalkinBot:
         if not members:
             self.send_room_text(room, "❌ فشلت السرقة: لا يوجد عضو آخر متاح للسرقة حالياً.")
             _record_game(sender, "steal", 0, 500)
-            self._send_game_winner_card("اسرق_فشل", sender, [room])
+            self._send_game_winner_card("اسرق_فشل", sender, [room], respect_room_filter=False)
             return True
 
         # `اسرق` = choose a victim randomly; `اسرق@username` / `اسرق username` = target that member.
@@ -17566,7 +17571,7 @@ class TalkinBot:
         victim_balance = _get_points(victim)
         if self._steal_protected(victim):
             self.send_room_text(room, f"@{victim} لديه حصانه من السرقه")
-            self._send_game_winner_card("اسرق_فشل", sender, [room])
+            self._send_game_winner_card("اسرق_فشل", sender, [room], respect_room_filter=False)
             return True
         if victim_balance < 500:
             self.send_room_text(
@@ -17576,7 +17581,7 @@ class TalkinBot:
                 f"💰 رصيده: {_fmt_points(victim_balance)}\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
             )
             _record_game(sender, "steal", 0, 500)
-            self._send_game_winner_card("اسرق_فشل", sender, [room])
+            self._send_game_winner_card("اسرق_فشل", sender, [room], respect_room_filter=False)
             return True
 
         # The result is random each attempt: usually success, sometimes the police catch the thief.
@@ -17588,7 +17593,7 @@ class TalkinBot:
                 f"❌ لم تتم السرقة.\n💰 مبلغ الفوز: 0 نقطة\n💸 مبلغ الخسارة: 0 نقطة"
             )
             _record_game(sender, "steal", 0, 500)
-            self._send_game_winner_card("اسرق_فشل", sender, [room])
+            self._send_game_winner_card("اسرق_فشل", sender, [room], respect_room_filter=False)
             return True
 
         transfer = _transfer_points(
@@ -17597,7 +17602,7 @@ class TalkinBot:
         )
         if not transfer.get("ok"):
             self.send_room_text(room, "⚠️ تعذر اعتماد نتيجة السرقة وحفظ النقاط بأمان؛ لم يتم خصم أو إضافة أي نقاط.")
-            self._send_game_winner_card("اسرق_فشل", sender, [room])
+            self._send_game_winner_card("اسرق_فشل", sender, [room], respect_room_filter=False)
             return True
         thief_balance = transfer["recipient_balance"]
         self.send_room_text(
@@ -17611,7 +17616,7 @@ class TalkinBot:
         )
         _record_game(sender, "steal", 500, 500)
         _record_game(victim, "steal", -500, 500)
-        self._send_game_winner_card("اسرق_نجاح", sender, [room])
+        self._send_game_winner_card("اسرق_نجاح", sender, [room], respect_room_filter=False)
         return True
 
 
