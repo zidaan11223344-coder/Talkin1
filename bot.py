@@ -24510,6 +24510,58 @@ class TalkinBot:
         self.log("[JOINLEAVE] ignored automatic member restore after ban:", room, username)
         return False
 
+    def _handle_reaction_command(self, room, command, sender):
+        """Deliver media reactions to their owner and reports to the master."""
+        reaction = re.fullmatch(
+            r"(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?",
+            str(command or "").strip(), re.I,
+        )
+        if not reaction:
+            return False
+
+        action = reaction.group(1).lower()
+        code = reaction.group(2).lower()
+        extra = (reaction.group(3) or "").strip()
+        info = getattr(self, "reaction_targets", {}).get(code)
+        if not isinstance(info, dict) or time.time() - float(info.get("created_at", 0) or 0) > 86400:
+            return False
+
+        publisher = str(info.get("publisher") or "").strip()
+        source_kind = str(info.get("kind") or "").lower()
+        source_desc = str(info.get("description") or info.get("title") or "").strip()
+        labels = {
+            "lk": "👍 إعجاب",
+            "lv": "❤️ حب",
+            "dl": "👎 عدم إعجاب",
+            "cm": "💬 تعليق",
+            "report": "🚨 بلاغ",
+        }
+        owner_label = "صاحب الأغنية" if source_kind == "music" else "ناشر الصورة"
+        notice = (
+            f"{labels[action]} على المحتوى المنشور\n"
+            f"🆔 الرمز: {code}\n"
+            f"👤 المتفاعل: {sender}\n"
+            f"📌 {owner_label}: {publisher}"
+        )
+        if source_desc:
+            notice += f"\n📝 المحتوى: {source_desc}"
+        if extra:
+            notice += f"\n💬 رسالة التفاعل: {extra}"
+        notice += f"\n🏠 الغرفة: {room}"
+
+        if action == "report":
+            # Reports are moderation alerts and must go only to the master.
+            master = str(BOT_MASTER or "").strip()
+            if master:
+                self.send_private_text(master, notice)
+            return True
+
+        # Every non-report reaction goes privately to the original publisher,
+        # including a reaction made by the publisher themselves.
+        if publisher:
+            self.send_private_text(publisher, notice)
+        return True
+
     def handle_room_event(self, result):
         event = (result.get("room_event") or {}) if isinstance(result, dict) else {}
         event_type = str(event.get(1, ""))
@@ -25204,26 +25256,10 @@ class TalkinBot:
         if self._handle_lookalike_command(room, body, frm):
             return
 
-        # Reactions/comments/reports: notify the original publisher privately.
-        reaction=re.match(r"^(lk|lv|dl|cm|report)@([A-Za-z0-9]{4})(?:\s+(.*))?$", body.strip(), re.I)
-        if reaction:
-            action,code,extra=reaction.group(1).lower(),reaction.group(2).lower(),(reaction.group(3) or "").strip()
-            info=self.reaction_targets.get(code)
-            if info and time.time()-float(info.get("created_at",0)) <= 86400:
-                publisher=str(info.get("publisher") or "").strip()
-                labels={"lk":"👍 إعجاب","lv":"❤️ حب","dl":"👎 عدم إعجاب","cm":"💬 تعليق","report":"🚨 بلاغ"}
-                source_desc = str(info.get("description") or info.get("title") or "").strip()
-                owner_label = "صاحب الأغنية" if str(info.get("kind") or "").lower() == "music" else "اسم الناشر"
-                notice=f"لقد تفاعلت مع {labels.get(action,action)}\n👤 المتفاعل: {frm}\n📌 {owner_label}: {publisher}"
-                if source_desc: notice += f"\n📝 المحتوى: {source_desc}"
-                if extra: notice += f"\n💬 رسالة التفاعل: {extra}"
-                # التفاعل يظهر داخل نفس الغرفة، وتصل نسخة مطابقة أيضاً
-                # إلى صاحب الصورة/الأغنية على الخاص.
-                self.send_room_text(room, notice)
-                if publisher and _norm_user(publisher) != _norm_user(frm):
-                    private_notice = notice + f"\n🏠 الغرفة: {room}"
-                    self.send_private_text(publisher, private_notice)
-                return
+        # Reactions go privately to the publisher; reports go privately to the
+        # master for moderation.
+        if self._handle_reaction_command(room, body, frm):
+            return
 
         # نقاطي متاح للجميع ولا يحتاج توثيقاً.
         if body.strip().casefold() in ("نقاطي", "points"):
