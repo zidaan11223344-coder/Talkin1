@@ -5760,7 +5760,8 @@ def _pick_font_for_char(base, fallbacks, ch):
     return None
 
 def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
-                      stroke_fill=(0,0,0,220), direction="ltr", *, preserve_order=False):
+                      stroke_fill=(0,0,0,220), direction="ltr", *,
+                      preserve_order=False, vertical_center=None):
     """Draw one username from the user's exact command/message text.
 
     Arabic is reshaped/bidi-ordered once.  Each Unicode code point is then
@@ -5832,11 +5833,19 @@ def _draw_name_visual(draw, xy, raw_text, size, fill, stroke_width=2,
 
     x,y=xy
     for font,run in runs:
+        run_y = y
+        if vertical_center is not None:
+            try:
+                bbox = draw.textbbox((0, 0), run, font=font, direction="ltr",
+                                     stroke_width=stroke_width)
+                run_y = float(vertical_center) - (bbox[1] + bbox[3]) / 2
+            except Exception:
+                run_y = float(vertical_center) - int(size) / 2
         try:
-            draw.text((x,y),run,font=font,fill=fill,stroke_width=stroke_width,
+            draw.text((x,run_y),run,font=font,fill=fill,stroke_width=stroke_width,
                       stroke_fill=stroke_fill,direction="ltr")
         except Exception:
-            draw.text((x,y),run,font=font,fill=fill,stroke_width=stroke_width,
+            draw.text((x,run_y),run,font=font,fill=fill,stroke_width=stroke_width,
                       stroke_fill=stroke_fill)
         try:
             x += draw.textlength(run,font=font,direction="ltr")
@@ -5991,28 +6000,18 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         except Exception:
             pass
     width = 0.0
-    top, bottom = 999999, -999999
     for ch in visual:
         if _is_emoji_base(ch):
             width += size
-            top = min(top, 0)
-            bottom = max(bottom, size)
             continue
         font = _pick_font_for_char(base, fallbacks, ch)
         if font is None:
             continue
         width += metrics(ch, font, ch)
-        try:
-            bbox = font.getbbox(ch)
-            top = min(top, bbox[1])
-            bottom = max(bottom, bbox[3])
-        except Exception:
-            pass
-    if top == 999999:
+    if width <= 0:
         return
 
     cursor = float(center[0]) - width / 2
-    y = float(center[1]) - (bottom - top) / 2 - top
     run_direction = "rtl" if visual == raw_text and not force_ltr else "ltr"
     normal = []
     normal_width = 0.0
@@ -6020,14 +6019,17 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
         if _is_emoji_base(ch):
             if normal:
                 _draw_name_visual(
-                    draw, (cursor, y), "".join(normal), size, fill,
+                    draw, (cursor, center[1]), "".join(normal), size, fill,
                     stroke_width=2, stroke_fill=(0, 0, 0, 220),
                     direction=run_direction, preserve_order=True,
+                    vertical_center=center[1],
                 )
                 cursor += normal_width
                 normal = []
                 normal_width = 0.0
-            cursor += _draw_color_emoji(draw, (cursor, y), ch, size) or size
+            cursor += _draw_color_emoji(
+                draw, (cursor, float(center[1]) - size / 2), ch, size
+            ) or size
             continue
         normal.append(ch)
         font = _pick_font_for_char(base, fallbacks, ch)
@@ -6035,9 +6037,10 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
             normal_width += metrics(ch, font, ch)
     if normal:
         _draw_name_visual(
-            draw, (cursor, y), "".join(normal), size, fill,
+            draw, (cursor, center[1]), "".join(normal), size, fill,
             stroke_width=2, stroke_fill=(0, 0, 0, 220),
             direction=run_direction, preserve_order=True,
+            vertical_center=center[1],
         )
 
 def render_name_preview_card(name, *, corrected=False):
@@ -6892,8 +6895,8 @@ def _explore_heart_mask(size, scale=4):
     canvas_size = int(size) * int(scale)
     curves = (
         ((.50, .94), (.38, .82), (.02, .60), (.02, .35)),
-        ((.02, .35), (.02, .12), (.29, .04), (.50, .24)),
-        ((.50, .24), (.71, .04), (.98, .12), (.98, .35)),
+        ((.02, .35), (.02, .12), (.29, .03), (.50, .16)),
+        ((.50, .16), (.71, .03), (.98, .12), (.98, .35)),
         ((.98, .35), (.98, .60), (.62, .82), (.50, .94)),
     )
     points = []
@@ -6910,32 +6913,51 @@ def _explore_heart_mask(size, scale=4):
 
 
 def _draw_explore_username(draw, center, username, max_width):
-    """Draw a username without reversing logical Arabic text."""
-    name = _display_name_for_image(str(username or "").strip().lstrip("@"))[:80]
+    """Draw decorated Arabic/Latin names and emoji in a polished gradient."""
+    name = _clean_name_for_image(str(username or "").strip().lstrip("@"))[:80]
     if not name:
         return
-    size = 50
-    while size >= 22:
-        font = _gift_font(name, size)
-        try:
-            if _has_arabic(name) and PIL_AVAILABLE and features.check("raqm"):
-                bounds = draw.textbbox((0, 0), name, font=font, direction="rtl", language="ar")
-            else:
-                visual = _visual_rtl_text(name)
-                bounds = draw.textbbox((0, 0), visual, font=font)
-            if bounds[2] - bounds[0] <= max_width:
+    base = getattr(draw, "_image", None)
+    if not isinstance(base, Image.Image):
+        _draw_name_centered(draw, center, name, 50, (255, 221, 163, 255), max_width,
+                            grow_short=False)
+        return
+    name_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    _draw_name_centered(ImageDraw.Draw(name_layer), center, name, 50,
+                        (255, 255, 255, 255), max_width, grow_short=False)
+    alpha = name_layer.getchannel("A")
+
+    # Soft shadow keeps the multicolor name readable over both image regions.
+    shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(9)).point(lambda value: int(value * .52))
+    shadow = Image.new("RGBA", base.size, (18, 11, 34, 0))
+    shadow.putalpha(shadow_alpha)
+
+    # A vivid gold → rose → sky gradient gives the username its own
+    # colored tone while the shared name renderer handles Arabic, ornaments,
+    # fallback glyphs, and emoji.
+    stops = ((0.0, (255, 219, 105)), (0.48, (255, 91, 157)), (1.0, (91, 211, 255)))
+    gradient = Image.new("RGB", base.size, (255, 219, 105))
+    gradient_draw = ImageDraw.Draw(gradient)
+    width, height = base.size
+    name_bounds = alpha.getbbox() or (0, 0, width, height)
+    text_left, _text_top, text_right, _text_bottom = name_bounds
+    for x in range(width):
+        position = (x - text_left) / max(1, text_right - text_left - 1)
+        position = min(1.0, max(0.0, position))
+        left, right = stops[0], stops[-1]
+        for index in range(len(stops) - 1):
+            if stops[index][0] <= position <= stops[index + 1][0]:
+                left, right = stops[index], stops[index + 1]
                 break
-        except Exception:
-            visual = _visual_rtl_text(name)
-            bounds = draw.textbbox((0, 0), visual, font=font)
-            if bounds[2] - bounds[0] <= max_width:
-                break
-        size -= 2
-    native_rtl = bool(_has_arabic(name) and PIL_AVAILABLE and features.check("raqm"))
-    shown = name if native_rtl else _visual_rtl_text(name)
-    kwargs = {"direction": "rtl", "language": "ar"} if native_rtl else {}
-    draw.text(center, shown, font=font, fill=(255, 250, 244, 255), anchor="mm",
-              stroke_width=2, stroke_fill=(13, 18, 38, 210), **kwargs)
+        ratio = (position - left[0]) / max(1e-9, right[0] - left[0])
+        color = tuple(round(a + (b - a) * ratio) for a, b in zip(left[1], right[1]))
+        gradient_draw.line((x, 0, x, height), fill=color)
+    gradient.putalpha(alpha)
+
+    composed = base.convert("RGBA")
+    composed.alpha_composite(shadow)
+    composed.alpha_composite(gradient)
+    base.paste(composed.convert(base.mode))
 
 
 def render_explore_card(text, username, photo_url=""):
@@ -6954,12 +6976,12 @@ def render_explore_card(text, username, photo_url=""):
     draw.ellipse((-240, -160, 450, 520), fill=(255, 116, 159, 26))
     draw.ellipse((710, 110, 1310, 710), fill=(113, 180, 255, 23))
 
-    # Large heart portrait: a soft shadow, a thin warm metallic rim, and a
-    # square-cropped source photo clipped directly to the heart (not a circle).
-    outer_size, photo_size = 570, 520
+    # Compact portrait near the top: a soft shadow, a warm metallic rim, and
+    # the user's square-cropped profile photo clipped directly to the heart.
+    outer_size, photo_size = 450, 410
     outer_mask = _explore_heart_mask(outer_size)
     photo_mask = _explore_heart_mask(photo_size)
-    outer_x, outer_y = (width - outer_size) // 2, 88
+    outer_x, outer_y = (width - outer_size) // 2, 68
     photo_x, photo_y = (width - photo_size) // 2, outer_y + (outer_size-photo_size)//2
     shadow_mask = Image.new("L", image.size, 0)
     shadow_mask.paste(outer_mask, (outer_x, outer_y + 15))
@@ -6976,8 +6998,20 @@ def render_explore_card(text, username, photo_url=""):
         try:
             response = requests.get(photo_url, headers={"User-Agent": "TalkinBot/22", "Accept": "image/*"}, timeout=(3, 6))
             if response.status_code == 200 and response.content and len(response.content) <= 8 * 1024 * 1024:
-                avatar = Image.open(io.BytesIO(response.content)).convert("RGB")
-                avatar = _fit_crop(avatar, (photo_size, photo_size)).convert("RGBA")
+                source_photo = Image.open(io.BytesIO(response.content)).convert("RGB")
+                scale = max(photo_size / source_photo.width, photo_size / source_photo.height)
+                resized = source_photo.resize(
+                    (max(photo_size, int(source_photo.width * scale)),
+                     max(photo_size, int(source_photo.height * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+                crop_left = (resized.width - photo_size) // 2
+                # Favor the upper face slightly so eyes and forehead remain
+                # visible beneath the heart's top cleft.
+                crop_top = int((resized.height - photo_size) * .38)
+                avatar = resized.crop(
+                    (crop_left, crop_top, crop_left + photo_size, crop_top + photo_size)
+                ).convert("RGBA")
         except Exception:
             avatar = None
     if avatar is None:
@@ -6991,20 +7025,20 @@ def render_explore_card(text, username, photo_url=""):
     image = image.convert("RGB")
     draw = ImageDraw.Draw(image, "RGBA")
 
-    # A small title above the photo and an unboxed username directly beneath it.
+    # Title, profile heart, and colorful unboxed username form the top stack.
     title_font_path = ASSETS_DIR / "NotoSansArabic-SemiBold.ttf"
     try:
         title_font = ImageFont.truetype(str(title_font_path), 30)
     except Exception:
         title_font = ImageFont.load_default()
-    draw.text((width//2, 48), "اكسبلور", font=title_font, fill=(247, 222, 190, 255), anchor="mm")
-    _draw_explore_username(draw, (width//2, 700), username, 920)
-    draw.line((385, 746, 695, 746), fill=(249, 207, 143, 180), width=2)
-    draw.ellipse((width//2-4, 742, width//2+4, 750), fill=(255, 228, 180, 255))
+    draw.text((width//2, 36), "اكسبلور", font=title_font, fill=(247, 222, 190, 255), anchor="mm")
+    _draw_explore_username(draw, (width//2, 558), username, 920)
+    draw.line((385, 600, 695, 600), fill=(249, 207, 143, 180), width=2)
+    draw.ellipse((width//2-4, 596, width//2+4, 604), fill=(255, 228, 180, 255))
 
     # Translucent glass-style text panel; each new render takes the next
     # color from the palette so consecutive posts visibly vary.
-    box = (84, 790, 996, 1334)
+    box = (84, 642, 996, 1270)
     draw.rounded_rectangle(box, radius=42, fill=(13, 17, 38, 152), outline=(255, 255, 255, 92), width=2)
     draw.rounded_rectangle((box[0]+10, box[1]+10, box[2]-10, box[3]-10),
                            radius=34, outline=(255, 255, 255, 30), width=1)
@@ -7047,9 +7081,9 @@ def render_explore_card(text, username, photo_url=""):
         footer_font = ImageFont.truetype(str(footer_font_path), 31)
     except Exception:
         footer_font = ImageFont.load_default()
-    draw.text((width//2, 1445), "كوفي بوت", font=footer_font,
+    draw.text((width//2, 1395), "كوفي بوت", font=footer_font,
               fill=(245, 225, 199, 245), anchor="mm")
-    draw.line((420, 1404, 660, 1404), fill=(244, 194, 120, 115), width=2)
+    draw.line((420, 1350, 660, 1350), fill=(244, 194, 120, 115), width=2)
 
     out_dir = BASE_DIR / "generated_publish"
     out_dir.mkdir(parents=True, exist_ok=True)
