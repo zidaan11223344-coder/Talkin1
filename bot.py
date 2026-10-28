@@ -24780,7 +24780,9 @@ class TalkinBot:
             media_url = f"{base}/publish/{card.name}"
             self._verify_public_media_url(media_url, "image")
             code = uuid.uuid4().hex[:4]
-            caption = (f"✨ اكسبلور\n👤 @{str(sender or '').lstrip('@')}\n📝 {text[:260]}\n━━━━━━━━━━━━\n"
+            # The text already appears inside the Explore image; keep this
+            # accompanying room message focused on the author and reactions.
+            caption = (f"✨ اكسبلور\n👤 @{str(sender or '').lstrip('@')}\n━━━━━━━━━━━━\n"
                        f"👍 lk@{code}   ❤️ lv@{code}   👎 dl@{code}\n💬 cm@{code} msg   🚨 report@{code} msg\n🔁 x@{code} — إعادة نشر")
             self.reaction_targets[code] = {"publisher": str(sender), "kind": "explore", "description": text,
                                             "media_url": media_url, "caption": caption, "created_at": time.time()}

@@ -60,6 +60,31 @@ def test_x_reposts_explore_image_and_names_reposter():
     assert media_messages == [("غرفة", "https://media.example/explore.jpg", "image")]
     assert "أعاد النشر: @مُعيد" in room_messages[0][1]
 
+def test_explore_reaction_message_does_not_duplicate_post_text(monkeypatch, tmp_path):
+    instance = _bare_bot()
+    room_messages = []
+    media_messages = []
+    private_messages = []
+    instance._find_publish_filter_hit = lambda _text: False
+    instance._lookup_profile_photo = lambda _sender: ""
+    instance._active_rooms = lambda: ["غرفة"]
+    instance._verify_public_media_url = lambda *_args: True
+    instance.send_room_text = lambda room, text: room_messages.append((room, text)) or True
+    instance.send_room_media = lambda room, url, kind: media_messages.append((room, url, kind)) or True
+    instance.send_private_text = lambda user, text: private_messages.append((user, text)) or True
+    monkeypatch.setattr(bot_module, "render_explore_card", lambda *_args: tmp_path / "card.jpg")
+    monkeypatch.setattr(bot_module, "_public_base_url", lambda: "https://media.example")
+
+    assert instance._handle_explore_command("غرفة", "ax@نص المنشور يبقى داخل الصورة فقط", "ناشر")
+
+    assert media_messages and media_messages[0][2] == "image"
+    assert len(room_messages) == 1
+    caption = room_messages[0][1]
+    assert "نص المنشور يبقى داخل الصورة فقط" not in caption
+    assert "📝" not in caption
+    assert "lk@" in caption and "lv@" in caption and "dl@" in caption and "x@" in caption
+    assert next(iter(instance.reaction_targets.values()))["description"] == "نص المنشور يبقى داخل الصورة فقط"
+
 
 def test_explore_card_is_created_as_a_fresh_image(tmp_path):
     if not bot_module.PIL_AVAILABLE:
