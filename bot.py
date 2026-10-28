@@ -5624,6 +5624,14 @@ def _is_emoji_base(ch):
     return (
         0x1F000 <= codepoint <= 0x1FAFF
         or 0x1FC00 <= codepoint <= 0x1FFFD
+        or codepoint in {
+            0x2600, 0x2601, 0x2602, 0x2603, 0x2604, 0x2614, 0x2615,
+            0x26A1, 0x26C4, 0x26C5, 0x26F5, 0x2705, 0x2708, 0x2709,
+            0x270A, 0x270B, 0x270C, 0x270D, 0x270F, 0x2714, 0x2716,
+            0x2728, 0x2733, 0x2734, 0x2744, 0x2747, 0x274C, 0x274E,
+            0x2753, 0x2754, 0x2755, 0x2757, 0x2763, 0x2764, 0x2795,
+            0x2796, 0x2797, 0x27A1, 0x27B0, 0x27BF, 0x2B50, 0x2B55,
+        }
     )
 
 
@@ -5891,7 +5899,30 @@ def _visual_rtl_text(text):
 def _has_arabic(text):
     return any("\u0600" <= ch <= "\u06ff" or "\u0750" <= ch <= "\u077f" or "\u08a0" <= ch <= "\u08ff" for ch in str(text or ""))
 
-def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True, force_ltr=False):
+def _is_arabic_render_char(ch):
+    codepoint = ord(ch)
+    return (
+        0x0600 <= codepoint <= 0x06FF
+        or 0x0750 <= codepoint <= 0x077F
+        or 0x08A0 <= codepoint <= 0x08FF
+        or 0xFB50 <= codepoint <= 0xFDFF
+        or 0xFE70 <= codepoint <= 0xFEFF
+    )
+
+
+def _logical_arabic_from_visual(text):
+    """Undo a bidi visual Arabic run before handing it to Pillow/RAQM."""
+    normalized = unicodedata.normalize("NFKC", str(text or ""))
+    clusters = []
+    for ch in normalized:
+        if (ch == "\u0640" or unicodedata.category(ch).startswith("M")) and clusters:
+            clusters[-1] += ch
+        else:
+            clusters.append(ch)
+    return "".join(reversed(clusters))
+
+
+def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True, force_ltr=False, native_arabic_runs=False):
     """Center the exact username using mixed fonts and color emoji."""
     raw_text = _clean_name_for_image(raw_text)
     if apply_correction:
@@ -5921,6 +5952,8 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
             return float(font.getlength(value))
 
     def visual_for_centered(value, current_size):
+        if native_arabic_runs and _has_arabic(value):
+            return _shape_name_for_fallback(value)
         # Keep ordinary Arabic logical text for libraqm: draw.text(direction=rtl)
         # will shape and order it. Only pre-shape when a mixed-font fallback is
         # genuinely required, otherwise the title itself gets reversed twice.
@@ -5999,6 +6032,92 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
             return
         except Exception:
             pass
+
+    if native_arabic_runs and _has_arabic(raw_text):
+        tokens = []
+        index = 0
+        while index < len(visual):
+            if _is_emoji_base(visual[index]):
+                tokens.append(("emoji", visual[index]))
+                index += 1
+                continue
+            is_arabic = _is_arabic_render_char(visual[index])
+            end = index + 1
+            while (end < len(visual) and not _is_emoji_base(visual[end])
+                   and _is_arabic_render_char(visual[end]) == is_arabic):
+                end += 1
+            tokens.append(("arabic" if is_arabic else "text", visual[index:end]))
+            index = end
+
+        prepared = []
+        total_width = 0.0
+        try:
+            raqm_enabled = bool(PIL_AVAILABLE and features.check("raqm"))
+        except Exception:
+            raqm_enabled = False
+        for kind, value in tokens:
+            if kind == "emoji":
+                prepared.append((kind, value, size, None, None))
+                total_width += size
+                continue
+            if kind == "arabic":
+                logical = _logical_arabic_from_visual(value)
+                font = _gift_font(logical, size)
+                supported = raqm_enabled and all(
+                    _font_has_glyph(font, ch) or unicodedata.category(ch).startswith("M")
+                    for ch in logical if not ch.isspace()
+                )
+                if supported:
+                    try:
+                        bbox = draw.textbbox(
+                            (0, 0), logical, font=font, direction="rtl",
+                            language="ar", stroke_width=2,
+                        )
+                        token_width = float(bbox[2] - bbox[0])
+                    except Exception:
+                        supported = False
+                if not supported:
+                    token_width = sum(
+                        metrics(ch, font, ch) for ch in value
+                        if _pick_font_for_char(base, fallbacks, ch) is not None
+                    )
+                prepared.append((kind, value, token_width, logical, font if supported else None))
+                total_width += token_width
+                continue
+            token_width = sum(
+                metrics(ch, _pick_font_for_char(base, fallbacks, ch), ch)
+                for ch in value if _pick_font_for_char(base, fallbacks, ch) is not None
+            )
+            prepared.append((kind, value, token_width, None, None))
+            total_width += token_width
+
+        cursor = float(center[0]) - total_width / 2
+        for kind, value, token_width, logical, font in prepared:
+            if kind == "emoji":
+                cursor += _draw_color_emoji(
+                    draw, (cursor, float(center[1]) - size / 2), value, size
+                ) or size
+            elif kind == "arabic" and font is not None:
+                bbox = draw.textbbox(
+                    (0, 0), logical, font=font, direction="rtl",
+                    language="ar", stroke_width=2,
+                )
+                x = cursor - bbox[0]
+                y = float(center[1]) - (bbox[3] - bbox[1]) / 2 - bbox[1]
+                draw.text(
+                    (x, y), logical, font=font, fill=fill, stroke_width=2,
+                    stroke_fill=(0, 0, 0, 220), direction="rtl", language="ar",
+                )
+                cursor += token_width
+            else:
+                cursor = _draw_name_visual(
+                    draw, (cursor, center[1]), value, size, fill,
+                    stroke_width=2, stroke_fill=(0, 0, 0, 220),
+                    direction="ltr", preserve_order=True,
+                    vertical_center=center[1],
+                )
+        return
+
     width = 0.0
     for ch in visual:
         if _is_emoji_base(ch):
@@ -6920,11 +7039,12 @@ def _draw_explore_username(draw, center, username, max_width):
     base = getattr(draw, "_image", None)
     if not isinstance(base, Image.Image):
         _draw_name_centered(draw, center, name, 50, (255, 221, 163, 255), max_width,
-                            grow_short=False)
+                            grow_short=False, native_arabic_runs=True)
         return
     name_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     _draw_name_centered(ImageDraw.Draw(name_layer), center, name, 50,
-                        (255, 255, 255, 255), max_width, grow_short=False)
+                        (255, 255, 255, 255), max_width, grow_short=False,
+                        native_arabic_runs=True)
     alpha = name_layer.getchannel("A")
 
     # Soft shadow keeps the multicolor name readable over both image regions.

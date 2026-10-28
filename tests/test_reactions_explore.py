@@ -119,15 +119,24 @@ def test_explore_card_embeds_profile_photo_in_smaller_top_heart(tmp_path, monkey
         card.unlink(missing_ok=True)
 
 
-def test_explore_username_supports_arabic_emoji_ornaments_and_gradient():
+def test_explore_username_supports_arabic_emoji_ornaments_and_gradient(monkeypatch):
     if not bot_module.PIL_AVAILABLE:
         return
     background = (17, 26, 58)
     image = bot_module.Image.new("RGB", (1080, 1500), background)
+    rtl_runs = []
+    original_text = bot_module.ImageDraw.ImageDraw.text
+
+    def record_rtl_run(draw, xy, text, *args, **kwargs):
+        if kwargs.get("direction") == "rtl":
+            rtl_runs.append(text)
+        return original_text(draw, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(bot_module.ImageDraw.ImageDraw, "text", record_rtl_run)
     bot_module._draw_explore_username(
         bot_module.ImageDraw.Draw(image, "RGBA"),
         (540, 750),
-        "@༺✨المستخدم🚀𓆩♛𓆪༻",
+        "@༺✨نـورا 🚀 𓆩♛𓆪༻",
         920,
     )
     pixel_bytes = image.crop((70, 710, 1010, 790)).tobytes()
@@ -139,14 +148,19 @@ def test_explore_username_supports_arabic_emoji_ornaments_and_gradient():
     assert len(colors) > 20
     assert any(red > 220 and green > 110 and blue < 200 for red, green, blue in colors)
     assert any(red < 220 and green > 120 and blue > 180 for red, green, blue in colors)
+    assert "نـورا" in rtl_runs
 
 
 def test_mixed_explore_name_aligns_arabic_and_emoji_on_one_line(monkeypatch):
     text_centers = []
     emoji_centers = []
+
+    def capture_text(_draw, xy, *_args, **kwargs):
+        text_centers.append(kwargs.get("vertical_center"))
+        return xy[0] + 20
+
     monkeypatch.setattr(
-        bot_module, "_draw_name_visual",
-        lambda *_args, **kwargs: text_centers.append(kwargs.get("vertical_center")),
+        bot_module, "_draw_name_visual", capture_text,
     )
 
     def capture_emoji(_draw, xy, _token, size):
@@ -158,10 +172,31 @@ def test_mixed_explore_name_aligns_arabic_and_emoji_on_one_line(monkeypatch):
     bot_module._draw_name_centered(
         bot_module.ImageDraw.Draw(image), (540, 100), "༺نورا🚀༻", 50,
         (255, 255, 255, 255), 900, grow_short=False,
+        native_arabic_runs=True,
     )
 
     assert text_centers and all(center == 100 for center in text_centers)
     assert emoji_centers and all(abs(center - 100) <= 5 for center in emoji_centers)
+
+
+def test_explore_mixed_name_draws_arabic_run_in_logical_rtl_order(monkeypatch):
+    rtl_runs = []
+    original_text = bot_module.ImageDraw.ImageDraw.text
+
+    def record_rtl_run(draw, xy, text, *args, **kwargs):
+        if kwargs.get("direction") == "rtl":
+            rtl_runs.append(text)
+        return original_text(draw, xy, text, *args, **kwargs)
+
+    monkeypatch.setattr(bot_module.ImageDraw.ImageDraw, "text", record_rtl_run)
+    image = bot_module.Image.new("RGBA", (1080, 200), (0, 0, 0, 0))
+    bot_module._draw_name_centered(
+        bot_module.ImageDraw.Draw(image), (540, 100), "༺نـورا🚀༻", 50,
+        (255, 255, 255, 255), 900, grow_short=False,
+        native_arabic_runs=True,
+    )
+
+    assert "نـورا" in rtl_runs
 
 
 def test_explore_card_is_created_as_a_fresh_image(tmp_path):
