@@ -14948,6 +14948,28 @@ class TalkinBot:
                     self.log("[GAME] expired wager notice failed:", room, repr(exc))
             self.log("[GAME] expired wager refunded", game, user, stake if reserved else 0)
 
+    def _retry_pending_wager_refund(self, key, waiting):
+        """Finish a timeout refund left pending by a concurrent cleanup worker."""
+        if not isinstance(waiting, dict) or not waiting.get("_refund_pending"):
+            return True
+        user = str(waiting.get("user") or "").strip()
+        stake = max(0, int(waiting.get("stake", 0) or 0))
+        challenge_id = str(waiting.get("id") or "")
+        if not challenge_id:
+            return False
+        refund = _apply_points_delta_once(
+            user, stake, f"wager-timeout-refund:{challenge_id}",
+            f"retry refund expired {waiting.get('game', 'wager')} wager",
+        ) if user and stake > 0 and waiting.get("reserved") else {"ok": True}
+        if not refund.get("ok"):
+            return False
+        with self.game_lock:
+            current = self.wager_waiting.get(key)
+            if current and str(current.get("id") or "") == challenge_id:
+                self.wager_waiting.pop(key, None)
+                self._save_wager_state()
+        return True
+
     def _cleanup_expired_fixed_games(self):
         # ألعاب سنارة/برق/ياقوت/صدام/كاشف تنتظر منافساً لمدة دقيقتين فقط.
         timeout = 120
@@ -15027,6 +15049,13 @@ class TalkinBot:
         with self.game_lock:
             existing = self.wager_waiting.get(game_name.casefold())
             if existing and existing.get("_refund_pending"):
+                pending_refund = dict(existing)
+            else:
+                pending_refund = None
+        if pending_refund is not None:
+            if self._retry_pending_wager_refund(game_name.casefold(), pending_refund):
+                existing = None
+            else:
                 self.send_room_text(
                     room,
                     "⌛ انتهت مهلة هذا الرهان ويجري إعادة مبلغه؛ جرّب بعد لحظات."
@@ -15034,6 +15063,8 @@ class TalkinBot:
                     else "⌛ This wager expired and its refund is processing; try again shortly.",
                 )
                 return True
+        with self.game_lock:
+            existing = self.wager_waiting.get(game_name.casefold())
             if existing and _norm_user(existing.get("user")) == _norm_user(sender):
                 self.send_room_text(room, f"⏳ @{sender} لديك لعبة {game_name} شغالة حالياً.\n🎯 ما زالت تبحث عن منافس.\n⌛ مدة البحث دقيقتان فقط، وبعدها تُلغى تلقائياً إذا لم يدخل منافس.")
                 return True
