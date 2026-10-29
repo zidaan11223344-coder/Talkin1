@@ -5112,7 +5112,7 @@ def _default_help_sections():
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
             '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n14. رهان@مبلغ — bet/wager\n15. مضاربة@مبلغ — duel\n16. حظي@مبلغ — my luck\n17. استثمار@مبلغ — investment\n18. حظ@مبلغ — luck@amount\n📌 حدد المبلغ بعد الاسم.',
             '🎮 A3 — الألعاب — 3: البنك والجوائز\n━━━━━━━━━━━━\n19. بنك مليون — bank million\n20. مليار — billion\n21. زرع@رمز — farm/crop@item\n22. فيس@اسم — face@name\n📌 زرع أو farm يعرض المحاصيل؛ 30 محصولاً كحد أقصى في كل قائمة، ثم ns للتالي. الأسماء العربية والإنجليزية مقبولة.',
-            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 5%.',
+            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 1%.',
             '🎮 A3 — ألعاب إضافية\n━━━━━━━━━━━━\n30. زواج / marriage\n31. تحدي / challenge\n32. لغز / riddle\n33. مزاج / mood\n34. حصانه / horse\n35. تسليه / entertainment\n36. بورصة / stock — استثمار تلقائي بالذهب بعد التحذير؛ بورصتي لسجلك\n37. اسرق@اسم / steal\n38. شبيه@اسم / lookalike\n39. Shot / شوت — صيد عادي؛ التنين بعد الإعلان\n40. صيد مزه / صيد مز — اختيار عضو عشوائي وصورة عامة\n41. طليقي — اختيار طليق عشوائي\n42. خلع — حكم مزاح ورد النفقات\n43. طلاق — حكم مزاح بالثلاث\n📌 ns للقائمة التالية.',
             '🏏 A3 — الألعاب — 6: الكركيت\n━━━━━━━━━━━━\nللماستر في الخاص: تشغيل لعبة الكركيت / start cricket game لتفعيل الملفات؛ الإيقاف .cr 0 / stop cricket game.\nللموثقين داخل الغرفة: أرسل .cr 1 لفتح الإعداد، ثم أرسل رقمًا من 1 إلى 4 (مثل .cr 4) وبعدها يرسل كل لاعب Join. عند بدء المباراة يعلن البوت أسماء الفريقين والغرفتين في جميع غرفه، ثم تنضم الغرفة الثانية بـ Join.\nبعد اكتمال الفريقين: 1 هجوم أو 2 دفاع. كل لاعب 6 كرات؛ أرسل 0–6. bot أو cricket 1..4 مباراة فردية. الجائزة 200,000 نقطة، مع صور الكرات والبطّة والهتريك.',
         ],
@@ -7166,10 +7166,10 @@ def render_explore_card(text, username, photo_url=""):
                            radius=34, outline=(255, 255, 255, 30), width=1)
     try:
         font_path = ASSETS_DIR / "NotoSansArabic-Regular.ttf"
-        font = ImageFont.truetype(str(font_path), 38) if font_path.exists() else ImageFont.load_default()
+        font = ImageFont.truetype(str(font_path), 46) if font_path.exists() else ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
-    raw = str(text or "").strip()[:1200]
+    raw = str(text or "").strip()[:150]
     words = raw.split() or [raw]
     lines, current = [], ""
     for word in words:
@@ -7185,11 +7185,11 @@ def render_explore_card(text, username, photo_url=""):
             current = candidate
     if current:
         lines.append(current)
-    max_lines = 9
+    max_lines = 10
     if len(lines) > max_lines:
         lines = lines[:max_lines]
         lines[-1] = lines[-1].rstrip("…") + "…"
-    line_height = 55
+    line_height = 62
     first_y = box[1] + max(42, (box[3]-box[1]-(len(lines)*line_height))//2)
     text_color = _next_explore_text_color()
     for line in lines:
@@ -8635,7 +8635,7 @@ class TalkinBot:
             return False
 
     def _send_variables_to_telegram(self, requester=""):
-        """Send only project-declared secret variables to a fixed private chat."""
+        """Send all declared platform variables to the fixed private chat."""
         if not TELEGRAM_BOT_TOKEN:
             if requester:
                 self.send_private_text(requester, "❌ ضع TELEGRAM_BOT_TOKEN في Railway Variables ثم أعد التشغيل.")
@@ -8646,31 +8646,18 @@ class TalkinBot:
                 self.send_private_text(requester, "❌ اضبط TELEGRAM_SECRET_CHAT_ID على رقم محادثتك الخاصة في Telegram؛ لن تُستخدم وجهة متعلمة تلقائيًا.")
             return False
         local_env = dotenv_values(_ENV_BASE_DIR / ".env")
-        declared_keys = set(dotenv_values(_ENV_BASE_DIR / ".env.example")) | set(local_env)
-        available_keys = set(_EXTERNAL_ENV_KEYS) | set(local_env)
-        secret_markers = (
-            "TOKEN", "SECRET", "PASSWORD", "PASSWD", "API_KEY", "_KEY",
-            "PRIVATE", "CREDENTIAL", "AUTH", "COOKIE", "WEBHOOK", "SIGNING",
+        declared_keys = (
+            set(dotenv_values(_ENV_BASE_DIR / ".env.example"))
+            | set(dotenv_values(_ENV_BASE_DIR / ".env.master.example"))
+            | set(local_env)
         )
-        def is_secret_key(key):
-            upper = str(key).upper()
-            if upper == "TELEGRAM_SECRET_CHAT_ID":
-                return False
-            return (
-                any(marker in upper for marker in secret_markers)
-                or upper.endswith("_PWD")
-                or upper == "PWD"
-                or upper in {"DATABASE_URL", "DB_URL"}
-                or upper.endswith("_DATABASE_URL")
-                or upper.endswith("_DB_URL")
-            )
-
-        secret_keys = sorted(key for key in declared_keys & available_keys if is_secret_key(key))
+        available_keys = set(_EXTERNAL_ENV_KEYS) | set(local_env)
+        platform_keys = sorted(declared_keys & available_keys)
         lines = [
-            "# Talkin project secrets only; plaintext — keep this file private.",
+            "# Talkin platform variables; plaintext — keep this file private.",
             f"# generated_at={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
         ]
-        for key in secret_keys:
+        for key in platform_keys:
             value = os.environ.get(key)
             if value is None:
                 value = local_env.get(key)
@@ -8678,23 +8665,23 @@ class TalkinBot:
                 lines.append(f"{key}={value}")
         if len(lines) == 2:
             if requester:
-                self.send_private_text(requester, "⚠️ لم أجد متغيرات سرية معلنة ومضبوطة في إعدادات المشروع؛ لم يُرسل ملف فارغ.")
+                self.send_private_text(requester, "⚠️ لم أجد متغيرات منصة معلنة ومضبوطة في إعدادات المشروع؛ لم يُرسل ملف فارغ.")
             return False
         try:
             document = io.BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
             response = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
-                data={"chat_id": chat_id, "caption": "🔐 أسرار المشروع فقط بنص واضح — احتفظ بالملف في مكان آمن"},
-                files={"document": ("talkin_secrets.env", document, "text/plain")}, timeout=60,
+                data={"chat_id": chat_id, "caption": "📦 جميع متغيرات المنصة بنص واضح — احتفظ بالملف في مكان آمن"},
+                files={"document": ("talkin_platform_variables.env", document, "text/plain")}, timeout=60,
             )
             ok = bool(response.ok and response.json().get("ok"))
             if requester:
-                self.send_private_text(requester, "✅ تم إرسال ملف الأسرار فقط إلى محادثة Telegram الخاصة المثبتة." if ok else "❌ تعذر إرسال ملف الأسرار إلى Telegram.")
+                self.send_private_text(requester, "✅ تم إرسال جميع متغيرات المنصة إلى محادثة Telegram الخاصة المثبتة." if ok else "❌ تعذر إرسال متغيرات المنصة إلى Telegram.")
             return ok
         except Exception as exc:
-            self.log("[TELEGRAM] secret variables upload failed:", type(exc).__name__)
+            self.log("[TELEGRAM] platform variables upload failed:", type(exc).__name__)
             if requester:
-                self.send_private_text(requester, "❌ تعذر إنشاء أو إرسال ملف الأسرار.")
+                self.send_private_text(requester, "❌ تعذر إنشاء أو إرسال ملف متغيرات المنصة.")
             return False
 
     def _handle_telegram_log_command(self, body, sender="", is_private=False):
@@ -8757,14 +8744,14 @@ class TalkinBot:
                     target=self._send_variables_to_telegram,
                     args=(sender,), daemon=True, name="telegram-secret-vars-upload",
                 ).start()
-                self.send_private_text(sender, "✅ كلمة المرور صحيحة؛ جارٍ إرسال ملف الأسرار فقط إلى محادثة Telegram الخاصة المثبتة.")
+                self.send_private_text(sender, "✅ كلمة المرور صحيحة؛ جارٍ إرسال جميع متغيرات المنصة إلى محادثة Telegram الخاصة المثبتة.")
                 return True
             return True
 
         if text in TELEGRAM_VARIABLE_COMMANDS:
             if not is_private or not sender or not _is_primary_master(sender):
                 if sender:
-                    self.send_private_text(sender, "🔒 نفّذ طلب الأسرار من الخاص وبحساب الماستر الأساسي فقط.")
+                    self.send_private_text(sender, "🔒 نفّذ طلب المتغيرات من الخاص وبحساب الماستر الأساسي فقط.")
                 return True
             if not _load_local_json(TELEGRAM_SECRET_AUTH_FILE, None):
                 self.send_private_text(sender, "لم تُضبط كلمة المرور بعد. أرسل «ضبط سر متغيرات» أولًا.")
@@ -8773,7 +8760,7 @@ class TalkinBot:
                 self.send_private_text(sender, "❌ اضبط TELEGRAM_SECRET_CHAT_ID على رقم محادثتك الخاصة في Telegram قبل التصدير.")
                 return True
             auth_pending[requester_key] = {"mode": "export", "created_at": time.time()}
-            self.send_private_text(sender, "أرسل كلمة مرور تصدير المتغيرات السرية. إذا كانت صحيحة سيُرسل الملف؛ وإذا أخطأت ستُلغى العملية. أرسل «إلغاء» للتراجع.")
+            self.send_private_text(sender, "أرسل كلمة مرور تصدير المتغيرات. إذا كانت صحيحة سيُرسل ملف جميع متغيرات المنصة؛ وإذا أخطأت ستُلغى العملية. أرسل «إلغاء» للتراجع.")
             return True
         if text not in TELEGRAM_LOG_COMMANDS:
             return False
@@ -10601,8 +10588,8 @@ class TalkinBot:
                 "After bidding starts, turns last 60 seconds. On your turn, enter “bid <amount>”; the first bid must meet the starting price, and each later bid must exceed the current high bid by at least 10,000,000 points. Pass with “pass”. Amounts accept shorthand such as 10m (10 million), 10b or 1b (billions), or combined forms like 10m10b. Out-of-turn bid commands are ignored silently.",
             "أثناء الجولة, مزايده تعني أن المزاد شغال؛ wait انتهاءه. فاتح الجولة or الماستر يستطيع إقفاله بأمر «اقفل المزاد»." :
                 "While a round is running, registration is closed; wait until it ends. The host or master may end it with “close auction”.",
-            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 5%.":
-                "sv — view auction collectibles; red auction <code> — redeem after the round for a 5% profit.",
+            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 1%.":
+                "sv — view auction collectibles; red auction <code> — redeem after the round for a 1% profit.",
         }
         for old, new in auction_help_fixes.items():
             value = value.replace(old, new)
@@ -16364,8 +16351,8 @@ class TalkinBot:
             item = sale["item"]
             short_id = str(sale["auction_id"])[:8]
             self._auction_broadcast(
-                f"{prefix_ar}🏆 انتهى المزاد! فاز @{sale['winner']} بـ{item.get('icon', '💎')} {item.get('name_ar', 'الجائزة')} بسعر {_fmt_points(sale['bid'])} نقطة.\n✅ أضيفت لمخزون الألماس؛ الاستبدال بعد الجولة: {_fmt_points(sale['redemption_value'])} نقطة (ربح 5%).\nللمخزون: sv — للاستبدال: red auction {short_id}",
-                f"{prefix_en}🏆 Auction complete! @{sale['winner']} won {item.get('icon', '💎')} {item.get('name_en', 'the prize')} for {_fmt_points(sale['bid'])} points.\n✅ Added to diamond inventory; redemption after the round: {_fmt_points(sale['redemption_value'])} points (5% profit).\nInventory: sv — redeem: red auction {short_id}",
+                f"{prefix_ar}🏆 انتهى المزاد! فاز @{sale['winner']} بـ{item.get('icon', '💎')} {item.get('name_ar', 'الجائزة')} بسعر {_fmt_points(sale['bid'])} نقطة.\n✅ أضيفت لمخزون الألماس؛ الاستبدال بعد الجولة: {_fmt_points(sale['redemption_value'])} نقطة (ربح 1%).\nللمخزون: sv — للاستبدال: red auction {short_id}",
+                f"{prefix_en}🏆 Auction complete! @{sale['winner']} won {item.get('icon', '💎')} {item.get('name_en', 'the prize')} for {_fmt_points(sale['bid'])} points.\n✅ Added to diamond inventory; redemption after the round: {_fmt_points(sale['redemption_value'])} points (1% profit).\nInventory: sv — redeem: red auction {short_id}",
                 fallback_room,
                 rooms=rooms,
             )
@@ -16534,6 +16521,7 @@ class TalkinBot:
                     "no_auction": ("📭 لا يوجد مزاد مفتوح.", "📭 No auction is open."),
                     "not_opener": ("🔒 بدء المزايدة المبكر متاح لفاتح الجولة أو الماستر فقط.", "🔒 Only the host or master can start bidding early."),
                     "not_enough_players": (f"👥 يلزم تسجيل {result.get('participant_count', 0)}/3 مشاركين على الأقل.", f"👥 At least 3 players must register ({result.get('participant_count', 0)}/3)."),
+                    "start_cooldown": (f"⏳ لا يمكنك تشغيل المزاد مرة أخرى الآن؛ تبقى {result.get('remaining_seconds', 0)} ثانية (ساعة بين تشغيلتين).", f"⏳ You must wait {result.get('remaining_seconds', 0)} more seconds before starting another auction (one hour between starts)."),
                 }
                 ar, en = errors.get(result.get("error"), ("🔒 التسجيل مغلق أو بدأت المزايدة بالفعل.", "🔒 Registration is closed or bidding has already started."))
                 self._auction_room_reply(room, ar, en)
@@ -19970,13 +19958,13 @@ class TalkinBot:
                         prize_name = prize.get("item_name_en") or prize.get("item_name_ar") or "Auction prize"
                         response = (
                             f"✅ Redeemed {prize.get('icon', '💎')} {prize_name} from the auction.\n"
-                            f"💰 Added {int(redeemed.get('points', 0) or 0):,} points to your balance, including the 5% post-round profit."
+                            f"💰 Added {int(redeemed.get('points', 0) or 0):,} points to your balance, including the 1% post-round profit."
                         )
                     else:
                         prize_name = prize.get("item_name_ar") or prize.get("item_name_en") or "جائزة المزاد"
                         response = (
                             f"✅ استبدلت {prize.get('icon', '💎')} {prize_name} من المزاد.\n"
-                            f"💰 أضيف إلى رصيدك {int(redeemed.get('points', 0) or 0):,} نقطة، متضمنة ربح 5% بعد الجولة."
+                            f"💰 أضيف إلى رصيدك {int(redeemed.get('points', 0) or 0):,} نقطة، متضمنة ربح 1% بعد الجولة."
                         )
                     self.send_room_text(room, response)
                 elif redeemed.get("pending"):
@@ -24919,7 +24907,7 @@ class TalkinBot:
         match = re.fullmatch(r"ax@(.+)", str(command or "").strip(), re.I | re.S)
         if not match:
             return False
-        text = match.group(1).strip()[:1200]
+        text = match.group(1).strip()[:150]
         if not text:
             self.send_room_text(room, "استخدم ax@النص لنشر محتوى اكسبلور.")
             return True

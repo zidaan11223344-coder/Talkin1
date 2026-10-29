@@ -331,6 +331,7 @@ class CricketIntegration:
                     "• حالة الدوري\n"
                     "• افتح مباراة الدوري@رمز المباراة\n"
                     "• تغيير غرفة فريق@اسم الفريق@الغرفة الجديدة\n"
+                    "• تغير لاعب في الفريق@اسم الفريق@لاعب سابق@لاعب جديد\n"
                     "━━━━━━━━━━━━\n"
                     "🏆 جائزة النهائي: 1000b للفريق الفائز.\n\n"
                     "📌 أرسل ns لصفحة أوامر الإدارة."
@@ -383,6 +384,7 @@ class CricketIntegration:
                 "• فتح الدوري\n"
                 "• افتح مباراة الدوري@رمز المباراة\n"
                 "• تغيير غرفة فريق@اسم الفريق@الغرفة الجديدة\n"
+                "• تغير لاعب في الفريق@اسم الفريق@لاعب سابق@لاعب جديد\n"
                 "━━━━━━━━━━━━\n"
                 "📌 للقائمة الثانية أرسل ns"
             )
@@ -449,6 +451,18 @@ class CricketIntegration:
                 return True
             result = self.league.change_room(change.group(1), change.group(2).strip())
             self._send_private(sender, room, "✅ تم تغيير غرفة الفريق." if result.get("ok") else f"❌ {result.get('error')}")
+            return True
+        change_player = re.fullmatch(
+            r"(?:تغير لاعب في الفريق|تغيير لاعب في الفريق|غير لاعب في الفريق|change league player)@([^@]+)@([^@]+)@(.+)",
+            str(text or "").strip(), re.I | re.S,
+        )
+        if change_player:
+            if not self.is_configured_master(sender):
+                self._send_private(sender, room, "🔒 تغيير لاعبي فرق الدوري للماستر المحدد فقط.")
+                return True
+            team_name, previous_player, new_player = change_player.groups()
+            result = self.league.change_player(team_name, previous_player, new_player)
+            self._send_private(sender, room, "✅ تم تغيير لاعب الفريق." if result.get("ok") else f"❌ {result.get('error')}")
             return True
         return False
 

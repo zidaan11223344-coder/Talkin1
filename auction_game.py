@@ -21,7 +21,8 @@ MAX_PARTICIPANTS = 5
 MIN_PARTICIPANTS_TO_START_EARLY = 3
 BIDDING_DURATION_SECONDS = 60
 TURN_TIMEOUT_SECONDS = 12
-REDEMPTION_BONUS_PERCENT = 5
+REDEMPTION_BONUS_PERCENT = 1
+PLAYER_START_COOLDOWN_SECONDS = 3600
 MAX_IMAGE_BYTES = 50_000
 
 # These existing Talkin2 treasure images are already below MAX_IMAGE_BYTES.
@@ -167,7 +168,14 @@ class AuctionGame:
 
     @staticmethod
     def _empty_state() -> dict:
-        return {"version": 1, "enabled": False, "active": None, "inventory": {}, "last_result": None}
+        return {
+            "version": 1,
+            "enabled": False,
+            "active": None,
+            "inventory": {},
+            "last_result": None,
+            "player_start_at": {},
+        }
 
     def _read(self) -> dict:
         raw = self.load_json(self.path, self._empty_state())
@@ -179,6 +187,7 @@ class AuctionGame:
         state["enabled"] = bool(state.get("enabled", False))
         state["active"] = state.get("active") if isinstance(state.get("active"), dict) else None
         state["inventory"] = state.get("inventory") if isinstance(state.get("inventory"), dict) else {}
+        state["player_start_at"] = state.get("player_start_at") if isinstance(state.get("player_start_at"), dict) else {}
         return state
 
     def _write(self, state: dict) -> None:
@@ -366,7 +375,20 @@ class AuctionGame:
             count = len(active.get("participants") or [])
             if count < MIN_PARTICIPANTS_TO_START_EARLY:
                 return {"ok": False, "error": "not_enough_players", "participant_count": count}
-            self._begin_bidding(active, float(self.clock()))
+            now = float(self.clock())
+            if not is_master:
+                last_start = float(state["player_start_at"].get(uid) or 0)
+                remaining = PLAYER_START_COOLDOWN_SECONDS - (now - last_start) if last_start > 0 else 0
+                if remaining > 0:
+                    return {
+                        "ok": False,
+                        "error": "start_cooldown",
+                        "remaining_seconds": int(remaining + 0.999),
+                        "auction": copy.deepcopy(active),
+                    }
+            self._begin_bidding(active, now)
+            if not is_master:
+                state["player_start_at"][uid] = now
             state["active"] = active
             self._write(state)
             return {"ok": True, "auction": copy.deepcopy(active)}

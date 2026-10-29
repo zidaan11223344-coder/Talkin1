@@ -57,6 +57,29 @@ class CricketLeague:
             return {"ok": True, "team": copy.deepcopy(team)}
         return self.state.mutate(mutate)
 
+    def change_player(self, team_name, previous_player, new_player):
+        key = self._team_key(team_name)
+        previous = str(previous_player or "").strip().lstrip("@")
+        new = str(new_player or "").strip().lstrip("@")
+        def mutate(data):
+            if data.get("status") not in {"registration", "ready"}:
+                return {"ok": False, "error": "بدأ الدوري؛ لا يمكن تغيير لاعبي الفرق الآن."}
+            team = data.setdefault("teams", {}).get(key)
+            if not team:
+                return {"ok": False, "error": "الفريق غير مسجل."}
+            players = [str(player or "").strip().lstrip("@") for player in team.get("players", [])]
+            previous_key = self._team_key(previous)
+            if previous_key not in {self._team_key(player) for player in players}:
+                return {"ok": False, "error": "اللاعب السابق غير موجود في الفريق."}
+            other_keys = {self._team_key(player) for player in players if self._team_key(player) != previous_key}
+            if not new or self._team_key(new) in other_keys:
+                return {"ok": False, "error": "اللاعب الجديد موجود بالفعل في الفريق أو غير صالح."}
+            index = next(index for index, player in enumerate(players) if self._team_key(player) == previous_key)
+            players[index] = new
+            team["players"] = players
+            return {"ok": True, "team": copy.deepcopy(team)}
+        return self.state.mutate(mutate)
+
     def status(self):
         return self.state.load()
 
