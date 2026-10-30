@@ -241,7 +241,7 @@ def test_explore_text_palette_changes_between_consecutive_renders():
     assert first != second
 
 
-def test_oversized_text_is_forwarded_to_telegram_and_master_not_websocket(monkeypatch):
+def test_oversized_text_is_split_into_safe_websocket_packets(monkeypatch):
     instance = _bare_bot()
     telegram_messages = []
     private_messages = []
@@ -255,7 +255,10 @@ def test_oversized_text_is_forwarded_to_telegram_and_master_not_websocket(monkey
 
     result = instance._send_text_packets("room_message", "ط" * 700, room="غرفة")
 
-    assert result is False
-    assert telegram_messages and telegram_messages[0][0] == "ط" * 700
-    assert "Telegram" in private_messages[0][1]
-    assert websocket_messages == []
+    assert result is True
+    assert len(websocket_messages) > 1
+    assert all(len(packet) <= 1008 for packet in websocket_messages)
+    chunks = [bot_module.as_text(bot_module.decode_message(packet)[5][0]) for packet in websocket_messages]
+    assert "".join(chunks) == "ط" * 700
+    assert telegram_messages == []
+    assert private_messages == []

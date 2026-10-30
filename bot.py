@@ -3077,7 +3077,7 @@ def _looks_like_bot_command(text):
     prefixes = (
         "sa@", "sav@", "bom@", "work", "salary", "عمل", "راتبي", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@",
         ".u", "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق",
-        "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
+        "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
@@ -3188,7 +3188,7 @@ def _looks_like_admin_command(text):
     if re.match(r"^(?:إضافة|اضافة|استرجاع|استعادة|زيادة|زود)\s+(?:العاب|ألعاب)@", str(text or "").strip(), re.I):
         return True
     prefixes = (
-        ".u", "vi", "vi@", "vip", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "mas@", "umas@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@", "sb@",
+        ".u", "vi", "vi@", "vip", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "mas@", "umas@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@", "sb@", "ts@",
         "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق", "msb@", "-sb@",
         "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "protection", "enable protection", "disable protection", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "بوست", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "l@a", "l@m", "l@o", "l@b", "is@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "دخول الكل", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "s@", "توثيق الكل", "وثق الكل", "verify", "سجل الغرفه", "سجل الغرفة",
@@ -4189,6 +4189,67 @@ def _deduct_points(username, amount, *, actor=""):
         return {"ok": False, "error": "persistence_failed"}
 
 
+def _set_points_balance(username, balance, *, actor=""):
+    """Replace one exact saved points balance and audit the adjustment atomically."""
+    try:
+        balance = int(balance)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid_amount"}
+    target_name = str(username or "").strip().lstrip("@")
+    actor_name = str(actor or BOT_MASTER).strip().lstrip("@")
+    if balance < 0:
+        return {"ok": False, "error": "invalid_amount"}
+    if not _norm_user(target_name):
+        return {"ok": False, "error": "target_not_found"}
+
+    def update(accounts, history):
+        matches = _points_account_candidates(accounts, target_name, exact_only=True)
+        if not matches:
+            return {"ok": False, "error": "target_not_found"}, False
+        if len(matches) != 1:
+            return {"ok": False, "error": "ambiguous_target"}, False
+        key, saved_item = matches[0]
+        item = dict(saved_item)
+        old_balance = _points_balance(item)
+        if old_balance == balance:
+            return {
+                "ok": True, "changed": False,
+                "username": str(item.get("username") or target_name),
+                "old_balance": old_balance, "balance": balance,
+            }, False
+
+        item["points"] = balance
+        accounts[key] = item
+        increase = balance > old_balance
+        history.append({
+            "id": uuid.uuid4().hex,
+            "timestamp": int(time.time()),
+            "sender": "system" if increase else str(item.get("username") or target_name),
+            "sender_key": "" if increase else key,
+            "recipient": str(item.get("username") or target_name) if increase else "system",
+            "recipient_key": key if increase else "",
+            "amount": abs(balance - old_balance),
+            "sender_balance_after": None if increase else balance,
+            "recipient_balance_after": balance if increase else None,
+            "reason": f"master_balance_set by @{actor_name}: {old_balance} -> {balance}",
+            "actor": actor_name,
+            "old_balance": old_balance,
+            "new_balance": balance,
+        })
+        del history[:-_POINT_TRANSFER_HISTORY_LIMIT]
+        return {
+            "ok": True, "changed": True,
+            "username": str(item.get("username") or target_name),
+            "old_balance": old_balance, "balance": balance,
+        }, True
+
+    try:
+        return _mutate_points_state(update)
+    except Exception as exc:
+        print(f"[POINTS] master balance replacement failed: {exc}", flush=True)
+        return {"ok": False, "error": "persistence_failed"}
+
+
 def _transfer_points(sender, target, amount, *, reason="transfer", allow_alias_source=True,
                      require_exact_target=True, create_target_if_missing=False):
     """Move points and append the audit entry in the same points.json commit."""
@@ -5102,7 +5163,10 @@ def _default_help_sections():
             '📋 أوامر الإدارة — 3 | التوثيق وVIP\n━━━━━━━━━━━━\nvi@اسم — توثيق مستخدم\nuns@اسم — سحب التوثيق\nسحب التوثيق@اسم — سحب التوثيق\nإزالة توثيق@اسم — سحب التوثيق\nتوثيق الكل — توثيق كل الأعضاء\nvi — عدد الموثقين\nvip@اسم — منح VIP\nunvip@اسم — سحب VIP\nvip — عدد أعضاء VIP\nmvip@اسم — إضافة ماستر توثيق\numvip@اسم — سحب ماستر توثيق\nl@mvip — عرض ماسترات التوثيق',
             '📋 أوامر الإدارة — 4 | التوثيق والحماية\n━━━━━━━━━━━━\nتشغيل التوثيق — تشغيل نظام التوثيق\nإيقاف التوثيق — إيقاف نظام التوثيق\nحماية@اسم_الغرفة — قائمة الحماية الخاصة بالماستر\nتشغيل/إيقاف الحماية — إعداد عام للغرفة\nحالة الحماية — عرض الحالة\nحمايه البوت — حماية داخلية للبوت\nالمحظورين — المحظورون داخل البوت',
             '📋 أوامر الإدارة — 5 | الفلتر والنشر\n━━━━━━━━━━━━\nmf@on — تشغيل فلتر الكلمات\nmf@off — إيقاف فلتر الكلمات\n+mf@كلمة — إضافة كلمة للفلتر\n-mf@كلمة — حذف كلمة من الفلتر\nl@mf — عرض كلمات الفلتر\nclear@mf — مسح كلمات الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmbp@اسم — فك منع النشر\namf@اسم — استثناء مستخدم من حظر الفلتر',
-            '📋 أوامر الإدارة — 6 | أوامر متقدمة\n━━━━━━━━━━━━\nحالة البوت — حالة الاتصال\nرام / cpu — الموارد\nتنظيف — حذف الملفات المؤقتة\nنسخ احتياطي — إنشاء نسخة\nإعادة تشغيل البوت — إعادة تشغيل الخدمة\nتشغيل/إيقاف الدعوات\nتشغيل/إيقاف الألعاب\nفحص صورة المليون / فحص صورة المليار — معاينة باسم BOT_MASTER داخل الغرفة\nغرفي / myrooms — الغرف المتصلة\nدخول الكل / دخولكل / .دخول غرفي — دخول الغرف المحفوظة\nاضف لملف الغرف — حفظ الغرف\ninv / دعوات / invite — جلب أعضاء الغرفة\ns@اسم / is@اسم — البحث عن مستخدم\nl@a / l@m / l@o / l@b — قوائم الرتب',
+            '📋 أوامر الإدارة — 6 | أوامر النظام والتشخيص\n━━━━━━━━━━━━\nحالة البوت — حالة الاتصال\nرام / cpu — الموارد\nمالذي يؤخرك — تشخيص تأخر الرد (لماستر المتغيرات فقط)\nفحص الماس — فحص ألماسة تجريبية داخل الغرفة\nتنظيف — حذف الملفات المؤقتة\nنسخ احتياطي — إنشاء نسخة\nإعادة تشغيل البوت — إعادة تشغيل الخدمة\nتشغيل الماستر / إيقاف الماستر / حالة الماستر\nتشغيل/إيقاف الدعوات\nتشغيل/إيقاف الألعاب\nفحص صورة المليون / فحص صورة المليار — معاينة داخل الغرفة',
+            '📋 أوامر الإدارة — 7 | النقاط وسجلاتها\n━━━━━━━━━━━━\nmsb@اسم@عدد — إضافة نقاط من الماستر في الخاص\n-sb@اسم@عدد — خصم نقاط (الماستر الأساسي في الخاص)\nts@اسم@عدد — استبدال رصيد المستخدم بدل رصيده القديم\nتحويل للكل@عدد — تحويل جماعي للمستخدمين الموجودين في الغرف\nسجل التحويل — عرض سجل عمليات النقاط\nسجل تحويل@اسم — عرض التحويلات إلى مستخدم\n\nمثال التسوية:\nts@ahmd555@5000',
+            '📋 أوامر الإدارة — 8 | الغرف والقوائم\n━━━━━━━━━━━━\nغرفي / myrooms — عرض الغرف المتصلة\nدخول الكل / دخولكل — دخول الغرف المحفوظة\nاضف لملف الغرف — حفظ الغرف الحالية\nجلب غرف السيرفر — طلب قائمة الغرف\ninv / دعوات / invite — جلب أعضاء الغرفة\ns@اسم — البحث عن اسم في الغرف\nis@اسم — عرض وجود المستخدم ورتبته المحلية\nl@a — قائمة الإداريين\nl@m — قائمة الأعضاء\nl@o — قائمة الأونرات\nl@b — قائمة المحظورين\nl@all — عرض قوائم الغرفة بالتتابع',
+            '📋 أوامر الإدارة — 9 | إعدادات وقوائم إضافية\n━━━━━━━━━━━━\namf@اسم / -amf@اسم — إضافة/سحب استثناء الفلتر\nl@amf — عرض مستثني الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmr@عدد — ضبط حد تكرار الأوامر\nsf@on / sf@off — إعداد فلتر أمان الغرفة\nl@mas — عرض الماسترات\nl@mvip — عرض ماسترات التوثيق\n📌 تستخدم ns للتنقل حتى آخر قائمة.',
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
@@ -5122,7 +5186,7 @@ def _default_help_sections():
         ],
         5: [
             '💰 النقاط — 1\n━━━━━━━━━━━━\nنقاطي — عرض الرصيد والمستوى وإحصاءات اللعب\npoints — عرض النقاط\nتوب — المتصدرين العام\ntop — المتصدرين العام\n\nتوب رهان — متصدروا الرهان\nتوب مضاربة — متصدروا المضاربة\nتوب حظي — متصدروا حظي\nتوب استثمار — متصدروا الاستثمار',
-            '💸 النقاط — 2: التحويل\n━━━━━━━━━━━━\nsb@اسم@عدد — تحويل عادي من رصيد المرسل\nmsb@اسم@عدد — تحويل الماستر من الخاص دون خصم\n\nمثال اللاعب:\nsb@ahmd555@1000\nمثال الماستر في الخاص:\nmsb@ahmd555@1000\n\n📌 sb متاح للموثقين في الغرف والخاص ويخصم من رصيد المرسل.\n📌 msb للماستر المحدد في خاص البوت فقط.\n\nللاطلاع على الرصيد استخدم: نقاطي',
+            '💸 النقاط — 2: التحويل والتسوية\n━━━━━━━━━━━━\nsb@اسم@عدد — تحويل عادي من رصيد المرسل\nmsb@اسم@عدد — تحويل الماستر من الخاص دون خصم\nts@اسم@عدد — استبدال رصيد المستخدم من ملف النقاط\n\nمثال اللاعب:\nsb@ahmd555@1000\nمثال الماستر في الخاص:\nmsb@ahmd555@1000\nts@ahmd555@5000\n\n📌 sb متاح للموثقين في الغرف والخاص ويخصم من رصيد المرسل.\n📌 msb وts للماستر الأساسي في خاص البوت فقط.\n\nللاطلاع على الرصيد استخدم: نقاطي',
         ],
         6: [
             '🚪 الغرف — 1\n━━━━━━━━━━━━\nدخول@اسم_الغرفة — دخول غرفة\nدخول غرفي — دخول جميع الغرف المحفوظة بالتتابع\nمثال: دخول@مشاعر\nخروج — الخروج من الغرفة الحالية\nخروج اسم_الغرفة — الخروج من غرفة محددة\nغرفي — عرض الغرف التي يتواجد بها البوت\nmyrooms — نفس الأمر\n\ninv — دعوة أعضاء الغرفة الحالية\ninv اسم_الغرفة — دعوة أعضاء غرفة محددة\nدعوات — نفس أمر inv\ninvite — نفس أمر inv\ninvmsg نص — تغيير رسالة الدعوة\ni@اسم — دعوة مستخدم واحد',
@@ -5136,7 +5200,7 @@ def _default_help_pages():
 
 
 def _help_sections_from_messages():
-    # The six help pages are a fixed public contract. Older deployments may
+    # The six help categories are a fixed public contract. Older deployments may
     # still contain root/bot_data messages.json files with a mixed help_pages
     # format; never let those legacy files merge categories together.
     # The canonical categories are defined in _default_help_sections().
@@ -9966,12 +10030,12 @@ class TalkinBot:
             return False
 
     def _send_text_packets(self, packet_type: str, text: str, *, oversize_notice_user="", notify_oversize=True, **kwargs):
-        """Send text only when its full protobuf packet fits the hard limit."""
+        """Send text in safe UTF-8 chunks that each fit the full packet limit."""
         text = str(text or "")
         if not text:
             return True
 
-        limit = _ws_payload_limit()
+        limit = min(1008, _ws_payload_limit())
 
         def make_payload(value):
             payload = dict(kwargs)
@@ -9985,8 +10049,98 @@ class TalkinBot:
             self.send_query(packet)
             return True
 
-        # Drop complete oversized messages locally instead of splitting them,
-        # forwarding them to Telegram, or passing them to the WebSocket.
+        def grapheme_units(value):
+            """Keep combining marks, emoji modifiers, flags and ZWJ emoji whole."""
+            units = []
+            current = ""
+            regional_run = 0
+            for char in value:
+                codepoint = ord(char)
+                is_regional = 0x1F1E6 <= codepoint <= 0x1F1FF
+                is_extend = (
+                    unicodedata.category(char).startswith("M")
+                    or 0xFE00 <= codepoint <= 0xFE0F
+                    or 0xE0100 <= codepoint <= 0xE01EF
+                    or 0x1F3FB <= codepoint <= 0x1F3FF
+                    or 0xE0020 <= codepoint <= 0xE007F
+                )
+                if not current:
+                    current = char
+                    regional_run = 1 if is_regional else 0
+                    continue
+                attach = (
+                    is_extend or char == "\u200d" or current.endswith("\u200d")
+                    or (char == "\n" and current.endswith("\r"))
+                    or (is_regional and regional_run % 2 == 1)
+                )
+                if attach:
+                    current += char
+                    if is_regional:
+                        regional_run += 1
+                    elif not is_extend and char != "\u200d":
+                        regional_run = 0
+                else:
+                    units.append(current)
+                    current = char
+                    regional_run = 1 if is_regional else 0
+            if current:
+                units.append(current)
+            return units
+
+        units = grapheme_units(text)
+        chunks = []
+        start = 0
+        while start < len(units):
+            # A UTF-8 code point occupies at least one byte, so no fitting body
+            # can contain more than `limit` grapheme units. Measure the actual
+            # protobuf on every candidate to include routing and field overhead.
+            low = start + 1
+            high = min(len(units), start + limit)
+            best = start
+            while low <= high:
+                middle = (low + high) // 2
+                candidate = "".join(units[start:middle])
+                if len(make_payload(candidate)) <= limit:
+                    best = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if best == start:
+                chunks = []
+                break
+
+            if best < len(units):
+                last_newline = 0
+                last_space = 0
+                for index in range(start, best):
+                    unit = units[index]
+                    if "\n" in unit:
+                        last_newline = index + 1
+                    elif unit.isspace():
+                        last_space = index + 1
+                preferred = last_newline or last_space
+                if preferred > start:
+                    best = preferred
+
+            chunks.append("".join(units[start:best]))
+            start = best
+
+        if chunks and "".join(chunks) == text:
+            try:
+                for chunk in chunks:
+                    chunk_packet = make_payload(chunk)
+                    if len(chunk_packet) > limit:
+                        raise ValueError("safe text chunk exceeded packet limit")
+                    if self.send_query(chunk_packet) is False:
+                        raise RuntimeError("WebSocket rejected a text chunk")
+            except Exception as exc:
+                self.log("[WS] safe text chunk delivery failed:", repr(exc))
+                return False
+            self.log("[WS] split oversized text safely:", len(chunks), "packets", len(packet), "bytes")
+            return True
+
+        # If even one whole grapheme cannot fit because of routing metadata or
+        # an unusually large single grapheme, use the existing fallback path.
         self._report_oversize_delivery(
             packet_type,
             str(kwargs.get("to") or ""),
@@ -10014,7 +10168,7 @@ class TalkinBot:
         return False
 
     def _send_help_chunks(self, packet_type: str, text: str, limit: int = 320, **kwargs):
-        """Send one visible page at a time; use Ns for continuation."""
+        """Send a help page in packet-safe chat bubbles before Ns continuation."""
         return self._send_text_packets(packet_type, text, **kwargs)
 
     def _active_rooms(self):
@@ -13247,33 +13401,45 @@ class TalkinBot:
             "room": room,
             "requester": str(username or "").strip(),
             "started_at": time.time(),
+            "request_mode": "app",
         }
         self.send_room_text(room, f"🔎 أتحقق الآن من الرتبة الفعلية للبوت في غرفة «{room}» من الخادم...")
         if not self._request_bot_room_role(room_key):
-            self._abort_bot_room_role_check(room_key)
+            if not self._request_bot_room_role(room_key, fallback=True):
+                self._abort_bot_room_role_check(room_key)
         return True
 
-    def _request_bot_room_role(self, room_key):
+    def _request_bot_room_role(self, room_key, *, fallback=False):
         state = getattr(self, "_pending_bot_room_role_checks", {}).get(room_key)
         if not isinstance(state, dict):
             return False
+        mode = "legacy" if fallback else "app"
         request_id = secrets.token_urlsafe(15)[:20]
         state["request_id"] = request_id
+        state["request_mode"] = mode
         self._pending_room_lists[room_key] = {
             "room": state["room"],
             "code": "bot_role",
             "sender": state.get("requester", ""),
             "request_type": "occupants_list",
             "request_id": request_id,
+            "request_mode": mode,
             "requested_at": time.time(),
             "complete_users": True,
             "bot_role_check": True,
         }
         try:
-            sent = self.send_query(encode_query(
-                "room_admin", type_="occupants_list", room=state["room"],
-                to=BOT_ID, value="none", id_=request_id
-            ))
+            # Match the official app's occupants request first. If the response
+            # omits this bot, retry with the former BOT_ID-targeted request.
+            query_args = {
+                "type_": "occupants_list",
+                "room": state["room"],
+                "to": BOT_ID if fallback else "username",
+                "value": "none",
+            }
+            if fallback:
+                query_args["id_"] = request_id
+            sent = self.send_query(encode_query("room_admin", **query_args))
             if sent is False:
                 raise RuntimeError("room role query was not sent")
         except Exception as exc:
@@ -13292,6 +13458,25 @@ class TalkinBot:
         state["timer"] = timer
         timer.start()
         return True
+
+    def _fallback_bot_room_role_check(self, room_key, request_id):
+        state = getattr(self, "_pending_bot_room_role_checks", {}).get(room_key)
+        if (
+            not isinstance(state, dict)
+            or state.get("request_id") != request_id
+            or state.get("request_mode") != "app"
+        ):
+            return False
+        pending = getattr(self, "_pending_room_lists", {}).get(room_key)
+        if isinstance(pending, dict) and pending.get("request_id") == request_id:
+            self._pending_room_lists.pop(room_key, None)
+        self.log(
+            "[ROOM-ROLE] app-style occupants query had no bot role; retrying legacy BOT_ID query",
+            state.get("room"),
+        )
+        if self._request_bot_room_role(room_key, fallback=True):
+            return True
+        return self._abort_bot_room_role_check(room_key)
 
     def _abort_bot_room_role_check(self, room_key):
         state = getattr(self, "_pending_bot_room_role_checks", {}).pop(room_key, None)
@@ -13312,6 +13497,8 @@ class TalkinBot:
         state = getattr(self, "_pending_bot_room_role_checks", {}).get(room_key)
         if not isinstance(state, dict) or state.get("request_id") != request_id:
             return False
+        if state.get("request_mode") == "app":
+            return self._fallback_bot_room_role_check(room_key, request_id)
         pending = getattr(self, "_pending_room_lists", {}).get(room_key)
         if isinstance(pending, dict) and pending.get("request_id") == request_id:
             self._pending_room_lists.pop(room_key, None)
@@ -20903,7 +21090,10 @@ class TalkinBot:
                     "📋 Admin — verification and VIP\n━━━━━━━━━━━━\nvi@name — verify a user\nuns@name — remove verification\nvip@name / unvip@name — manage VIP status\nverify all — verify room members",
                     "🛡️ Admin — protection\n━━━━━━━━━━━━\nprotection@room — open room protection settings\nprotection status — show protection status\nenable protection / disable protection — toggle room protection\nType protection to see numbered options.",
                     "📋 Admin — filter and publishing\n━━━━━━━━━━━━\nmf@on / mf@off — enable/disable the word filter\n+mf@word / -mf@word — add/remove a filtered word\nl@mf — list filtered words\nmbp@name — remove a publishing ban",
-                    "📋 Admin — advanced commands\n━━━━━━━━━━━━\nstatus — bot status\nram / cpu — resource status\nmyrooms — connected rooms\njoin all — rejoin saved rooms\ninv / invite — invite members from this room",
+                    "📋 Admin — system and diagnostics\n━━━━━━━━━━━━\nstatus — bot status\nram / cpu — resource status\nslow reply diagnostics (authorized master only)\nclean temporary files / create backup\nrestart bot service\nmaster service status/on/off\ntoggle invitations and games",
+                    "📋 Admin — points and logs\n━━━━━━━━━━━━\nmsb@name@amount — add points (master private chat)\n-sb@name@amount — deduct points (primary master private chat)\nts@name@amount — replace the saved balance\ntransfer all@amount — bulk points to room members\ntransfer history — show points transfer log",
+                    "📋 Admin — rooms and lists\n━━━━━━━━━━━━\nmyrooms — connected rooms\njoin all — rejoin saved rooms\nadd rooms to file — save current rooms\ninv / invite — invite members\ns@name / is@name — search and presence\nl@a / l@m / l@o / l@b — room role lists\nl@all — show room lists in sequence",
+                    "📋 Admin — extra settings and lists\n━━━━━━━━━━━━\namf@name / -amf@name — manage filter exceptions\nl@amf — list filter exceptions\nl@mfb / l@mbp — filter and publishing-ban lists\nmr@number — set repeat limit\nsf@on / sf@off — room safety filter\nl@mas / l@mvip — master lists",
                 ],
                 2: [
                     "🎵 Music\n━━━━━━━━━━━━\n.sa song name / play song name — play music\nstop music / stop — stop the current song\nsher@name — share the current song",
@@ -20938,22 +21128,14 @@ class TalkinBot:
                     text += "\n\nType ns for the next section."
                 elif int(page) == 3:
                     text += "\n\nType ns to return to the first game list."
-        # a3 is intentionally one single message: the 13 bot-vs-bot games
-        # must never be split into two chat bubbles. Other help sections keep
-        # the normal safe line batching.
-        if int(page) == 3:
-            if private_to:
-                self._send_text_packets("chat_message", text, to=private_to)
-            elif room:
-                self._send_text_packets("room_message", text, room=room)
-        else:
-            if private_to:
-                self._send_help_chunks("chat_message", text, to=private_to)
-            elif room:
-                self._send_help_chunks("room_message", text, room=room)
+        if private_to:
+            self._send_help_chunks("chat_message", text, to=private_to)
+        elif room:
+            self._send_help_chunks("room_message", text, room=room)
 
     def _send_game_help_section(self, room=None, private_to=None, part=1):
-        # A3 is always one complete message per list; no batching or delay.
+        # Each A3 section is kept as one logical page; the transport helper
+        # splits only if needed to satisfy Talkin's hard packet limit.
         sections = _help_sections_from_messages().get(3, [])
         if not sections:
             return False
@@ -20968,9 +21150,9 @@ class TalkinBot:
         elif idx >= len(sections) - 1:
             text += "\n\n📌 هذه آخر قائمة في A3."
         if private_to:
-            return self._send_text_packets("chat_message", text, to=private_to)
+            return self._send_help_chunks("chat_message", text, to=private_to)
         if room:
-            return self._send_text_packets("room_message", text, room=room)
+            return self._send_help_chunks("room_message", text, room=room)
         return False
 
     def _send_help(self, room=None, private_to=None, page=1, game_part=1):
@@ -21079,6 +21261,26 @@ class TalkinBot:
                         next_page, language, recipient=target
                     )
                 self.send_private_text(sender, message)
+                return True
+
+            # Once the master has opened A1, its explicitly numbered admin
+            # sections take precedence over stale generic result pages. This
+            # keeps ns in the requested moderation -> roles -> ... sequence.
+            if self.help_pages.get(key) == 1:
+                sections = _help_sections_from_messages().get(1, [])
+                current_part = max(1, int(self.help_page_part.get(key, 1) or 1))
+                if current_part < len(sections):
+                    current_part += 1
+                    self.help_page_part[key] = current_part
+                    self.help_game_part[key] = current_part
+                    self._send_help(room=room, private_to=sender if is_private else None,
+                                    page=1, game_part=current_part)
+                else:
+                    message = "✅ انتهت قوائم الإدارة.\n📌 للعودة اكتب a1."
+                    if is_private:
+                        self.send_private_text(sender, message)
+                    elif room:
+                        self.send_room_text(room, message)
                 return True
 
             # Generic long-result navigation. Any command that produced more
@@ -21879,6 +22081,8 @@ class TalkinBot:
                 reported_role = str(bot_user.get("role") or "").casefold().strip().replace(" ", "_")
                 if reported_role not in {"none", "unknown"}:
                     return self._finish_bot_room_role_check(room_key, reported_role)
+            if pending.get("request_mode") == "app":
+                return self._fallback_bot_room_role_check(room_key, pending.get("request_id"))
             return self._finish_bot_room_role_check(room_key, missing=True)
 
         # INV roster collection: each category is fetched separately. The
@@ -23623,6 +23827,51 @@ class TalkinBot:
                 self.send_private_text(sender, confirm_msg)
                 
             return True
+        if text.casefold().startswith("ts@"):
+            if not _is_primary_master(sender):
+                self.send_private_text(
+                    sender,
+                    "🚫 أمر ts مخصص للماستر الأساسي المحدد في BOT_MASTER فقط.",
+                )
+                return True
+            if not is_private:
+                if room:
+                    self.send_room_text(room, "🚫 أرسل أمر ts في خاص البوت فقط.")
+                return True
+            match = re.fullmatch(r"ts@([^@]+)@([^@]+)", text, re.I)
+            if not match:
+                self.send_private_text(sender, "❌ الصيغة: ts@اسم المستخدم@عدد النقاط")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            raw_amount = match.group(2).strip()
+            zero_token = raw_amount.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).replace(",", "")
+            amount = 0 if zero_token in {"0", "0.0", "0.00"} else _parse_compact_amount(raw_amount)
+            if not target or amount is None or amount < 0:
+                self.send_private_text(sender, "❌ المبلغ غير صالح. استخدم عددًا صحيحًا غير سالب، مثل 0 أو 1000000 أو 10m.")
+                return True
+            result = _set_points_balance(target, amount, actor=sender)
+            if not result.get("ok"):
+                if result.get("error") == "target_not_found":
+                    message = f"❌ لم أجد @{target} في ملف النقاط؛ لم يتغير أي رصيد."
+                elif result.get("error") == "ambiguous_target":
+                    message = f"⚠️ وجدت أكثر من سجل مطابق لـ@{target} في ملف النقاط؛ لم يتغير أي رصيد. استخدم الاسم الكامل لتمييز الحساب."
+                elif result.get("error") == "invalid_amount":
+                    message = "❌ يجب أن يكون عدد النقاط صفرًا أو أكبر."
+                else:
+                    message = "⚠️ تعذر حفظ التسوية بأمان؛ لم يتغير الرصيد. حاول لاحقًا."
+                self.send_private_text(sender, message)
+                return True
+            if result.get("changed"):
+                message = (
+                    f"✅ تمت تسوية نقاط @{result['username']}.\n"
+                    f"قبل: {int(result['old_balance']):,} نقطة\n"
+                    f"بعد: {int(result['balance']):,} نقطة"
+                )
+            else:
+                message = f"ℹ️ رصيد @{result['username']} هو بالفعل {_fmt_points(result['balance'])} نقطة؛ لم يتغير."
+            self.send_private_text(sender, message)
+            return True
+
         if text.casefold().startswith("-sb@"):
             if not _is_primary_master(sender):
                 message = "🚫 أمر -sb مخصص للماستر المحدد في BOT_MASTER فقط."
