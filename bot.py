@@ -52,15 +52,19 @@ from auction_game import AuctionGame, BIDDING_DURATION_SECONDS, TURN_TIMEOUT_SEC
 from cricket_integration import CricketIntegration
 import shop as member_shop
 from treasure_mining import DIAMOND_KEYS, ITEMS as MINING_ITEMS, MiningStore, format_cooldown, resolve_item_keys
-# Public defaults live in the tracked project settings file. Empty values are
-# ignored so required secrets must come from Railway Variables, while an
-# explicitly injected Railway value always wins over the repository defaults.
+# Environment priority: platform variables, then the project's .env, then
+# non-empty defaults from .env.example. This lets deployment-specific paths win.
 _ENV_BASE_DIR = Path(__file__).resolve().parent
 _EXTERNAL_ENV_KEYS = frozenset(os.environ)
-for _key, _value in dotenv_values(_ENV_BASE_DIR / ".env.example").items():
-    if _key and _value not in (None, "") and _key not in os.environ:
-        os.environ[_key] = _value
-load_dotenv(dotenv_path=_ENV_BASE_DIR / ".env", override=False)
+
+def _load_project_environment(project_dir):
+    project_dir = Path(project_dir)
+    load_dotenv(dotenv_path=project_dir / ".env", override=False)
+    for key, value in dotenv_values(project_dir / ".env.example").items():
+        if key and value not in (None, "") and key not in os.environ:
+            os.environ[key] = str(value)
+
+_load_project_environment(_ENV_BASE_DIR)
 
 
 # ============================================================
@@ -243,7 +247,15 @@ def _spotify_track_metadata(query):
 
 # Gift images copied verbatim from the supplied Giant Chat bot assets/.
 BASE_DIR = Path(__file__).resolve().parent
-ASSETS_DIR = BASE_DIR / "assets"
+
+def _configured_assets_dir(base_dir, configured=""):
+    configured = str(configured or "").strip()
+    candidate = Path(configured).expanduser() if configured else Path(base_dir) / "assets"
+    if not candidate.is_absolute():
+        candidate = Path(base_dir) / candidate
+    return candidate.resolve()
+
+ASSETS_DIR = _configured_assets_dir(BASE_DIR, os.getenv("BOT_ASSETS_DIR", ""))
 # Gift source images: accept PNG/JPG/JPEG from assets/.
 # This keeps the bot working even if the original PNG files are replaced by JPG files.
 GIFT_IMAGE_FILES = {
@@ -5670,7 +5682,7 @@ def _verify_secret_export_password(password):
 _GIFT_FONT_CACHE = {}
 _GLYPH_CACHE = {}
 _FONT_CMAP_CACHE = {}
-_EMOJI_FONT_PATH = BASE_DIR / "assets" / "NotoColorEmoji.ttf"
+_EMOJI_FONT_PATH = ASSETS_DIR / "NotoColorEmoji.ttf"
 _EMOJI_FONT_CACHE = {}
 
 try:
@@ -5771,11 +5783,11 @@ def _gift_font(text,size):
     # Main Arabic font.  Other scripts/symbols are chosen from real Unicode
     # coverage below; NotoSansArabic must not claim missing glyphs.
     candidates = [
-        BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
-        BASE_DIR/"assets"/"Amiri-Bold.ttf",
+        ASSETS_DIR/"NotoSansArabic-SemiBold.ttf",
+        ASSETS_DIR/"Amiri-Bold.ttf",
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-SemiBold.ttf"),
-        BASE_DIR/"assets"/"DejaVuSans.ttf",
+        ASSETS_DIR/"DejaVuSans.ttf",
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
     for path in candidates:
@@ -5785,18 +5797,18 @@ def _gift_font(text,size):
 
 def _fallback_font_paths():
     paths=[
-        BASE_DIR/"assets"/"NotoSansArabic-SemiBold.ttf",
-        BASE_DIR/"assets"/"Amiri-Bold.ttf",
-        BASE_DIR/"assets"/"DejaVuSans.ttf",
-        BASE_DIR/"assets"/"Unifont.otf",
-        BASE_DIR/"assets"/"UnifontUpper.otf",
-        BASE_DIR/"assets"/"NotoSansSymbols2-Regular.ttf",
-        BASE_DIR/"assets"/"NotoSansSymbols-Regular.ttf",
-        BASE_DIR/"assets"/"Symbola.ttf",
-        BASE_DIR/"assets"/"NotoSansEgyptianHieroglyphs-Regular.ttf",
-        BASE_DIR/"assets"/"NotoMusic-Regular.ttf",
-        BASE_DIR/"assets"/"NotoSansSinhala-Regular.ttf",
-        BASE_DIR/"assets"/"NotoSansKhmer-Regular.ttf",
+        ASSETS_DIR/"NotoSansArabic-SemiBold.ttf",
+        ASSETS_DIR/"Amiri-Bold.ttf",
+        ASSETS_DIR/"DejaVuSans.ttf",
+        ASSETS_DIR/"Unifont.otf",
+        ASSETS_DIR/"UnifontUpper.otf",
+        ASSETS_DIR/"NotoSansSymbols2-Regular.ttf",
+        ASSETS_DIR/"NotoSansSymbols-Regular.ttf",
+        ASSETS_DIR/"Symbola.ttf",
+        ASSETS_DIR/"NotoSansEgyptianHieroglyphs-Regular.ttf",
+        ASSETS_DIR/"NotoMusic-Regular.ttf",
+        ASSETS_DIR/"NotoSansSinhala-Regular.ttf",
+        ASSETS_DIR/"NotoSansKhmer-Regular.ttf",
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-SemiBold.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
@@ -5807,7 +5819,7 @@ def _fallback_font_paths():
     ]
     # Also inspect any extra font files already shipped inside the bot assets.
     try:
-        for root in (BASE_DIR/"assets", Path("/usr/share/fonts")):
+        for root in (ASSETS_DIR, Path("/usr/share/fonts")):
             if root.exists():
                 for ext in ("*.ttf", "*.otf"):
                     for fp in root.rglob(ext):
@@ -6387,7 +6399,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     # Do not delete previous cards here: their public URLs are already in chat
     # history. The runtime cleanup worker removes them only after its retention window.
 
-    template_path = BASE_DIR / "assets" / "gift_template_elegant.png"
+    template_path = ASSETS_DIR / "gift_template_elegant.png"
     if template_path.is_file():
         template = Image.open(template_path).convert("RGBA")
     else:

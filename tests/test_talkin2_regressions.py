@@ -19,6 +19,34 @@ from cricket_integration import CricketIntegration
 from cricket_result import render_result_image
 
 
+class ProjectEnvironmentTests(unittest.TestCase):
+    def test_platform_then_dotenv_then_example_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / ".env").write_text(
+                "BOT_DATA_DIR=/custom/data\nDEPLOY_VALUE=from-dotenv\n",
+                encoding="utf-8",
+            )
+            (project / ".env.example").write_text(
+                "BOT_DATA_DIR=/app/data\nDEPLOY_VALUE=from-example\nEXAMPLE_ONLY=default\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"DEPLOY_VALUE": "from-platform"}, clear=True):
+                bot_module._load_project_environment(project)
+                self.assertEqual(os.environ["BOT_DATA_DIR"], "/custom/data")
+                self.assertEqual(os.environ["DEPLOY_VALUE"], "from-platform")
+                self.assertEqual(os.environ["EXAMPLE_ONLY"], "default")
+
+    def test_assets_dir_supports_default_relative_and_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            self.assertEqual(bot_module._configured_assets_dir(base), (base / "assets").resolve())
+            self.assertEqual(
+                bot_module._configured_assets_dir(base, "shared/assets"),
+                (base / "shared/assets").resolve(),
+            )
+
+
 class PublicMediaUrlConfigTests(unittest.TestCase):
     def test_shared_public_media_url_has_priority_over_legacy_variables(self):
         self.assertEqual(
