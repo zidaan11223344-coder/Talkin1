@@ -60,6 +60,31 @@ class PublicMediaUrlConfigTests(unittest.TestCase):
         self.assertEqual(resolve({"ASSET_HTTP_PORT": "25770"}), 25770)
         self.assertEqual(resolve({}), 8080)
 
+    def test_gift_route_serves_from_persistent_data_and_legacy_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            persistent = base / "data" / "generated_gifts"
+            persistent.mkdir(parents=True)
+            persistent_file = persistent / "persistent.jpg"
+            persistent_file.write_bytes(b"image")
+            with patch.object(bot_module, "GENERATED_GIFTS_DIR", persistent):
+                handler = types.SimpleNamespace(path="/gifts/persistent.jpg")
+                self.assertEqual(
+                    bot_module._MediaHandler._resolve_target(handler), persistent_file.resolve()
+                )
+
+            legacy = base / "generated_gifts"
+            legacy.mkdir()
+            legacy_file = legacy / "legacy.jpg"
+            legacy_file.write_bytes(b"image")
+            with patch.object(bot_module, "BASE_DIR", base), patch.object(
+                bot_module, "GENERATED_GIFTS_DIR", persistent
+            ):
+                handler = types.SimpleNamespace(path="/gifts/legacy.jpg")
+                self.assertEqual(
+                    bot_module._MediaHandler._resolve_target(handler), legacy_file.resolve()
+                )
+
 
 class ProfileStatusRegressions(unittest.TestCase):
     def test_requested_default_profile_status_is_sent_whole_under_ws_limit(self):

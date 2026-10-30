@@ -844,6 +844,7 @@ def _select_persistent_data_dir():
     return BASE_DIR / "data"
 
 DATA_DIR = _select_persistent_data_dir()
+GENERATED_GIFTS_DIR = DATA_DIR / "generated_gifts"
 
 # Telegram diagnostics may learn a general notice destination; secret export
 # uses a separate fixed private-chat ID and a master-entered password.
@@ -6383,19 +6384,8 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
         gift_path = random.choice(choices)
         _GIFT_LAST_VARIANT[gift_key] = gift_path
 
-    # Clean old generated gift cards from the project before creating the
-    # current one.  The source artwork itself is NEVER generated or replaced.
-    generated_dir = BASE_DIR / "generated_gifts"
-    try:
-        generated_dir.mkdir(parents=True, exist_ok=True)
-        for old_card in generated_dir.iterdir():
-            if old_card.is_file() and old_card.name.startswith("gift_"):
-                try:
-                    old_card.unlink()
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    # Do not delete previous cards here: their public URLs are already in chat
+    # history. The runtime cleanup worker removes them only after its retention window.
 
     template_path = BASE_DIR / "assets" / "gift_template_elegant.png"
     if template_path.is_file():
@@ -6536,7 +6526,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     except Exception:
         pass
 
-    out = BASE_DIR / "generated_gifts" / f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
+    out = GENERATED_GIFTS_DIR / f"gift_{gift_id}_{uuid.uuid4().hex}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     rgb = image.convert("RGB")
@@ -7921,14 +7911,15 @@ def _cleanup_runtime_files(bot=None):
                     elif item.suffix.lower() in _CLEANUP_SUFFIXES or item.name.startswith("."):
                         removed_files += _safe_remove_file(item)
 
-        # Remove generated images/audio from all disposable runtime folders.
-        # Persistent bot state is kept in DATA_DIR and is never touched here.
+        # Remove old generated files after the retention window. Gift cards now
+        # live in DATA_DIR so deployment replaces do not immediately break links.
         # Files younger than CLEANUP_MAX_AGE_SECONDS are kept so an active
         # request/broadcast is not interrupted. The base folders themselves
         # are preserved because the HTTP media server uses them as roots.
         if CLEANUP_GENERATED_ENABLED:
             generated_dirs = (
                 BASE_DIR / "generated_music",
+                GENERATED_GIFTS_DIR,
                 BASE_DIR / "generated_gifts",
                 BASE_DIR / "generated_billion",
                 BASE_DIR / "generated_games",
@@ -8057,7 +8048,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
         elif path.startswith("/cricket-media/"):
             rel=path[len("/cricket-media/"):].lstrip("/"); root=(DATA_DIR/"cricket_media").resolve(); target=(DATA_DIR/"cricket_media"/rel).resolve()
         elif path.startswith("/gifts/"):
-            rel=path[len("/gifts/"):].lstrip("/"); root=(BASE_DIR/"generated_gifts").resolve(); target=(BASE_DIR/"generated_gifts"/rel).resolve()
+            rel=path[len("/gifts/"):].lstrip("/"); root=GENERATED_GIFTS_DIR.resolve(); target=(GENERATED_GIFTS_DIR/rel).resolve()
         elif path.startswith("/billion/"):
             rel=path[len("/billion/"):].lstrip("/"); root=(BASE_DIR/"generated_billion").resolve(); target=(BASE_DIR/"generated_billion"/rel).resolve()
         elif path.startswith("/games/"):
@@ -8072,7 +8063,14 @@ class _MediaHandler(SimpleHTTPRequestHandler):
             rel=path[len("/lookalikes/"):].lstrip("/"); root=LOOKALIKE_DIR.resolve(); target=(LOOKALIKE_DIR/rel).resolve()
         else:
             return None
-        if root not in target.parents or not target.is_file(): return None
+        if root not in target.parents or not target.is_file():
+            # Existing links created before the persistent-path update may still
+            # point to the old generated_gifts directory beside bot.py.
+            if path.startswith("/gifts/"):
+                legacy_root=(BASE_DIR/"generated_gifts").resolve()
+                legacy_target=(legacy_root/rel).resolve()
+                if legacy_root in legacy_target.parents and legacy_target.is_file(): return legacy_target
+            return None
         return target
 
     def _ctype(self,target):
@@ -8127,7 +8125,7 @@ class _MediaHandler(SimpleHTTPRequestHandler):
 def start_asset_server():
     if not ASSET_HTTP_ENABLED: return None
     try:
-        (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_welcomes").mkdir(parents=True,exist_ok=True); (DATA_DIR/"cricket_media").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
+        GENERATED_GIFTS_DIR.mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_welcomes").mkdir(parents=True,exist_ok=True); (DATA_DIR/"cricket_media").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
         # Altare and similar hosts must be able to reach the listener externally.
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
@@ -25365,7 +25363,7 @@ class TalkinBot:
             _draw_centered(draw, (width / 2, photo_h + 145), f"Sender / المرسل: {sender}", 32, (126, 226, 255), width - 80)
             _draw_centered(draw, (width / 2, photo_h + 225), f"Recipient / المستلم: {receiver}", 32, (255, 166, 218), width - 80)
             _draw_centered(draw, (width / 2, photo_h + 310), f"Room / الغرفة: {room}", 29, (230, 230, 238), width - 80)
-            generated = BASE_DIR / "generated_gifts" / f"usergift_{uuid.uuid4().hex}.jpg"
+            generated = GENERATED_GIFTS_DIR / f"usergift_{uuid.uuid4().hex}.jpg"
             generated.parent.mkdir(parents=True, exist_ok=True)
             card.save(generated, "JPEG", quality=90, optimize=True, progressive=True)
             media = f"{base.rstrip('/')}/gifts/{generated.name}"
