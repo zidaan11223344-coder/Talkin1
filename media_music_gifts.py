@@ -92,7 +92,7 @@ def public_base_url():
     return ''
 
 def start_media_server(port=None):
-    port = int(port or os.getenv('PORT','8080'))
+    port = int(port or os.getenv('PORT') or os.getenv('ASSET_HTTP_PORT') or '8080')
     server = ThreadingHTTPServer(('0.0.0.0', port), _Handler)
     threading.Thread(target=server.serve_forever, name='media-server', daemon=True).start()
     print(f'[MEDIA] server listening on 0.0.0.0:{port}', flush=True)

@@ -589,8 +589,16 @@ def _public_media_base_url_from_env(env):
 def _public_base_url():
     return _public_media_base_url_from_env(os.environ)
 
+def _asset_http_port_from_env(env):
+    """Use the host-assigned PORT, then the explicit media-port fallback."""
+    value = str(env.get("PORT") or env.get("ASSET_HTTP_PORT") or "8080").strip()
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise ValueError(f"Invalid media HTTP port: {port}")
+    return port
+
 MEDIA_PUBLIC_BASE_URL = _public_base_url()
-ASSET_HTTP_PORT = int(os.getenv("PORT", "8080"))
+ASSET_HTTP_PORT = _asset_http_port_from_env(os.environ)
 ASSET_HTTP_ENABLED = os.getenv("ASSET_HTTP_ENABLED", "1") == "1"
 
 GIFT_CATALOG = {
@@ -8120,6 +8128,7 @@ def start_asset_server():
     if not ASSET_HTTP_ENABLED: return None
     try:
         (BASE_DIR/"generated_gifts").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_music").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_publish").mkdir(parents=True,exist_ok=True); (BASE_DIR/"generated_welcomes").mkdir(parents=True,exist_ok=True); (DATA_DIR/"cricket_media").mkdir(parents=True,exist_ok=True); LOOKALIKE_DIR.mkdir(parents=True,exist_ok=True)
+        # Altare and similar hosts must be able to reach the listener externally.
         server=ThreadingHTTPServer(("0.0.0.0",ASSET_HTTP_PORT),_MediaHandler)
         threading.Thread(target=server.serve_forever,name="media-http",daemon=True).start()
         if DEBUG and not QUIET_MODE:

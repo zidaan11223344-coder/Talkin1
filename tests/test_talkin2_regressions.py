@@ -36,9 +36,29 @@ class PublicMediaUrlConfigTests(unittest.TestCase):
             "https://legacy.example",
         )
         self.assertEqual(
+            bot_module._public_media_base_url_from_env({
+                "PUBLIC_BASE_URL": "http://manual.example:25769",
+                "RAILWAY_PUBLIC_DOMAIN": "automatic.example",
+            }),
+            "http://manual.example:25769",
+        )
+        self.assertEqual(
+            bot_module._public_media_base_url_from_env({
+                "GIFT_PUBLIC_BASE_URL": "http://gift-manual.example:25769",
+                "RAILWAY_PUBLIC_DOMAIN": "automatic.example",
+            }),
+            "http://gift-manual.example:25769",
+        )
+        self.assertEqual(
             bot_module._public_media_base_url_from_env({"RAILWAY_PUBLIC_DOMAIN": "media.example"}),
             "https://media.example",
         )
+
+    def test_media_http_port_uses_port_then_asset_http_port_then_default(self):
+        resolve = bot_module._asset_http_port_from_env
+        self.assertEqual(resolve({"PORT": "25769", "ASSET_HTTP_PORT": "8081"}), 25769)
+        self.assertEqual(resolve({"ASSET_HTTP_PORT": "25770"}), 25770)
+        self.assertEqual(resolve({}), 8080)
 
 
 class ProfileStatusRegressions(unittest.TestCase):
