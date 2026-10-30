@@ -19,6 +19,28 @@ from cricket_integration import CricketIntegration
 from cricket_result import render_result_image
 
 
+class PublicMediaUrlConfigTests(unittest.TestCase):
+    def test_shared_public_media_url_has_priority_over_legacy_variables(self):
+        self.assertEqual(
+            bot_module._public_media_base_url_from_env({
+                "PUBLIC_MEDIA_URL": "http://media.example:25769/",
+                "PUBLIC_BASE_URL": "https://legacy.example",
+                "GIFT_PUBLIC_BASE_URL": "https://gift.example",
+            }),
+            "http://media.example:25769",
+        )
+
+    def test_legacy_public_base_url_and_hosting_domain_still_work(self):
+        self.assertEqual(
+            bot_module._public_media_base_url_from_env({"PUBLIC_BASE_URL": "https://legacy.example/"}),
+            "https://legacy.example",
+        )
+        self.assertEqual(
+            bot_module._public_media_base_url_from_env({"RAILWAY_PUBLIC_DOMAIN": "media.example"}),
+            "https://media.example",
+        )
+
+
 class ProfileStatusRegressions(unittest.TestCase):
     def test_requested_default_profile_status_is_sent_whole_under_ws_limit(self):
         expected = (

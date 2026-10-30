@@ -561,7 +561,10 @@ def _normalize_game_command_text(text):
         return canonical + suffix
     return raw
 
-# Railway exposes this service through RAILWAY_PUBLIC_DOMAIN after a public domain is generated.
+# One public base URL is shared by all generated media, not only gifts.
+# Keep the legacy names as fallbacks so existing deployments continue to work.
+PUBLIC_MEDIA_URL = os.getenv("PUBLIC_MEDIA_URL", "").strip().rstrip("/")
+MEDIA_PUBLIC_URL = os.getenv("MEDIA_PUBLIC_URL", "").strip().rstrip("/")
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL", "").strip() or os.getenv("RAVEN_PUBLIC_URL", "").strip()).rstrip("/")
 GIFT_PUBLIC_BASE_URL = os.getenv("GIFT_PUBLIC_BASE_URL", "").strip().rstrip("/")
 RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
@@ -569,13 +572,22 @@ RAVEN_PUBLIC_DOMAIN = os.getenv("RAVEN_PUBLIC_DOMAIN", "").strip()
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip()
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
 
+def _public_media_base_url_from_env(env):
+    """Resolve one externally reachable base URL for every generated media route."""
+    for key in ("PUBLIC_MEDIA_URL", "MEDIA_PUBLIC_URL", "PUBLIC_BASE_URL", "RAVEN_PUBLIC_URL", "GIFT_PUBLIC_BASE_URL"):
+        value = str(env.get(key, "") or "").strip().rstrip("/")
+        if value:
+            return value
+    for key in ("RAVEN_PUBLIC_DOMAIN", "RAILWAY_PUBLIC_DOMAIN", "RENDER_EXTERNAL_URL", "RENDER_EXTERNAL_HOSTNAME", "RAILWAY_STATIC_URL"):
+        value = str(env.get(key, "") or "").strip().rstrip("/")
+        if value:
+            if not value.startswith(("http://", "https://")):
+                value = "https://" + value
+            return value
+    return ""
+
 def _public_base_url():
-    domain = RAVEN_PUBLIC_DOMAIN or RAILWAY_PUBLIC_DOMAIN or RENDER_EXTERNAL_URL or RENDER_EXTERNAL_HOSTNAME
-    if domain:
-        if not domain.startswith(("http://", "https://")):
-            domain = "https://" + domain
-        return domain.rstrip("/")
-    return (PUBLIC_BASE_URL or GIFT_PUBLIC_BASE_URL).rstrip("/")
+    return _public_media_base_url_from_env(os.environ)
 
 MEDIA_PUBLIC_BASE_URL = _public_base_url()
 ASSET_HTTP_PORT = int(os.getenv("PORT", "8080"))
@@ -15026,7 +15038,7 @@ class TalkinBot:
                                      "rooms=", len(accepted_rooms))
                     if pending_rooms:
                         if not public_base:
-                            raise RuntimeError("لا يوجد رابط عام قصير وآمن للصوت؛ ضع PUBLIC_BASE_URL أو رابط النطاق العام للاستضافة")
+                            raise RuntimeError("لا يوجد رابط عام قصير وآمن للصوت؛ اضبط PUBLIC_MEDIA_URL أو PUBLIC_BASE_URL أو رابط النطاق العام للاستضافة")
                         downloaded_info, downloaded_path = self._music_download(search_query)
                         downloaded_path = Path(downloaded_path)
                         downloaded_url = public_base.rstrip("/") + "/media/" + downloaded_path.name
@@ -15387,7 +15399,7 @@ class TalkinBot:
             if not public_base:
                 if charged:
                     _add_points(sender_name, cost)
-                raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ ضع PUBLIC_BASE_URL أو رابط النطاق العام للاستضافة")
+                raise RuntimeError("لا يوجد رابط عام لصور الهدايا؛ اضبط PUBLIC_MEDIA_URL أو PUBLIC_BASE_URL أو رابط النطاق العام للاستضافة")
             sender_key = sender_name.casefold().lstrip("@")
             receiver_key = target.casefold().lstrip("@")
             # Use each account's own cached/profile image beside its own name.
@@ -20781,7 +20793,7 @@ class TalkinBot:
                 return True
             base = _public_base_url()
             if not base:
-                self.send_private_text(sender_name, "❌ لا يوجد رابط عام للوسائط؛ تحقق من PUBLIC_BASE_URL أو Railway Domain.")
+                self.send_private_text(sender_name, "❌ لا يوجد رابط عام للوسائط؛ تحقق من PUBLIC_MEDIA_URL أو PUBLIC_BASE_URL أو Railway Domain.")
                 return True
             try:
                 if not PIL_AVAILABLE:
@@ -20971,7 +20983,7 @@ class TalkinBot:
                 try:
                     base = _public_base_url()
                     if not base:
-                        raise RuntimeError("PUBLIC_BASE_URL أو RAILWAY_PUBLIC_DOMAIN غير مضبوط")
+                        raise RuntimeError("PUBLIC_MEDIA_URL أو PUBLIC_BASE_URL أو RAILWAY_PUBLIC_DOMAIN غير مضبوط")
                     card = render_billion_card(sender_name, winner_photo)
                     url = f"{base}/billion/{card.name}"
                     self._verify_public_media_url(url, "image")

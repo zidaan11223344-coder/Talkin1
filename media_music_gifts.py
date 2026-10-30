@@ -76,15 +76,19 @@ class _Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
 def public_base_url():
-    manual = os.getenv('PUBLIC_BASE_URL','').strip().rstrip('/')
-    if manual: return manual
-    domain = os.getenv('RAILWAY_PUBLIC_DOMAIN','').strip().strip('/')
-    if domain:
-        if domain.startswith('http://') or domain.startswith('https://'):
-            return domain.rstrip('/')
-        return 'https://' + domain
-    static = os.getenv('RAILWAY_STATIC_URL','').strip().rstrip('/')
-    if static: return static
+    # One public base URL serves every media type; retain old variable names
+    # as fallbacks for deployments that have not migrated their .env yet.
+    for key in ('PUBLIC_MEDIA_URL', 'MEDIA_PUBLIC_URL', 'PUBLIC_BASE_URL',
+                'RAVEN_PUBLIC_URL', 'GIFT_PUBLIC_BASE_URL'):
+        manual = os.getenv(key, '').strip().rstrip('/')
+        if manual: return manual
+    for key in ('RAVEN_PUBLIC_DOMAIN', 'RAILWAY_PUBLIC_DOMAIN',
+                'RENDER_EXTERNAL_URL', 'RENDER_EXTERNAL_HOSTNAME', 'RAILWAY_STATIC_URL'):
+        domain = os.getenv(key, '').strip().rstrip('/')
+        if domain:
+            if domain.startswith(('http://', 'https://')):
+                return domain
+            return 'https://' + domain
     return ''
 
 def start_media_server(port=None):

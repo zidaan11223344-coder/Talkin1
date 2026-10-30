@@ -10,11 +10,16 @@ Optional:
 - YOUTUBE_COOKIES (optional but recommended for YouTube)
 - YOUTUBE_COOKIES_FILE (optional mounted Netscape cookie file; alternative to YOUTUBE_COOKIES)
 - SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET (optional Spotify catalog search credentials)
-- PUBLIC_BASE_URL (optional; RAILWAY_PUBLIC_DOMAIN is preferred automatically)
-- GIFT_PUBLIC_BASE_URL (optional fallback public URL)
+- PUBLIC_MEDIA_URL (recommended; shared public base URL for all generated media, including images, gifts, and audio)
+- PUBLIC_BASE_URL and GIFT_PUBLIC_BASE_URL (legacy aliases; PUBLIC_MEDIA_URL takes precedence)
 - PIPED_APIS (optional comma-separated Piped API instances; auto-discovery is attempted)
 - MUSIC_MAX_SECONDS=900
 - MUSIC_COOLDOWN=15
+
+For a non-Railway host, set `PUBLIC_MEDIA_URL` in `.env` to the externally reachable
+URL, including scheme and allocated port, for example
+`http://us-iad01.altare.global:25769`. The bot serves generated media on `PORT`;
+set `PORT` to the same allocated port and keep `ASSET_HTTP_ENABLED=1`.
 
 Spotify track links and text searches can be resolved to a title/artist, then the bot
 uses Audius or its configured direct audio/download fallbacks for playback. Spotify's
