@@ -20,7 +20,7 @@ Optional:
 
 For a non-Railway host, set `PUBLIC_MEDIA_URL` in `.env` to the externally reachable
 URL, including scheme and allocated port, for example
-`http://us-iad01.altare.global:25769`. `PUBLIC_BASE_URL` and
+`http://us-iad01.altare.global:25991`. `PUBLIC_BASE_URL` and
 `GIFT_PUBLIC_BASE_URL` are also accepted and take precedence over automatically
 detected hosting domains; `PUBLIC_MEDIA_URL` takes priority over both. The media
 server uses the host-provided `PORT`, falls back to `ASSET_HTTP_PORT`, then to
