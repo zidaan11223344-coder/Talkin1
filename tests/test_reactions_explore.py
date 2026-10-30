@@ -213,6 +213,28 @@ def test_explore_card_is_created_as_a_fresh_image(tmp_path):
         card.unlink(missing_ok=True)
 
 
+def test_explore_card_renders_full_face_and_compound_emoji_sequences(tmp_path, monkeypatch):
+    if not bot_module.PIL_AVAILABLE:
+        return
+    rendered_emoji = []
+    monkeypatch.setattr(
+        bot_module, "_draw_color_emoji",
+        lambda _draw, _xy, token, size: rendered_emoji.append(token) or size,
+    )
+    with patch.object(bot_module, "BASE_DIR", Path(tmp_path)):
+        card = bot_module.render_explore_card(
+            "سلام 😀😃😄😁😆😅😂🤣☺ 👨‍👩‍👧‍👦 👍🏽 🇸🇦", "مستخدم", ""
+        )
+    try:
+        assert card.is_file()
+        assert set("😀😃😄😁😆😅😂🤣☺").issubset(set(rendered_emoji))
+        assert "👨‍👩‍👧‍👦" in rendered_emoji
+        assert "👍🏽" in rendered_emoji
+        assert "🇸🇦" in rendered_emoji
+    finally:
+        card.unlink(missing_ok=True)
+
+
 def test_explore_text_palette_changes_between_consecutive_renders():
     first = bot_module._next_explore_text_color()
     second = bot_module._next_explore_text_color()

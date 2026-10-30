@@ -20,8 +20,10 @@ BID_INCREMENT = 10_000_000
 MAX_PARTICIPANTS = 5
 MIN_PARTICIPANTS_TO_START_EARLY = 3
 BIDDING_DURATION_SECONDS = 60
-TURN_TIMEOUT_SECONDS = 12
-REDEMPTION_BONUS_PERCENT = 1
+TURN_TIMEOUT_SECONDS = 7
+REDEMPTION_PROFIT_BASIS_POINTS = 75
+REDEMPTION_LOSS_BASIS_POINTS = 125
+REDEMPTION_BASIS_POINTS = 10_000
 PLAYER_START_COOLDOWN_SECONDS = 3600
 MAX_IMAGE_BYTES = 50_000
 
@@ -414,6 +416,12 @@ class AuctionGame:
             self._ensure_turn_state(active)
             if uid != str(active.get("turn_user_id") or ""):
                 return {"ok": False, "error": "not_your_turn", "turn_username": active.get("turn_username", ""), "auction": copy.deepcopy(active)}
+            try:
+                turn_deadline_at = float(active.get("turn_deadline_at") or (float(active.get("started_at", 0) or 0) + TURN_TIMEOUT_SECONDS))
+            except (TypeError, ValueError):
+                turn_deadline_at = deadline_at
+            if float(self.clock()) >= turn_deadline_at:
+                return {"ok": False, "error": "turn_expired", "turn_deadline_at": turn_deadline_at}
             item = active.get("item") if isinstance(active.get("item"), dict) else {}
             try:
                 starting_price = max(0, int(item.get("starting_price", 100_000_000) or 0))
@@ -590,7 +598,8 @@ class AuctionGame:
                     "icon": str(item.get("icon") or "💎"),
                     "username": str(settlement.get("winner_name") or ""),
                     "winning_bid": bid_amount,
-                    "redemption_value": (bid_amount * (100 + REDEMPTION_BONUS_PERCENT)) // 100,
+                    # The outcome is intentionally unknown until redemption.
+                    "redemption_value": bid_amount,
                     "status": "available",
                     "won_at": int(self.clock()),
                 })
@@ -598,7 +607,7 @@ class AuctionGame:
                 "status": "sold", "auction_id": auction_id,
                 "winner_id": winner_id, "winner": str(settlement.get("winner_name") or ""),
                 "bid": bid_amount,
-                "redemption_value": (bid_amount * (100 + REDEMPTION_BONUS_PERCENT)) // 100,
+                "redemption_value": bid_amount,
                 "item": item, "at": int(self.clock()),
             }
             state["last_result"] = final
@@ -666,8 +675,17 @@ class AuctionGame:
             if match is None:
                 return {"ok": False, "error": "item_not_found"}
             if match.get("status") == "available":
+                try:
+                    cost_basis = max(0, int(match.get("winning_bid", match.get("redemption_value", 0)) or 0))
+                except (TypeError, ValueError):
+                    cost_basis = max(0, int(match.get("redemption_value", 0) or 0))
+                authentic = random.random() < 0.5
+                adjustment = REDEMPTION_PROFIT_BASIS_POINTS if authentic else -REDEMPTION_LOSS_BASIS_POINTS
+                redemption_value = (cost_basis * (REDEMPTION_BASIS_POINTS + adjustment)) // REDEMPTION_BASIS_POINTS
                 match["status"] = "redeeming"
                 match["redemption_transaction_id"] = f"auction-redemption:{match.get('id')}"
+                match["redemption_outcome"] = "authentic" if authentic else "counterfeit"
+                match["redemption_value"] = redemption_value
                 try:
                     self._write(state)
                 except Exception:
@@ -677,7 +695,7 @@ class AuctionGame:
             str(username or record.get("username") or "").strip().lstrip("@"),
             int(record.get("redemption_value", 0) or 0),
             str(record.get("redemption_transaction_id") or f"auction-redemption:{record.get('id')}"),
-            "world auction collectible redemption with 5 percent bonus",
+            "world auction collectible redemption with random authenticity and +0.75%/-1.25% adjustment",
         )
         if not isinstance(result, dict) or not result.get("ok"):
             return {"ok": False, "error": (result.get("error") if isinstance(result, dict) else "persistence_failed"), "pending": True, "item": record}
@@ -693,4 +711,11 @@ class AuctionGame:
                     self._write(state)
                 except Exception:
                     return {"ok": False, "error": "persistence_failed", "pending": True, "item": record}
-        return {"ok": True, "item": record, "points": int(record.get("redemption_value", 0) or 0), "already_applied": bool(result.get("already_applied"))}
+        return {
+            "ok": True,
+            "item": record,
+            "points": int(record.get("redemption_value", 0) or 0),
+            "outcome": str(record.get("redemption_outcome") or "unknown"),
+            "authentic": record.get("redemption_outcome") == "authentic",
+            "already_applied": bool(result.get("already_applied")),
+        }

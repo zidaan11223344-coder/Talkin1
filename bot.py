@@ -48,7 +48,7 @@ try:
 except Exception:
     pymysql = None
 from dotenv import dotenv_values, load_dotenv
-from auction_game import AuctionGame, BIDDING_DURATION_SECONDS, MAX_IMAGE_BYTES, parse_bid_amount as _parse_auction_bid_amount, parse_room_command as _parse_auction_room_command, parse_toggle_command as _parse_auction_toggle_command
+from auction_game import AuctionGame, BIDDING_DURATION_SECONDS, TURN_TIMEOUT_SECONDS, MAX_IMAGE_BYTES, parse_bid_amount as _parse_auction_bid_amount, parse_room_command as _parse_auction_room_command, parse_toggle_command as _parse_auction_toggle_command
 from cricket_integration import CricketIntegration
 import shop as member_shop
 from treasure_mining import DIAMOND_KEYS, ITEMS as MINING_ITEMS, MiningStore, format_cooldown, resolve_item_keys
@@ -5112,7 +5112,7 @@ def _default_help_sections():
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
             '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n14. رهان@مبلغ — bet/wager\n15. مضاربة@مبلغ — duel\n16. حظي@مبلغ — my luck\n17. استثمار@مبلغ — investment\n18. حظ@مبلغ — luck@amount\n📌 حدد المبلغ بعد الاسم.',
             '🎮 A3 — الألعاب — 3: البنك والجوائز\n━━━━━━━━━━━━\n19. بنك مليون — bank million\n20. مليار — billion\n21. زرع@رمز — farm/crop@item\n22. فيس@اسم — face@name\n📌 زرع أو farm يعرض المحاصيل؛ 30 محصولاً كحد أقصى في كل قائمة، ثم ns للتالي. الأسماء العربية والإنجليزية مقبولة.',
-            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 1%.',
+            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ (50/50): أصلية بربح 0.75% أو مغشوشة بخسارة 1.25%.',
             '🎮 A3 — ألعاب إضافية\n━━━━━━━━━━━━\n30. زواج / marriage\n31. تحدي / challenge\n32. لغز / riddle\n33. مزاج / mood\n34. حصانه / horse\n35. تسليه / entertainment\n36. بورصة / stock — استثمار تلقائي بالذهب بعد التحذير؛ بورصتي لسجلك\n37. اسرق@اسم / steal\n38. شبيه@اسم / lookalike\n39. Shot / شوت — صيد عادي؛ التنين بعد الإعلان\n40. صيد مزه / صيد مز — اختيار عضو عشوائي وصورة عامة\n41. طليقي — اختيار طليق عشوائي\n42. خلع — حكم مزاح ورد النفقات\n43. طلاق — حكم مزاح بالثلاث\n📌 ns للقائمة التالية.',
             '🏏 A3 — الألعاب — 6: الكركيت\n━━━━━━━━━━━━\nللماستر في الخاص: تشغيل لعبة الكركيت / start cricket game لتفعيل الملفات؛ الإيقاف .cr 0 / stop cricket game.\nللموثقين داخل الغرفة: أرسل .cr 1 لفتح الإعداد، ثم أرسل رقمًا من 1 إلى 4 (مثل .cr 4) وبعدها يرسل كل لاعب Join. عند بدء المباراة يعلن البوت أسماء الفريقين والغرفتين في جميع غرفه، ثم تنضم الغرفة الثانية بـ Join.\nبعد اكتمال الفريقين: 1 هجوم أو 2 دفاع. كل لاعب 6 كرات؛ أرسل 0–6. bot أو cricket 1..4 مباراة فردية. الجائزة 200,000 نقطة، مع صور الكرات والبطّة والهتريك.',
         ],
@@ -5626,6 +5626,7 @@ def _is_emoji_base(ch):
         or 0x1FC00 <= codepoint <= 0x1FFFD
         or codepoint in {
             0x2600, 0x2601, 0x2602, 0x2603, 0x2604, 0x2614, 0x2615,
+            0x261D, 0x2639, 0x263A, 0x2640, 0x2642, 0x2695, 0x26A7,
             0x26A1, 0x26C4, 0x26C5, 0x26F5, 0x2705, 0x2708, 0x2709,
             0x270A, 0x270B, 0x270C, 0x270D, 0x270F, 0x2714, 0x2716,
             0x2728, 0x2733, 0x2734, 0x2744, 0x2747, 0x274C, 0x274E,
@@ -7082,6 +7083,162 @@ def _draw_explore_username(draw, center, username, max_width):
     base.paste(composed.convert(base.mode))
 
 
+def _explore_emoji_cluster_end(text, start):
+    """Return the end of one Unicode emoji cluster, including modifiers/ZWJ."""
+    if start >= len(text):
+        return start
+    first = text[start]
+    keycap_bases = "#*0123456789"
+    if first in keycap_bases:
+        end = start + 1
+        if end < len(text) and text[end] == "\ufe0f":
+            end += 1
+        return end + 1 if end < len(text) and text[end] == "\u20e3" else start
+    if not _is_emoji_base(first):
+        return start
+
+    end = start + 1
+    first_codepoint = ord(first)
+    if 0x1F1E6 <= first_codepoint <= 0x1F1FF and end < len(text):
+        next_codepoint = ord(text[end])
+        if 0x1F1E6 <= next_codepoint <= 0x1F1FF:
+            end += 1
+    while end < len(text):
+        codepoint = ord(text[end])
+        if (
+            codepoint in {0xFE0E, 0xFE0F, 0x20E3}
+            or 0x1F3FB <= codepoint <= 0x1F3FF
+            or 0xE0020 <= codepoint <= 0xE007F
+            or unicodedata.category(text[end]).startswith("M")
+        ):
+            end += 1
+            continue
+        if codepoint == 0x200D and end + 1 < len(text):
+            end += 2
+            continue
+        break
+    return end
+
+
+def _explore_visual_tokens(text, font):
+    """Split a post into visually ordered text and complete color-emoji runs."""
+    logical_tokens = []
+    markers = {}
+    buffer = []
+    index = 0
+    while index < len(text):
+        end = _explore_emoji_cluster_end(text, index)
+        if end > index:
+            if buffer:
+                logical_tokens.append(("text", "".join(buffer)))
+                buffer = []
+            marker = chr(0xE000 + len(markers))
+            markers[marker] = text[index:end]
+            logical_tokens.append(("emoji", marker))
+            index = end
+        else:
+            buffer.append(text[index])
+            index += 1
+    if buffer:
+        logical_tokens.append(("text", "".join(buffer)))
+    if not markers:
+        return None
+
+    marked_text = "".join(value if kind == "emoji" else value for kind, value in logical_tokens)
+    # Use bidi's visual ordering with markers standing in for emoji, then draw
+    # Arabic presentation forms with BASIC layout so they are not reordered a
+    # second time when each run is rendered next to a color glyph.
+    draw_font = font
+    draw_mode = "ltr"
+    try:
+        if _has_arabic(marked_text) and arabic_reshaper is not None and get_display is not None:
+            visual = get_display(arabic_reshaper.reshape(marked_text))
+            draw_mode = "visual"
+            font_path = getattr(font, "path", None)
+            font_size = getattr(font, "size", None)
+            if font_path and font_size:
+                draw_font = ImageFont.truetype(
+                    str(font_path), int(font_size), layout_engine=ImageFont.Layout.BASIC
+                )
+        elif not _has_arabic(marked_text):
+            visual = marked_text
+        else:
+            # RAQM can shape a logical Arabic run itself. Approximate bidi at
+            # token boundaries by reversing the mixed run order, while leaving
+            # the letters inside each Arabic run to RAQM.
+            fallback_tokens = [
+                (kind, markers[value] if kind == "emoji" else value)
+                for kind, value in logical_tokens
+            ]
+            return list(reversed(fallback_tokens)), font, "rtl"
+    except Exception:
+        return None
+
+    visual_tokens = []
+    text_run = []
+    for char in visual:
+        if char in markers:
+            if text_run:
+                visual_tokens.append(("text", "".join(text_run)))
+                text_run = []
+            visual_tokens.append(("emoji", markers[char]))
+        else:
+            text_run.append(char)
+    if text_run:
+        visual_tokens.append(("text", "".join(text_run)))
+    return visual_tokens, draw_font, draw_mode
+
+
+def _explore_visual_text_width(draw, text, font, emoji_size):
+    prepared = _explore_visual_tokens(text, font)
+    if prepared is None:
+        return None
+    tokens, draw_font, draw_mode = prepared
+    width = 0.0
+    for kind, value in tokens:
+        if kind == "emoji":
+            width += emoji_size
+        else:
+            if draw_mode == "rtl":
+                width += draw.textlength(value, font=draw_font, direction="rtl", language="ar")
+            else:
+                width += draw.textlength(value, font=draw_font)
+    return width
+
+
+def _draw_explore_text_line(draw, center_x, y, text, font, fill, emoji_size):
+    prepared = _explore_visual_tokens(text, font)
+    if prepared is None:
+        return False
+    tokens, draw_font, draw_mode = prepared
+    total_width = sum(
+        emoji_size if kind == "emoji" else (
+            draw.textlength(value, font=draw_font, direction="rtl", language="ar")
+            if draw_mode == "rtl" else draw.textlength(value, font=draw_font)
+        )
+        for kind, value in tokens
+    )
+    cursor = float(center_x) - total_width / 2
+    for kind, value in tokens:
+        if kind == "emoji":
+            drawn_width = _draw_color_emoji(
+                draw, (cursor, y + max(0, (62 - emoji_size) / 2)), value, emoji_size
+            )
+            cursor += drawn_width or emoji_size
+        else:
+            if draw_mode == "rtl":
+                run_width = draw.textlength(value, font=draw_font, direction="rtl", language="ar")
+                draw.text(
+                    (cursor + run_width, y), value, font=draw_font, fill=fill,
+                    anchor="rt", direction="rtl", language="ar",
+                )
+            else:
+                run_width = draw.textlength(value, font=draw_font)
+                draw.text((cursor, y), value, font=draw_font, fill=fill, anchor="lt")
+            cursor += run_width
+    return True
+
+
 def render_explore_card(text, username, photo_url=""):
     """Render a polished Explore card with a large heart portrait and glass caption."""
     if not PIL_AVAILABLE:
@@ -7175,7 +7332,9 @@ def render_explore_card(text, username, photo_url=""):
     for word in words:
         candidate = (current + " " + word).strip()
         try:
-            measured = draw.textlength(candidate, font=font, direction="rtl", language="ar") if _has_arabic(candidate) else draw.textlength(candidate, font=font)
+            measured = _explore_visual_text_width(draw, candidate, font, 46)
+            if measured is None:
+                measured = draw.textlength(candidate, font=font, direction="rtl", language="ar") if _has_arabic(candidate) else draw.textlength(candidate, font=font)
         except Exception:
             measured = draw.textlength(candidate, font=font)
         if current and measured > 790:
@@ -7193,6 +7352,9 @@ def render_explore_card(text, username, photo_url=""):
     first_y = box[1] + max(42, (box[3]-box[1]-(len(lines)*line_height))//2)
     text_color = _next_explore_text_color()
     for line in lines:
+        if _draw_explore_text_line(draw, width//2, first_y, line, font, (*text_color, 255), 46):
+            first_y += line_height
+            continue
         shown = line if (_has_arabic(line) and PIL_AVAILABLE and features.check("raqm")) else _visual_rtl_text(line)
         direction = {"direction": "rtl", "language": "ar"} if _has_arabic(line) and PIL_AVAILABLE and features.check("raqm") else {}
         draw.text((width//2, first_y), shown, font=font, fill=(*text_color, 255), anchor="mt", align="center", **direction)
@@ -7987,6 +8149,7 @@ class TalkinBot:
         self._pending_inv_role_check = {}
         # Private list requests waiting for the native occupants_list response.
         self._pending_room_lists = {}
+        self._pending_bot_room_role_checks = {}
         self._pending_presence = {}
         # Live profile photos learned from Talkin UserItem field 3.
         # username(casefold) -> public photo URL.
@@ -10585,20 +10748,30 @@ class TalkinBot:
             "مزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح, وعند 5 يبدأ تلقائياً.":
                 "Join auction — register; at 3 players the host may start, or it starts automatically at 5.",
             "بعد البدء: المزايدة بالTurn: لمدة 60 seconds. عند your turn اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي, وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 points على الأقل, or اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الTurn: بصمت.":
-                "After bidding starts, turns last 60 seconds. On your turn, enter “bid <amount>”; the first bid must meet the starting price, and each later bid must exceed the current high bid by at least 10,000,000 points. Pass with “pass”. Amounts accept shorthand such as 10m (10 million), 10b or 1b (billions), or combined forms like 10m10b. Out-of-turn bid commands are ignored silently.",
+                "After bidding starts, turns last 60 seconds overall, with each turn advancing automatically after 7 seconds without a bid. On your turn, enter “bid <amount>” or “pass”. The first bid must meet the starting price, and each later bid must exceed the current high bid by at least 10,000,000 points. Amounts accept shorthand such as 10m (10 million), 10b or 1b (billions), or combined forms like 10m10b. Out-of-turn bid commands are ignored silently.",
             "أثناء الجولة, مزايده تعني أن المزاد شغال؛ wait انتهاءه. فاتح الجولة or الماستر يستطيع إقفاله بأمر «اقفل المزاد»." :
                 "While a round is running, registration is closed; wait until it ends. The host or master may end it with “close auction”.",
-            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاستبدال بعد الجولة بربح 1%.":
-                "sv — view auction collectibles; red auction <code> — redeem after the round for a 1% profit.",
+            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ (50/50): أصلية بربح 0.75% أو مغشوشة بخسارة 1.25%.":
+                "sv — view auction collectibles; red auction <code> — redeem with a 50/50 chance of a 0.75% profit or 1.25% loss.",
         }
         for old, new in auction_help_fixes.items():
             value = value.replace(old, new)
         auction_help_final_fixes = {
             "بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وwait جولة أخرى.":
                 "After the auction closes, “bid/join auction” gets a local reply: the auction is closed; wait for another round.",
+            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ (50/50): أصلية بربح 0.75% or مغشوشة بخسارة 1.25%.":
+                "sv — view auction collectibles; red auction <code> — redeem with a 50/50 chance of a 0.75% profit or 1.25% loss.",
         }
         for old, new in auction_help_final_fixes.items():
             value = value.replace(old, new)
+        value = value.replace(
+            "بعد البدء: المزايدة بالدور لمدة 60 ثانية.",
+            "بعد البدء: تستمر المزايدة 60 ثانية، ولكل لاعب 7 ثوانٍ لإرسال المبلغ قبل انتقال الدور تلقائيًا.",
+        )
+        value = value.replace(
+            "الاسترداد بالحظ (50/50): أصلية بربح 0.75% أو مغشوشة بخسارة 1.25%.",
+            "الاسترداد بالحظ (50/50): أصلية بربح 0.75% أو مغشوشة بخسارة 1.25%.",
+        )
         return value
 
     def _active_room_language_override(self, room):
@@ -10668,6 +10841,7 @@ class TalkinBot:
         room_commands = {
             "غرفي", "myrooms", "my rooms", ".دخول غرفي", "دخول غرفي", "دخولغرفي",
             "قائمة غرف السيرفر", "جلب غرف السيرفر", "جلب الغرف من السيرفر", "get server rooms",
+            "رتبتك", "رتبتي", "bot rank", "your rank",
         }
         return (
             low in top_commands or low.startswith(("توب ", "top "))
@@ -13035,12 +13209,162 @@ class TalkinBot:
         room = str(room or "").strip()
         role = str(getattr(self, "bot_room_roles", {}).get(_norm_room(room), "") or "").casefold().strip()
         if role:
-            return role
+            role = role.replace(" ", "_")
+            return {"o": "owner", "a": "admin", "m": "member", "roomowner": "room_owner", "roomcreator": "room_creator"}.get(role, role)
         live = getattr(self, "room_users", {}).get(room, {}) or {}
         for username, value in live.items():
             if _norm_user(username) == _norm_user(BOT_ID):
-                return str(value or "").casefold().strip()
+                role = str(value or "").casefold().strip().replace(" ", "_")
+                return {"o": "owner", "a": "admin", "m": "member", "roomowner": "room_owner", "roomcreator": "room_creator"}.get(role, role)
         return ""
+
+    def _handle_bot_room_role_command(self, room, username, text):
+        """Request current room data once and report only this bot's server role."""
+        command = str(text or "").strip().casefold().rstrip("؟?!.")
+        if command not in {"رتبتك", "رتبتي", "bot rank", "your rank"}:
+            return False
+        room = str(room or "").strip()
+        if not room:
+            return False
+        room_key = _norm_room(room)
+        if not getattr(self, "ws", None):
+            self.send_room_text(room, f"⚠️ لا أستطيع التحقق من رتبة البوت في غرفة «{room}» لأن الاتصال بالخادم غير متاح.")
+            return True
+
+        pending_lists = getattr(self, "_pending_room_lists", {})
+        if room_key in pending_lists:
+            self.send_room_text(room, f"⏳ يوجد طلب قوائم جارٍ في غرفة «{room}». حاول أمر «رتبتك» بعد اكتماله.")
+            return True
+        if not hasattr(self, "_pending_room_lists"):
+            self._pending_room_lists = {}
+        if not hasattr(self, "_pending_bot_room_role_checks"):
+            self._pending_bot_room_role_checks = {}
+        if room_key in self._pending_bot_room_role_checks:
+            self.send_room_text(room, f"⏳ ما زلت أتحقق من رتبتي في غرفة «{room}».")
+            return True
+
+        self._pending_bot_room_role_checks[room_key] = {
+            "room": room,
+            "requester": str(username or "").strip(),
+            "started_at": time.time(),
+        }
+        self.send_room_text(room, f"🔎 أتحقق الآن من الرتبة الفعلية للبوت في غرفة «{room}» من الخادم...")
+        if not self._request_bot_room_role(room_key):
+            self._abort_bot_room_role_check(room_key)
+        return True
+
+    def _request_bot_room_role(self, room_key):
+        state = getattr(self, "_pending_bot_room_role_checks", {}).get(room_key)
+        if not isinstance(state, dict):
+            return False
+        request_id = secrets.token_urlsafe(15)[:20]
+        state["request_id"] = request_id
+        self._pending_room_lists[room_key] = {
+            "room": state["room"],
+            "code": "bot_role",
+            "sender": state.get("requester", ""),
+            "request_type": "occupants_list",
+            "request_id": request_id,
+            "requested_at": time.time(),
+            "complete_users": True,
+            "bot_role_check": True,
+        }
+        try:
+            sent = self.send_query(encode_query(
+                "room_admin", type_="occupants_list", room=state["room"],
+                to=BOT_ID, value="none", id_=request_id
+            ))
+            if sent is False:
+                raise RuntimeError("room role query was not sent")
+        except Exception as exc:
+            self._pending_room_lists.pop(room_key, None)
+            self.log("[ROOM-ROLE] server query failed", state.get("room"), repr(exc))
+            return False
+
+        old_timer = state.get("timer")
+        if old_timer:
+            try:
+                old_timer.cancel()
+            except Exception:
+                pass
+        timer = threading.Timer(12.0, self._bot_room_role_check_timeout, args=(room_key, request_id))
+        timer.daemon = True
+        state["timer"] = timer
+        timer.start()
+        return True
+
+    def _abort_bot_room_role_check(self, room_key):
+        state = getattr(self, "_pending_bot_room_role_checks", {}).pop(room_key, None)
+        pending = getattr(self, "_pending_room_lists", {}).get(room_key)
+        if isinstance(pending, dict) and pending.get("bot_role_check"):
+            self._pending_room_lists.pop(room_key, None)
+        if isinstance(state, dict) and state.get("timer"):
+            try:
+                state["timer"].cancel()
+            except Exception:
+                pass
+        if isinstance(state, dict):
+            room = state.get("room", "")
+            self.send_room_text(room, f"❌ تعذر إكمال التحقق من رتبة البوت من الخادم في غرفة «{room}».")
+        return False
+
+    def _bot_room_role_check_timeout(self, room_key, request_id):
+        state = getattr(self, "_pending_bot_room_role_checks", {}).get(room_key)
+        if not isinstance(state, dict) or state.get("request_id") != request_id:
+            return False
+        pending = getattr(self, "_pending_room_lists", {}).get(room_key)
+        if isinstance(pending, dict) and pending.get("request_id") == request_id:
+            self._pending_room_lists.pop(room_key, None)
+        self._pending_bot_room_role_checks.pop(room_key, None)
+        self.send_room_text(
+            state.get("room", ""),
+            f"⚠️ لم يصلني ردّ التحقق من الخادم لرتبتي في غرفة «{state.get('room', '')}». لم أعرض رتبة مخزنة قديمة.",
+        )
+        return True
+
+    def _finish_bot_room_role_check(self, room_key, role="", *, missing=False):
+        state = getattr(self, "_pending_bot_room_role_checks", {}).pop(room_key, None)
+        if not isinstance(state, dict):
+            return False
+        timer = state.get("timer")
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        room = state.get("room", "")
+        role = str(role or "").casefold().strip().replace(" ", "_")
+        if missing or not role:
+            getattr(self, "bot_room_roles", {}).pop(room_key, None)
+            self.send_room_text(
+                room,
+                f"⚠️ لم يتضمن رد الخادم رتبة حساب البوت (@{BOT_ID}) في غرفة «{room}»؛ لذلك لا أستطيع تأكيد الرتبة الحالية.",
+            )
+            return True
+        role = {
+            "o": "owner", "a": "admin", "m": "member", "normal": "member", "user": "member",
+            "roomowner": "room_owner", "roomcreator": "room_creator",
+        }.get(role, role)
+        role_labels = {
+            "owner": "أونر (Owner)",
+            "creator": "منشئ الغرفة (Creator)",
+            "room_owner": "أونر (Room Owner)",
+            "room_creator": "منشئ الغرفة (Room Creator)",
+            "host": "مالك الغرفة (Host)",
+            "admin": "مشرف (Admin)",
+            "moderator": "مشرف (Moderator)",
+            "mod": "مشرف (Moderator)",
+            "member": "عضو (Member)",
+        }
+        roles = getattr(self, "bot_room_roles", None)
+        if not isinstance(roles, dict):
+            roles = self.bot_room_roles = {}
+        roles[room_key] = role
+        self.send_room_text(
+            room,
+            f"✅ رتبتي في غرفة «{room}»: {role_labels.get(role, role)}.\n📡 تم التحقق من رتبة حساب البوت مباشرةً من رد الخادم.",
+        )
+        return True
 
     def _bot_is_room_owner(self, room):
         """Return True only when the cached role is an actual room Owner.
@@ -13635,7 +13959,7 @@ class TalkinBot:
         return ""
 
     def process_occupants_for_invite(self, result):
-        room = (self.invite_room or result.get("_occupants_room") or
+        room = (result.get("_occupants_room") or self.invite_room or
                 self.last_joined_room or self.room)
         room = str(room or "").strip()
         # An occupants response proves only that the roster was readable; it
@@ -14391,8 +14715,10 @@ class TalkinBot:
         if not query:
             self.send_room_text(room, "❌ اكتب: .sa اسم الأغنية")
             return True
-        if live_stream and not self._bot_is_room_owner(room):
-            role = self._bot_room_role(room) or "غير معروفة"
+        role = self._bot_room_role(room) if live_stream else ""
+        known_non_owner_roles = {"admin", "moderator", "mod", "member", "user", "none", "outcast", "banned", "ban", "blocked"}
+        if live_stream and role in known_non_owner_roles:
+            role = role or "غير معروفة"
             self.send_room_text(
                 room,
                 "⚠️ لم يتم تشغيل البث.\n"
@@ -16185,6 +16511,8 @@ class TalkinBot:
 
     def _route_room_game_input(self, room, username, text, username_aliases=()):
         """Route active bomb wires before board-game and Cricket commands."""
+        if self._handle_bot_room_role_command(room, username, text):
+            return True
         candidates, seen = [], set()
         for candidate in (username, *(username_aliases or ())):
             candidate = str(candidate or "").strip().lstrip("@")
@@ -16272,10 +16600,14 @@ class TalkinBot:
             return False
         deadline_at = self._auction_deadline_at(auction)
         try:
+            turn_deadline_at = float(auction.get("turn_deadline_at") or (float(auction.get("started_at") or 0) + TURN_TIMEOUT_SECONDS))
+        except (TypeError, ValueError):
+            turn_deadline_at = deadline_at
+        try:
             now = float(game.clock())
         except Exception:
             now = time.time()
-        delay = max(0.0, deadline_at - now)
+        delay = max(0.0, min(deadline_at, turn_deadline_at) - now)
         lock = getattr(self, "_auction_timeout_lock", None)
         if lock is None:
             lock = threading.RLock()
@@ -16305,23 +16637,59 @@ class TalkinBot:
             now = float(game.clock())
         except Exception:
             now = time.time()
-        if now < deadline_at:
+        rooms = self._auction_participant_rooms(active)
+        if now >= deadline_at:
+            self._cancel_auction_timeout(auction_id)
+            result = game.close(
+                str(active.get("opener_id") or ""),
+                str(active.get("opener_name") or ""),
+                apply_delta=_apply_points_delta_once,
+            )
+            if not self._auction_broadcast_close_result(result, rooms=rooms, expired=True) and result.get("error"):
+                self._auction_broadcast(
+                    "⌛ انتهت مدة المزايدة، لكن تعذرت التسوية الآن؛ لم يُعلن فائز.",
+                    "⌛ The 60-second bidding window ended, but settlement failed; no winner was announced.",
+                    rooms=rooms,
+                )
+            return True
+
+        try:
+            turn_deadline_at = float(active.get("turn_deadline_at") or (float(active.get("started_at") or 0) + TURN_TIMEOUT_SECONDS))
+        except (TypeError, ValueError):
+            turn_deadline_at = deadline_at
+        if now < turn_deadline_at:
             self._schedule_auction_timeout(active)
             return False
-        rooms = self._auction_participant_rooms(active)
-        self._cancel_auction_timeout(auction_id)
-        result = game.close(
-            str(active.get("opener_id") or ""),
-            str(active.get("opener_name") or ""),
+
+        timed_out_user_id = str(active.get("turn_user_id") or "")
+        timed_out_username = str(active.get("turn_username") or "")
+        result = game.pass_turn(
+            timed_out_user_id,
+            timed_out_username,
             apply_delta=_apply_points_delta_once,
         )
-        if not self._auction_broadcast_close_result(result, rooms=rooms, expired=True) and result.get("error"):
+        if result.get("status") == "passed":
+            next_turn = result.get("next_turn_username") or ""
             self._auction_broadcast(
-                "⌛ انتهت مدة المزايدة، لكن تعذرت التسوية الآن؛ لم يُعلن فائز.",
-                "⌛ The 60-second bidding window ended, but settlement failed; no winner was announced.",
+                f"⏱️ انتهت مهلة 7 ثوانٍ دون مزايدة من @{timed_out_username}؛ تم تمرير دوره تلقائيًا. الدور التالي على @{next_turn}.",
+                f"⏱️ @{timed_out_username} did not bid within 7 seconds; the turn was passed automatically. Next turn: @{next_turn}.",
                 rooms=rooms,
             )
-        return True
+            self._schedule_auction_timeout(result.get("auction"))
+            return True
+        if result.get("auto_closed") or result.get("pending") or result.get("status") in {"sold", "no_bids", "no_sale"}:
+            self._cancel_auction_timeout(auction_id)
+            self._auction_broadcast(
+                f"⏱️ انتهت مهلة @{timed_out_username} دون مزايدة؛ تم تمرير دوره تلقائيًا.",
+                f"⏱️ @{timed_out_username} did not bid before the turn timer; the turn passed automatically.",
+                rooms=rooms,
+            )
+            self._auction_broadcast_close_result(result, rooms=rooms)
+            return True
+        latest = game.active()
+        if isinstance(latest, dict) and latest.get("phase") == "bidding":
+            self._schedule_auction_timeout(latest)
+        return False
 
     def _auction_broadcast(self, arabic_text, english_text, fallback_room="", *, rooms=None):
         target_rooms = self._auction_connected_rooms(fallback_room, rooms=rooms) if rooms is not None else self._auction_connected_rooms(fallback_room)
@@ -16351,8 +16719,8 @@ class TalkinBot:
             item = sale["item"]
             short_id = str(sale["auction_id"])[:8]
             self._auction_broadcast(
-                f"{prefix_ar}🏆 انتهى المزاد! فاز @{sale['winner']} بـ{item.get('icon', '💎')} {item.get('name_ar', 'الجائزة')} بسعر {_fmt_points(sale['bid'])} نقطة.\n✅ أضيفت لمخزون الألماس؛ الاستبدال بعد الجولة: {_fmt_points(sale['redemption_value'])} نقطة (ربح 1%).\nللمخزون: sv — للاستبدال: red auction {short_id}",
-                f"{prefix_en}🏆 Auction complete! @{sale['winner']} won {item.get('icon', '💎')} {item.get('name_en', 'the prize')} for {_fmt_points(sale['bid'])} points.\n✅ Added to diamond inventory; redemption after the round: {_fmt_points(sale['redemption_value'])} points (1% profit).\nInventory: sv — redeem: red auction {short_id}",
+                f"{prefix_ar}🏆 انتهى المزاد! فاز @{sale['winner']} بـ{item.get('icon', '💎')} {item.get('name_ar', 'الجائزة')} بسعر {_fmt_points(sale['bid'])} نقطة.\n✅ أضيفت إلى المخزون؛ الاسترداد بالحظ (50/50): أصلية (+0.75%) أو مغشوشة (-1.25%).\nللمخزون: sv — للاسترداد: red auction {short_id}",
+                f"{prefix_en}🏆 Auction complete! @{sale['winner']} won {item.get('icon', '💎')} {item.get('name_en', 'the prize')} for {_fmt_points(sale['bid'])} points.\n✅ Added to inventory; redemption is a 50/50 chance: authentic (+0.75%) or counterfeit (-1.25%).\nInventory: sv — redeem: red auction {short_id}",
                 fallback_room,
                 rooms=rooms,
             )
@@ -16378,8 +16746,25 @@ class TalkinBot:
         image_url = self._game_public_image(image_path, route="assets/treasures")
         if not image_url:
             return False
+        item_name_ar = str((item or {}).get("name_ar") or (item or {}).get("name_en") or "قطعة المزاد")
+        item_name_en = str((item or {}).get("name_en") or (item or {}).get("name_ar") or "Auction item")
         sent = False
         for target_room in self._auction_connected_rooms(fallback_room):
+            try:
+                language_en = self._effective_room_language(target_room) == "en"
+                if language_en:
+                    warning = (
+                        f"🔨 Auction item: {item_name_en}\n"
+                        "⚠️ Not every auction item may be authentic. Be careful not to risk your entire fortune."
+                    )
+                else:
+                    warning = (
+                        f"🔨 قطعة المزاد: {item_name_ar}\n"
+                        "⚠️ قد لا تكون كل قطع المزاد أصلية؛ فاحذر أن تغامر بكل ثروتك."
+                    )
+                self.send_room_text(target_room, warning)
+            except Exception as exc:
+                self.log("[AUCTION] item warning delivery failed:", target_room, repr(exc))
             try:
                 if self.send_room_media(target_room, image_url, "image") is not False:
                     sent = True
@@ -16481,8 +16866,8 @@ class TalkinBot:
             item_en = f"{item['icon']} {item['name_en']}"
             starting_price = _fmt_points(item.get("starting_price", 100_000_000))
             self._auction_broadcast(
-                f"🔨 بدأ التسجيل في المزاد العالمي!\n🎁 السلعة المختارة: {item_ar}\n💰 السعر الابتدائي: {starting_price} نقطة.\n👥 الحد الأقصى 5 مشاركين؛ اكتب «مزايده» للتسجيل. عند اكتمال 3 يستطيع فاتح الجولة كتابة «ابدا المزاد»، أو يبدأ تلقائياً عند 5. بعد البدء تكون المزايدة بالدور لمدة 60 ثانية؛ صاحب الدور يكتب الرقم فقط مثل 120m أو 10b أو 120000000؛ أو «تمرير». لا يرد البوت على أوامر المزايدة خارج الدور لتجنب الإزعاج.",
-                f"🔨 Registration is open for the world auction!\n🎁 Selected item: {item_en}\n💰 Starting price: {starting_price} points.\n👥 Up to 5 players; type “join auction” to register. The host may start with 3, or it starts automatically at 5. After start, bidding runs in turns for 60 seconds; the current player sends only the number, such as 120m, 10b, or 120000000, or “pass”. Out-of-turn bid commands are silently ignored.",
+                f"🔨 بدأ التسجيل في المزاد العالمي!\n🎁 السلعة المختارة: {item_ar}\n💰 السعر الابتدائي: {starting_price} نقطة.\n👥 الحد الأقصى 5 مشاركين؛ اكتب «مزايده» للتسجيل. عند اكتمال 3 يستطيع فاتح الجولة كتابة «ابدا المزاد»، أو يبدأ تلقائياً عند 5. بعد البدء تكون المزايدة بالدور لمدة 60 ثانية؛ لكل لاعب 7 ثوانٍ لإرسال المبلغ قبل انتقال الدور تلقائيًا. اكتب الرقم فقط مثل 110m أو 10b أو 120000000؛ أو «تمرير».",
+                f"🔨 Registration is open for the world auction!\n🎁 Selected item: {item_en}\n💰 Starting price: {starting_price} points.\n👥 Up to 5 players; type “join auction” to register. The host may start with 3, or it starts automatically at 5. After registration, bidding runs in turns for 60 seconds, with 7 seconds per turn before it advances automatically. Send only the number, such as 110m or 10b, or type “pass”.",
                 room,
             )
             if not self._auction_send_item_image(item, room):
@@ -16511,7 +16896,7 @@ class TalkinBot:
                 item = result["auction"].get("item") or {}
                 starting_price = _fmt_points(item.get("starting_price", 100_000_000))
                 first_turn = result["auction"].get("turn_username") or ""
-                self._auction_broadcast(f"🔔 اكتمل العدد وبدأت المزايدة بالدور لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. في دورك اكتب الرقم فقط مثل 120m أو 10b أو 120000000 (وأقل مزايدة لاحقة تزيد 10m) أو «تمرير».", f"🔔 Player limit reached; 60-second turn-based bidding has started. Starting price: {starting_price} points. First turn: @{first_turn}. On your turn, send only the number, such as 120m, 10b, or 120000000; later bids must increase by at least 10m, or type “pass”.", rooms=self._auction_participant_rooms(result.get("auction")))
+                self._auction_broadcast(f"🔔 اكتمل العدد وبدأت المزايدة لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. لكل لاعب 7 ثوانٍ للمزايدة أو التمرير، ثم ينتقل الدور تلقائيًا.", f"🔔 Player limit reached; 60-second bidding has started. Starting price: {starting_price} points. First turn: @{first_turn}. Each player has 7 seconds to bid or pass before the turn advances automatically.", rooms=self._auction_participant_rooms(result.get("auction")))
             return True
 
         if action == "start":
@@ -16530,7 +16915,7 @@ class TalkinBot:
             item = result["auction"].get("item") or {}
             starting_price = _fmt_points(item.get("starting_price", 100_000_000))
             first_turn = result["auction"].get("turn_username") or ""
-            self._auction_broadcast(f"🔔 أغلق فاتح الجولة التسجيل؛ بدأت المزايدة بالدور لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. في دورك اكتب الرقم فقط مثل 120m أو 10b أو 120000000 (وأقل مزايدة لاحقة تزيد 10m) أو «تمرير».", f"🔔 The host closed registration; 60-second turn-based bidding starts now. Starting price: {starting_price} points. First turn: @{first_turn}. On your turn, send only the number, such as 120m, 10b, or 120000000; later bids must increase by at least 10m, or type “pass”.", rooms=self._auction_participant_rooms(result.get("auction")))
+            self._auction_broadcast(f"🔔 أغلق فاتح الجولة التسجيل؛ بدأت المزايدة لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. لكل لاعب 7 ثوانٍ للمزايدة أو التمرير، ثم ينتقل الدور تلقائيًا.", f"🔔 The host closed registration; 60-second bidding starts now. Starting price: {starting_price} points. First turn: @{first_turn}. Each player has 7 seconds to bid or pass before the turn advances automatically.", rooms=self._auction_participant_rooms(result.get("auction")))
             return True
 
         if action == "bid":
@@ -16540,7 +16925,7 @@ class TalkinBot:
                 return True
             result = self._auction_game.bid(user_id, username, bid_amount, _get_points(username))
             if not result.get("ok"):
-                if result.get("error") == "expired":
+                if result.get("error") in {"expired", "turn_expired"}:
                     self._expire_auction_round(active_auction.get("id"))
                     return True
                 if result.get("error") in {"not_your_turn", "not_participant"}:
@@ -16558,6 +16943,7 @@ class TalkinBot:
                 return True
             amount = _fmt_points(result["amount"])
             next_turn = result.get("next_turn_username") or ""
+            self._schedule_auction_timeout(result.get("auction"))
             self._auction_broadcast(f"🔨 زايد @{username} بمبلغ {amount} نقطة؛ هذا أعلى سعر حالي. الدور التالي على @{next_turn}.", f"🔨 @{username} bid {amount} points; this is the current high bid. Next turn: @{next_turn}.", rooms=self._auction_participant_rooms(result.get("auction")))
             return True
 
@@ -16569,6 +16955,7 @@ class TalkinBot:
                 return True
             if result.get("status") == "passed":
                 next_turn = result.get("next_turn_username") or ""
+                self._schedule_auction_timeout(result.get("auction"))
                 self._auction_broadcast(f"⏭️ مرّر @{username} دوره؛ الدور التالي على @{next_turn}.", f"⏭️ @{username} passed; next turn: @{next_turn}.", rooms=participant_rooms)
                 return True
             if result.get("auto_closed") or result.get("pending") or result.get("status") in {"sold", "no_bids", "no_sale"}:
@@ -19889,13 +20276,12 @@ class TalkinBot:
                         item_name = auction_item.get("item_name_en") or auction_item.get("item_name_ar") or "Auction prize"
                     else:
                         item_name = auction_item.get("item_name_ar") or auction_item.get("item_name_en") or "جائزة المزاد"
-                    redeem_value = int(auction_item.get("redemption_value", 0) or 0)
                     short_id = str(auction_item.get("id") or "")[:8]
                     if auction_item.get("status") == "redeeming":
-                        status_text = "redemption pending" if language_en else "الاستبدال قيد الاعتماد"
+                        status_text = "redemption pending" if language_en else "الاسترداد قيد الاعتماد"
                         lines.append(f"{number}. {auction_item.get('icon', '💎')} {item_name} — {status_text}")
                     else:
-                        price_text = f"redeem for {redeem_value:,} points" if language_en else f"الاستبدال: {redeem_value:,} نقطة"
+                        price_text = "50/50 chance: authentic +0.75% or counterfeit -1.25%" if language_en else "الاسترداد بالحظ (50/50): أصلية +0.75% أو مغشوشة -1.25%"
                         command_text = f"   Redeem: red auction {short_id}" if language_en else f"   red auction {short_id}"
                         lines.append(f"{number}. {auction_item.get('icon', '💎')} {item_name} — {price_text}")
                         lines.append(command_text)
@@ -19956,15 +20342,19 @@ class TalkinBot:
                     language_en = self._effective_room_language(room) == "en"
                     if language_en:
                         prize_name = prize.get("item_name_en") or prize.get("item_name_ar") or "Auction prize"
+                        result_label = "authentic (+0.75% profit)" if redeemed.get("authentic") else "counterfeit (-1.25% loss)"
                         response = (
                             f"✅ Redeemed {prize.get('icon', '💎')} {prize_name} from the auction.\n"
-                            f"💰 Added {int(redeemed.get('points', 0) or 0):,} points to your balance, including the 1% post-round profit."
+                            f"🎲 Luck result: {result_label}.\n"
+                            f"💰 Added {int(redeemed.get('points', 0) or 0):,} points to your balance."
                         )
                     else:
                         prize_name = prize.get("item_name_ar") or prize.get("item_name_en") or "جائزة المزاد"
+                        result_label = "أصلية (ربح 0.75%)" if redeemed.get("authentic") else "مغشوشة (خسارة 1.25%)"
                         response = (
                             f"✅ استبدلت {prize.get('icon', '💎')} {prize_name} من المزاد.\n"
-                            f"💰 أضيف إلى رصيدك {int(redeemed.get('points', 0) or 0):,} نقطة، متضمنة ربح 1% بعد الجولة."
+                            f"🎲 نتيجة الحظ: القطعة {result_label}.\n"
+                            f"💰 أضيف إلى رصيدك {int(redeemed.get('points', 0) or 0):,} نقطة."
                         )
                     self.send_room_text(room, response)
                 elif redeemed.get("pending"):
@@ -21410,6 +21800,9 @@ class TalkinBot:
         full_list_types = {
             "members_list", "admins_list", "owners_list", "banned_list"
         }
+        if pending.get("bot_role_check"):
+            self.log("[ROOM-ROLE] ignored text preview; waiting for complete server list")
+            return False
         if (pending.get("complete_users") or request_type in full_list_types) and os.getenv(
                 "ALLOW_TEXT_ROOM_LIST_FALLBACK", "0").strip() != "1":
             self.log(
@@ -21473,6 +21866,20 @@ class TalkinBot:
         pending = self._pending_room_lists.pop(_norm_room(source_room), None)
         if not isinstance(pending, dict):
             return False
+
+        if pending.get("bot_role_check"):
+            room_key = _norm_room(source_room)
+            state = getattr(self, "_pending_bot_room_role_checks", {}).get(room_key)
+            if not isinstance(state, dict) or state.get("request_id") != pending.get("request_id"):
+                return False
+            users = self._extract_room_list_users(result)
+            bot_key = _norm_user(BOT_ID)
+            bot_user = next((u for u in users if _norm_user(u.get("username")) == bot_key), None)
+            if bot_user:
+                reported_role = str(bot_user.get("role") or "").casefold().strip().replace(" ", "_")
+                if reported_role not in {"none", "unknown"}:
+                    return self._finish_bot_room_role_check(room_key, reported_role)
+            return self._finish_bot_room_role_check(room_key, missing=True)
 
         # INV roster collection: each category is fetched separately. The
         # response category is authoritative; then the next category is

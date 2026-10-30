@@ -275,3 +275,86 @@ def test_lightweight_room_command_uses_direct_event_path():
     assert bot._dispatch_room_event(result) is True
     assert calls == [result]
     assert not hasattr(bot, "_room_command_executor")
+
+
+def _install_fake_role_check_timers(monkeypatch):
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, interval, function, args=(), kwargs=None):
+            self.interval = interval
+            self.function = function
+            self.args = args
+            self.kwargs = kwargs or {}
+            self.daemon = False
+            self.cancelled = False
+            timers.append(self)
+
+        def start(self):
+            self.started = True
+
+        def cancel(self):
+            self.cancelled = True
+
+    monkeypatch.setattr(bot_module.threading, "Timer", FakeTimer)
+    return timers
+
+
+def test_rank_command_queries_server_and_reports_owner_in_same_room(monkeypatch):
+    timers = _install_fake_role_check_timers(monkeypatch)
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.ws = object()
+    bot._pending_room_lists = {}
+    bot._pending_bot_room_role_checks = {}
+    bot.bot_room_roles = {bot_module._norm_room("Hall"): "member"}
+    queries, messages = [], []
+    bot.send_query = lambda query: queries.append(query) or True
+    bot.send_room_text = lambda room, text: messages.append((room, text)) or True
+    bot.log = lambda *_args: None
+    bot._extract_room_list_users = lambda _result: [{"username": "@TEST-BOT", "role": "owner"}]
+
+    with patch.object(bot_module, "BOT_ID", "test-bot"):
+        assert bot._route_room_game_input("Hall", "Player", "رتبتك") is True
+        pending = bot._pending_room_lists[bot_module._norm_room("Hall")]
+        assert pending["request_type"] == "occupants_list"
+        assert pending["code"] == "bot_role"
+        assert pending["bot_role_check"] is True
+        assert len(queries) == 1 and timers[0].interval == 12.0
+        query_fields = bot_module.decode_message(queries[0])
+        assert bot_module.as_text(query_fields[1][0]) == "room_admin"
+        assert bot_module.as_text(query_fields[2][0]) == "occupants_list"
+        assert bot_module.as_text(query_fields[6][0]) == "Hall"
+        assert bot._complete_pending_room_list({"_occupants_room": "Hall", "users": [{}]})
+
+    assert bot.bot_room_roles[bot_module._norm_room("Hall")] == "owner"
+    assert any(room == "Hall" and "أونر (Owner)" in text and "الخادم" in text for room, text in messages)
+    assert not bot._pending_room_lists
+    assert not bot._pending_bot_room_role_checks
+    assert timers[0].cancelled
+
+
+def test_rank_command_sends_one_server_request_and_uses_only_the_bot_entry(monkeypatch):
+    _install_fake_role_check_timers(monkeypatch)
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.ws = object()
+    bot._pending_room_lists = {}
+    bot._pending_bot_room_role_checks = {}
+    bot.bot_room_roles = {}
+    queries, messages = [], []
+    bot.send_query = lambda query: queries.append(query) or True
+    bot.send_room_text = lambda room, text: messages.append((room, text)) or True
+    bot.log = lambda *_args: None
+    bot._extract_room_list_users = lambda _result: [
+        {"username": "OtherUser", "role": "owner"},
+        {"username": "TalkinBot", "role": "member"},
+    ]
+
+    with patch.object(bot_module, "BOT_ID", "TalkinBot"):
+        assert bot._handle_bot_room_role_command("BlueBird", "Player", "رتبتك")
+        pending = bot._pending_room_lists[bot_module._norm_room("BlueBird")]
+        assert pending["request_type"] == "occupants_list"
+        assert bot._complete_pending_room_list({"_occupants_room": "BlueBird", "users": [{}]})
+
+    assert len(queries) == 1
+    assert bot.bot_room_roles[bot_module._norm_room("BlueBird")] == "member"
+    assert any("عضو (Member)" in text for _room, text in messages)
