@@ -15029,66 +15029,31 @@ class TalkinBot:
                                                          if target.casefold() != room_name.casefold()]
                     else:
                         target_rooms = [str(room or "").strip()] if str(room or "").strip() else []
-                    pending_rooms = list(target_rooms)
-                    first_success_info = None
-                    for candidate in fast_sources:
-                        candidate_url = str(candidate.get("url") or "").strip()
-                        if not candidate_url or candidate_url in attempted_urls or not pending_rooms:
-                            continue
-                        attempted_urls.add(candidate_url)
-                        set_source(candidate)
-                        accepted_rooms = []
-                        for target_room in pending_rooms:
-                            try:
-                                sent = self.send_room_media(target_room, url, "audio", duration)
-                                if sent is False:
-                                    raise RuntimeError("Talkin لم يقبل حزمة الصوت")
-                                accepted_rooms.append(target_room)
-                            except Exception as exc:
-                                self.log("[MUSIC] source playback rejected:", candidate.get("source"),
-                                         target_room, repr(exc))
-                        if accepted_rooms:
-                            if first_success_info is None:
-                                first_success_info = dict(candidate)
-                            published_rooms.extend(accepted_rooms)
-                            pending_rooms = [target for target in pending_rooms if target not in accepted_rooms]
-                            self.log("[MUSIC] selected measured source:", candidate.get("source"),
-                                     "latency=", candidate.get("resolver_latency_seconds"),
-                                     "rooms=", len(accepted_rooms))
-                    if pending_rooms:
-                        if not public_base:
-                            raise RuntimeError("لا يوجد رابط عام قصير وآمن للصوت؛ اضبط PUBLIC_MEDIA_URL أو PUBLIC_BASE_URL أو رابط النطاق العام للاستضافة")
-                        downloaded_info, downloaded_path = self._music_download(search_query)
-                        downloaded_path = Path(downloaded_path)
-                        downloaded_url = public_base.rstrip("/") + "/media/" + downloaded_path.name
-                        downloaded_duration = int((downloaded_info or {}).get("duration") or 0)
-                        accepted_download_rooms = []
-                        for target_room in pending_rooms:
-                            try:
-                                sent = self.send_room_media(target_room, downloaded_url, "audio", downloaded_duration)
-                                if sent is False:
-                                    raise RuntimeError("Talkin لم يقبل حزمة الصوت الاحتياطية")
-                                accepted_download_rooms.append(target_room)
-                            except Exception as exc:
-                                self.log("[MUSIC] downloaded fallback rejected:", target_room, repr(exc))
-                        if accepted_download_rooms:
-                            if first_success_info is None:
-                                first_success_info = dict(downloaded_info or {})
-                                info = dict(downloaded_info or {})
-                                path = downloaded_path
-                                url = downloaded_url
-                                duration = downloaded_duration
-                                title = str(info.get("title") or search_query)
-                                artist = str(info.get("uploader") or info.get("channel") or "YouTube")
-                            published_rooms.extend(accepted_download_rooms)
-                            pending_rooms = [target for target in pending_rooms if target not in accepted_download_rooms]
-                    if pending_rooms and not published_rooms:
-                        raise RuntimeError("تعذر إرسال الصوت إلى أي غرفة متصلة")
-                    if pending_rooms:
-                        self.log("[MUSIC] audio reached some rooms; fallback failed for remaining rooms:", pending_rooms)
-                    if first_success_info is not None and info is None:
-                        set_source(first_success_info)
-                    music_published = bool(published_rooms)
+                    if not target_rooms:
+                        raise RuntimeError("لا توجد غرفة مستهدفة لإرسال الأغنية")
+                    if not public_base:
+                        raise RuntimeError("لا يوجد رابط عام للصوت؛ اضبط PUBLIC_MEDIA_URL مع المنفذ العام الصحيح")
+                    # Room clients may accept an external stream URL packet yet
+                    # fail to fetch/play that provider URL. Host a normalized
+                    # MP3 on our own media server for reliable room playback.
+                    downloaded_info, downloaded_path = self._music_download(search_query)
+                    info = dict(downloaded_info or {})
+                    path = Path(downloaded_path)
+                    if not path.is_file() or path.stat().st_size <= 4096:
+                        raise RuntimeError("ملف MP3 المحلي غير موجود أو غير مكتمل")
+                    set_source(info, path)
+                    self._verify_public_media_url(url, media_kind="audio")
+                    for target_room in target_rooms:
+                        try:
+                            sent = self.send_room_media(target_room, url, "audio", duration)
+                            if sent is False:
+                                raise RuntimeError("Talkin لم يقبل حزمة MP3 المستضافة")
+                            published_rooms.append(target_room)
+                        except Exception as exc:
+                            self.log("[MUSIC] hosted MP3 rejected:", target_room, repr(exc))
+                    if not published_rooms:
+                        raise RuntimeError("تعذر إرسال MP3 المستضاف إلى أي غرفة متصلة")
+                    music_published = True
 
                 self.music_current[_norm_user(requester)] = {
                     "requester": requester, "title": title, "artist": artist,

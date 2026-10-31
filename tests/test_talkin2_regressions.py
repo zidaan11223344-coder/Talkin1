@@ -19,6 +19,15 @@ from cricket_integration import CricketIntegration
 from cricket_result import render_result_image
 
 
+def _create_test_mp3(testcase):
+    handle = tempfile.NamedTemporaryFile(prefix="talkin-test-", suffix=".mp3", delete=False)
+    handle.write(b"ID3" + bytes(8192))
+    handle.close()
+    path = Path(handle.name)
+    testcase.addCleanup(lambda: path.unlink(missing_ok=True))
+    return path
+
+
 class ProjectEnvironmentTests(unittest.TestCase):
     def test_platform_then_dotenv_then_example_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2329,19 +2338,19 @@ class BotGameAndMusicRegressions(unittest.TestCase):
                 )
                 self.assertLessEqual(len(packet), 1008, f"help page={page} part={idx + 1}")
 
-    def test_normal_song_request_sends_audio_before_caption_without_full_download(self):
+    def test_normal_song_request_sends_hosted_mp3_before_caption(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
         bot.music_last = {}
         bot.music_current = {}
         bot.reaction_targets = {}
+        local_mp3 = _create_test_mp3(self)
         sent = []
         bot.send_room_text = lambda room, text: sent.append(("text", room, text))
         bot.send_room_media = lambda room, url, kind, duration=0: sent.append(("media", room, url, kind, duration)) or True
-        bot._audius_live_source = lambda _query: {
-            "url": "https://cdn.example/track.mp3", "duration": 42,
-            "title": "Fast Track", "uploader": "Artist",
-        }
-        bot._music_download = lambda _query: (_ for _ in ()).throw(AssertionError("full download should not be used"))
+        bot._music_download = lambda _query: ({
+            "duration": 42, "title": "Fast Track", "uploader": "Artist",
+        }, local_mp3)
+        bot._verify_public_media_url = lambda _url, media_kind="image": True
         bot._active_rooms = lambda: ["Room A", "Room B"]
         bot.connected_rooms = {"Room A", "Room B"}
         bot.log = lambda *_args: None
@@ -2364,22 +2373,28 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         media_index = next(i for i, item in enumerate(sent) if item[0] == "media")
         caption_index = next(i for i, item in enumerate(sent) if item[0] == "text" and "تم تشغيل الأغنية" in item[2])
         self.assertLess(media_index, caption_index)
-        self.assertEqual(sent[media_index][1:4], ("Room A", "https://cdn.example/track.mp3", "audio"))
+        self.assertEqual(
+            sent[media_index][1:4],
+            ("Room A", f"https://bot.example/media/{local_mp3.name}", "audio"),
+        )
 
-    def test_normal_song_uses_direct_audio_before_full_download(self):
+    def test_normal_song_uses_hosted_mp3_even_if_direct_source_exists(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
         bot.music_last = {}
         bot.music_current = {}
         bot.reaction_targets = {}
+        local_mp3 = _create_test_mp3(self)
         sent = []
         bot.send_room_text = lambda room, text: sent.append(("text", room, text))
         bot.send_room_media = lambda room, url, kind, duration=0: sent.append(("media", room, url, kind, duration)) or True
-        bot._audius_live_source = lambda _query: None
-        bot._music_live_source = lambda query: {
+        bot._music_fast_sources = lambda _query: iter([{
             "url": "https://cdn.example/direct.mp3", "duration": 35,
-            "title": query, "uploader": "Direct source",
-        }
-        bot._music_download = lambda _query: (_ for _ in ()).throw(AssertionError("full download should be fallback only"))
+            "title": "Fast Song", "source": "Direct source",
+        }])
+        bot._music_download = lambda query: ({
+            "duration": 35, "title": query, "uploader": "Direct source",
+        }, local_mp3)
+        bot._verify_public_media_url = lambda _url, media_kind="image": True
         bot.log = lambda *_args: None
         bot.report_master_error = lambda *_args: None
 
@@ -2394,7 +2409,10 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         ), patch.object(bot_module.threading, "Thread", ImmediateThread):
             self.assertTrue(bot.handle_music_command("Hall", ".sa Fast Song", "Tester", with_reactions=False))
 
-        self.assertTrue(any(item[0] == "media" and item[2] == "https://cdn.example/direct.mp3" for item in sent))
+        self.assertTrue(any(
+            item[0] == "media" and item[2] == f"https://bot.example/media/{local_mp3.name}"
+            for item in sent
+        ))
 
     def test_music_fast_source_uses_first_ready_resolver(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
@@ -2421,11 +2439,12 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         self.assertIn("direct", bot._music_source_latency_ewma)
         self.assertIn("Audius", bot._music_source_latency_ewma)
 
-    def test_normal_music_uses_next_fast_source_if_first_media_send_is_rejected(self):
+    def test_normal_music_ignores_external_fast_sources_and_uses_hosted_mp3(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
         bot.music_last = {}
         bot.music_current = {}
         bot.reaction_targets = {}
+        local_mp3 = _create_test_mp3(self)
         candidates = [
             {"url": "https://cdn.example/first.mp3", "title": "Song", "duration": 30, "source": "first"},
             {"url": "https://cdn.example/second.mp3", "title": "Song", "duration": 30, "source": "second"},
@@ -2435,8 +2454,10 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         bot.send_room_text = lambda room, text: sent.append(("text", room, text))
         def send_media(room, url, kind, duration=0):
             sent.append(("media", room, url, kind, duration))
-            return url.endswith("second.mp3")
+            return True
         bot.send_room_media = send_media
+        bot._music_download = lambda query: ({"title": query, "duration": 30}, local_mp3)
+        bot._verify_public_media_url = lambda _url, media_kind="image": True
         bot.log = lambda *_args: None
         bot.report_master_error = lambda *_args: None
 
@@ -2454,8 +2475,9 @@ class BotGameAndMusicRegressions(unittest.TestCase):
             self.assertTrue(bot.handle_music_command("Hall", ".sa Fast Song", "Tester", with_reactions=False))
 
         media_urls = [item[2] for item in sent if item[0] == "media"]
-        self.assertEqual(media_urls, ["https://cdn.example/first.mp3", "https://cdn.example/second.mp3"])
-        self.assertEqual(bot.music_current[bot_module._norm_user("Tester")]["url"], "https://cdn.example/second.mp3")
+        expected_url = f"https://bot.example/media/{local_mp3.name}"
+        self.assertEqual(media_urls, [expected_url])
+        self.assertEqual(bot.music_current[bot_module._norm_user("Tester")]["url"], expected_url)
 
     def test_live_music_moves_to_next_source_when_fastest_cannot_start(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
@@ -2509,20 +2531,22 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         self.assertEqual(result, fallback)
         self.assertEqual(calls, [("song artist", {"https://cdn.example/failed.mp3"})])
 
-    def test_spotify_link_is_resolved_before_playable_source_search(self):
+    def test_spotify_link_is_resolved_before_hosted_mp3_download(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
         bot.music_last = {}
         bot.music_current = {}
         bot.reaction_targets = {}
-        searched, sent = [], []
+        local_mp3 = _create_test_mp3(self)
+        downloaded, sent = [], []
         bot.send_room_text = lambda room, text: sent.append(("text", room, text))
         bot.send_room_media = lambda room, url, kind, duration=0: sent.append(("media", room, url, kind, duration)) or True
-        bot._audius_live_source = lambda query: (
-            searched.append(query) or {
-                "url": "https://cdn.example/spotify-match.mp3", "duration": 30,
-                "title": "Never Gonna Give You Up", "uploader": "Artist",
-            }
-        )
+        def download(query):
+            downloaded.append(query)
+            return {
+                "duration": 30, "title": "Never Gonna Give You Up", "uploader": "Artist",
+            }, local_mp3
+        bot._music_download = download
+        bot._verify_public_media_url = lambda _url, media_kind="image": True
         bot.log = lambda *_args: None
         bot.report_master_error = lambda *_args: None
 
@@ -2542,8 +2566,11 @@ class BotGameAndMusicRegressions(unittest.TestCase):
                 "Hall", ".sa https://open.spotify.com/track/example", "Tester", with_reactions=False,
             ))
 
-        self.assertEqual(searched, ["Never Gonna Give You Up Rick Astley"])
-        self.assertTrue(any(item[0] == "media" and item[2] == "https://cdn.example/spotify-match.mp3" for item in sent))
+        self.assertEqual(downloaded, ["Never Gonna Give You Up Rick Astley"])
+        self.assertTrue(any(
+            item[0] == "media" and item[2] == f"https://bot.example/media/{local_mp3.name}"
+            for item in sent
+        ))
 
     def test_spotify_oembed_resolves_track_title_and_artist_without_api_credentials(self):
         response = type("Response", (), {
@@ -2746,14 +2773,14 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         bot.music_last = {}
         bot.music_current = {}
         bot.reaction_targets = {}
+        local_mp3 = _create_test_mp3(self)
         sent = []
         bot.send_room_text = lambda room, text: sent.append(("text", room, text))
         bot.send_room_media = lambda room, url, kind, duration=0: sent.append(("media", room, url, kind, duration)) or True
-        bot._audius_live_source = lambda _query: {
-            "url": "https://cdn.example/track.mp3", "duration": 42,
-            "title": "Fast Track", "uploader": "Artist",
-        }
-        bot._music_download = lambda _query: (_ for _ in ()).throw(AssertionError("full download should not be used"))
+        bot._music_download = lambda query: ({
+            "duration": 42, "title": query, "uploader": "Artist",
+        }, local_mp3)
+        bot._verify_public_media_url = lambda _url, media_kind="image": True
         bot._active_rooms = lambda: ["Room A", "Room B", "Room C"]
         bot.log = lambda *_args: None
         bot.report_master_error = lambda *_args: None
@@ -2774,6 +2801,8 @@ class BotGameAndMusicRegressions(unittest.TestCase):
 
         media_rooms = [item[1] for item in sent if item[0] == "media"]
         self.assertEqual(media_rooms, ["Room A", "Room B", "Room C"])
+        media_urls = [item[2] for item in sent if item[0] == "media"]
+        self.assertEqual(media_urls, [f"https://bot.example/media/{local_mp3.name}"] * 3)
         last_media = max(i for i, item in enumerate(sent) if item[0] == "media")
         first_caption = min(i for i, item in enumerate(sent) if item[0] == "text" and "تم تشغيل الأغنية" in item[2])
         self.assertLess(last_media, first_caption)
