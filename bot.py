@@ -6546,7 +6546,7 @@ def render_gift_card(gift_id, sender_name, receiver_name, sender_photo_url="", r
     # artificial 95KB cap here because that cap was the reason the card was
     # being compressed too aggressively and losing visible detail.
     for quality in (94, 92, 90, 88, 86, 84, 82):
-        rgb.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        rgb.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
         if out.stat().st_size <= 180 * 1024:
             break
 
@@ -6616,7 +6616,7 @@ def render_billion_card(winner_name, winner_photo_url=""):
         pass
     out = out_dir / f"billion_{uuid.uuid4().hex}.jpg"
     for quality in (92, 88, 84, 80, 76):
-        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
         if out.stat().st_size <= 300 * 1024:
             break
     return out
@@ -6697,7 +6697,7 @@ def render_money_game_winner_card(game_key, winner_name, winner_photo_url="", la
         pass
     out = out_dir / f"{game_key}_winner_{uuid.uuid4().hex}.jpg"
     for quality in (92, 88, 84, 80, 76):
-        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
         if out.stat().st_size <= 300 * 1024:
             break
     return out
@@ -6865,7 +6865,7 @@ def render_rare_diamond_winner_card(winner_name, winner_photo_url="", source_pat
         pass
     out = out_dir / f"rare_diamond_winner_{uuid.uuid4().hex}.jpg"
     for quality in (92, 88, 84, 80, 76):
-        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
         if out.stat().st_size <= 300 * 1024:
             break
     return out
@@ -6981,14 +6981,14 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
     if hunt_card:
         max_bytes = 50 * 1024
         for quality in (86, 80, 74, 68, 62, 56, 50, 44):
-            image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+            image.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
             if out.stat().st_size <= max_bytes:
                 break
         if out.stat().st_size > max_bytes:
             for width in (720, 640, 560, 480, 400, 320):
                 resized = image.resize((width, max(1, round(width * image.height / image.width))), Image.Resampling.LANCZOS)
                 for quality in (70, 62, 54, 46, 38):
-                    resized.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+                    resized.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
                     if out.stat().st_size <= max_bytes:
                         break
                 if out.stat().st_size <= max_bytes:
@@ -6998,7 +6998,7 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
             raise RuntimeError("Dragon Hunt winner card could not be compressed below 50KB")
     else:
         for quality in (94, 92, 90, 88, 86, 84, 82):
-            image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+            image.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
             if out.stat().st_size <= 300 * 1024:
                 break
     return out
@@ -7072,7 +7072,7 @@ def render_publish_card(source_url, publisher_name, publisher_photo_url=""):
     except Exception: pass
     out = out_dir / f"publish_{uuid.uuid4().hex}.jpg"
     for quality in (92,88,84,80,76):
-        image.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        image.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
         if out.stat().st_size <= 350 * 1024: break
     return out
 
@@ -7458,7 +7458,7 @@ def render_explore_card(text, username, photo_url=""):
     out_dir = BASE_DIR / "generated_publish"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"explore_{uuid.uuid4().hex}.jpg"
-    image.save(out, "JPEG", quality=91, optimize=True, progressive=True)
+    image.save(out, "JPEG", quality=91, optimize=True, progressive=False)
     return out
 
 # ============================================================
@@ -7630,7 +7630,7 @@ def _download_lookalike_image(image_url, target_name):
             img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))), Image.LANCZOS)
         out = LOOKALIKE_DIR / f"look_{uuid.uuid4().hex}.jpg"
         for quality in (92, 88, 84, 80, 76, 72):
-            img.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+            img.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
             if out.stat().st_size <= 220 * 1024:
                 break
         return out if out.is_file() else None
@@ -25377,7 +25377,7 @@ class TalkinBot:
             _draw_centered(draw, (width / 2, photo_h + 310), f"Room / الغرفة: {room}", 29, (230, 230, 238), width - 80)
             generated = GENERATED_GIFTS_DIR / f"usergift_{uuid.uuid4().hex}.jpg"
             generated.parent.mkdir(parents=True, exist_ok=True)
-            card.save(generated, "JPEG", quality=90, optimize=True, progressive=True)
+            card.save(generated, "JPEG", quality=90, optimize=True, progressive=False)
             media = f"{base.rstrip('/')}/gifts/{generated.name}"
             self._verify_public_media_url(media, "image")
             rooms = list(self._active_rooms())

@@ -47,6 +47,24 @@ class ProjectEnvironmentTests(unittest.TestCase):
             )
 
 
+class GeneratedImageEncodingTests(unittest.TestCase):
+    def test_generated_gift_card_is_a_decodable_baseline_jpeg(self):
+        if not bot_module.PIL_AVAILABLE:
+            self.skipTest("Pillow is unavailable")
+        from PIL import Image
+
+        image_path = Path(bot_module.render_gift_card("2", "Test sender", "Test receiver"))
+        try:
+            with Image.open(image_path) as image:
+                image.load()
+                self.assertEqual(image.format, "JPEG")
+                self.assertFalse(bool(image.info.get("progressive") or image.info.get("progression")))
+                self.assertGreater(image.width, 0)
+                self.assertGreater(image.height, 0)
+        finally:
+            image_path.unlink(missing_ok=True)
+
+
 class PublicMediaUrlConfigTests(unittest.TestCase):
     def test_shared_public_media_url_has_priority_over_legacy_variables(self):
         self.assertEqual(
