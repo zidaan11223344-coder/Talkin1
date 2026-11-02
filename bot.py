@@ -502,6 +502,54 @@ STOCK_MARKET_ASSETS = {
     4: {"icon": "🏞️", "ar": "الأرض", "en": "Land"},
 }
 STOCK_MARKET_MAX_INVESTMENT = 30_000_000_000
+LOAN_AMOUNT = 100_000_000_000
+LOAN_REPAYMENT_PERCENT = 20
+WALLET_MATURITY_SECONDS = 60 * 60
+WALLET_PAGE_SIZE = 10
+WALLET_MIN_INVESTMENT = 100
+WALLET_MAX_INVESTMENT = STOCK_MARKET_MAX_INVESTMENT
+WALLET_MAX_ACTIVE_POSITIONS = 50
+WALLET_HISTORY_LIMIT = 100
+
+# Wallet investments are game-only commodities. Each position uses the amount
+# selected by the player and is automatically sold after one hour at exactly
+# +5% or -5% (50/50 outcome).
+WALLET_ASSETS = {
+    1: {"icon": "🥇", "ar": "الذهب", "en": "Gold", "aliases": ("ذهب", "الذهب", "gold")},
+    2: {"icon": "🥈", "ar": "الفضة", "en": "Silver", "aliases": ("فضة", "الفضة", "فضه", "الفضه", "silver")},
+    3: {"icon": "🛢️", "ar": "النفط", "en": "Oil", "aliases": ("نفط", "النفط", "oil")},
+    4: {"icon": "🏞️", "ar": "الأرض", "en": "Land", "aliases": ("أرض", "ارض", "الأرض", "الارض", "land")},
+    5: {"icon": "💎", "ar": "الماس", "en": "Diamonds", "aliases": ("الماس", "ماس", "diamonds", "diamond")},
+    6: {"icon": "🔩", "ar": "النحاس", "en": "Copper", "aliases": ("النحاس", "نحاس", "copper")},
+    7: {"icon": "⚙️", "ar": "البلاتين", "en": "Platinum", "aliases": ("البلاتين", "بلاتين", "platinum")},
+    8: {"icon": "🌾", "ar": "القمح", "en": "Wheat", "aliases": ("القمح", "قمح", "wheat")},
+    9: {"icon": "☕", "ar": "القهوة", "en": "Coffee", "aliases": ("القهوة", "قهوة", "coffee")},
+    10: {"icon": "🔥", "ar": "الغاز", "en": "Gas", "aliases": ("الغاز", "غاز", "gas")},
+    11: {"icon": "🧵", "ar": "القطن", "en": "Cotton", "aliases": ("القطن", "قطن", "cotton")},
+    12: {"icon": "🍬", "ar": "السكر", "en": "Sugar", "aliases": ("السكر", "سكر", "sugar")},
+    13: {"icon": "🍚", "ar": "الأرز", "en": "Rice", "aliases": ("الأرز", "الارز", "رز", "rice")},
+    14: {"icon": "🚗", "ar": "السيارات", "en": "Cars", "aliases": ("السيارات", "سيارات", "cars", "car")},
+    15: {"icon": "💻", "ar": "التقنية", "en": "Technology", "aliases": ("التقنية", "تقنية", "technology", "tech")},
+    16: {"icon": "🪵", "ar": "الخشب", "en": "Timber", "aliases": ("الخشب", "خشب", "timber", "wood")},
+    17: {"icon": "⚡", "ar": "الطاقة", "en": "Energy", "aliases": ("الطاقة", "طاقة", "energy")},
+    18: {"icon": "🏠", "ar": "العقار", "en": "Property", "aliases": ("العقار", "عقار", "property", "real estate")},
+    19: {"icon": "🖼️", "ar": "الفن", "en": "Art", "aliases": ("الفن", "فن", "art")},
+    20: {"icon": "₿", "ar": "العملات الرقمية", "en": "Crypto", "aliases": ("العملات الرقمية", "كريبتو", "crypto", "bitcoin")},
+}
+
+
+def _wallet_asset_key(value):
+    value = str(value or "").strip().casefold()
+    return (value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+            .replace("ة", "ه"))
+
+
+WALLET_ASSET_LOOKUP = {
+    _wallet_asset_key(alias): asset_id
+    for asset_id, asset in WALLET_ASSETS.items()
+    for alias in (str(asset_id), asset["ar"], asset["en"], *asset["aliases"])
+}
+
 
 def _parse_compact_amount(value):
     """Convert plain/compact amounts, including compounds such as 10m10b."""
@@ -549,6 +597,21 @@ def _parse_stock_market_order(text):
         amount = _parse_compact_amount(match.group(2))
         return (int(match.group(1)), amount) if amount is not None else None
     return None
+
+
+def _parse_wallet_purchase(text):
+    """Parse explicit wallet orders: شراء ذهب 30b / buy gold 30b."""
+    value = str(text or "").strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    match = re.fullmatch(
+        r"(?:شراء|اشتر|اشتري|أشتري|buy)\s+(.+?)\s+([0-9][0-9,]*(?:\.[0-9]+)?[kmb]?)",
+        value, re.I,
+    )
+    if not match:
+        return None
+    asset_token = _wallet_asset_key(match.group(1))
+    asset_id = WALLET_ASSET_LOOKUP.get(asset_token)
+    amount = _parse_compact_amount(match.group(2))
+    return (asset_id, amount) if asset_id is not None and amount is not None else None
 
 
 def _normalize_game_command_text(text):
@@ -3112,7 +3175,7 @@ def _looks_like_bot_command(text):
         ".u", "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق",
         "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
+        "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
         ".دخول غرفي", "دخول غرفي", "دخولغرفي", "my rooms", "start verification", "stop verification", "تشغيل التوثيق", "إيقاف التوثيق", "ايقاف التوثيق",
     )
@@ -3121,6 +3184,7 @@ def _looks_like_bot_command(text):
         "ذهب ", "الذهب ", "فضة ", "الفضة ", "فضه ", "الفضه ",
         "نفط ", "النفط ", "أرض ", "ارض ", "الأرض ", "الارض ",
         "gold ", "silver ", "oil ", "land ",
+        "شراء ", "اشتر ", "اشتري ", "أشتري ", "buy ",
         "سجل التحويل", "سجل تحويلاتي", "سجل المليار", "سجل مليار", "سجل المليون", "سجل مليون",
         "transfer history", "transfer log", "billion record", "billion history", "million record", "million history",
         "top b", "topb", "top m", "topm",
@@ -4084,11 +4148,32 @@ class PointsPersistenceError(RuntimeError):
     """Raised when a points mutation cannot be durably stored."""
 
 
-def _add_points(username, amount):
+def _apply_loan_repayment(account, reward_basis):
+    """Withhold 20% of eligible winnings, preserving fractional points as carry."""
+    try:
+        debt = max(0, int(account.get("loan_debt", 0) or 0))
+        basis = max(0, int(reward_basis or 0))
+        carry = max(0, min(99, int(account.get("loan_repay_carry", 0) or 0)))
+    except (TypeError, ValueError):
+        debt, basis, carry = 0, 0, 0
+    if debt <= 0:
+        account["loan_debt"] = 0
+        account["loan_repay_carry"] = 0
+        return 0
+    if basis <= 0:
+        return 0
+    numerator = basis * LOAN_REPAYMENT_PERCENT + carry
+    repayment = min(debt, numerator // 100)
+    account["loan_debt"] = debt - repayment
+    account["loan_repay_carry"] = 0 if repayment >= debt else numerator % 100
+    return repayment
+
+
+def _add_points(username, amount, *, repay_loan=False, loan_repayment_basis=None, return_details=False):
     amount = int(amount)
     display_name = str(username or "").strip().lstrip("@")
     if not _norm_user(display_name):
-        return 0
+        return {"balance": 0, "loan_repayment": 0, "loan_debt": 0} if return_details else 0
 
     def update(accounts, _history):
         resolved = _resolve_points_account(accounts, display_name)
@@ -4103,10 +4188,18 @@ def _add_points(username, amount):
         old_balance = _points_balance(item)
         if amount < 0 and old_balance < -amount:
             raise PointsInsufficientError("Insufficient points for this game debit")
+        repayment = 0
+        if repay_loan and amount > 0:
+            basis = amount if loan_repayment_basis is None else loan_repayment_basis
+            repayment = _apply_loan_repayment(item, basis)
         item["username"] = _preferred_display_name(item.get("username"), display_name)
-        item["points"] = old_balance + amount
+        item["points"] = old_balance + amount - repayment
         accounts[key] = item
-        return item["points"], True
+        result = {
+            "balance": item["points"], "gross_amount": amount,
+            "loan_repayment": repayment, "loan_debt": max(0, int(item.get("loan_debt", 0) or 0)),
+        }
+        return (result if return_details else item["points"]), True
 
     try:
         return _mutate_points_state(update)
@@ -4116,7 +4209,10 @@ def _add_points(username, amount):
         raise PointsPersistenceError("Could not persist points mutation") from exc
 
 
-def _apply_points_delta_once(username, delta, transaction_id, reason):
+def _apply_points_delta_once(
+    username, delta, transaction_id, reason, *, repay_loan=False, loan_repayment_basis=None,
+    stock_market_investment=None,
+):
     """Atomically apply one idempotent game debit/credit and audit it."""
     try:
         delta = int(delta)
@@ -4128,10 +4224,16 @@ def _apply_points_delta_once(username, delta, transaction_id, reason):
         return {"ok": False, "error": "invalid_transaction"}
 
     def update(accounts, history):
-        if any(isinstance(row, dict) and str(row.get("id") or "") == txid for row in history):
+        existing_row = next((row for row in history
+                             if isinstance(row, dict) and str(row.get("id") or "") == txid), None)
+        if existing_row is not None:
+            changed = False
+            if stock_market_investment and not existing_row.get("stock_market_investment"):
+                existing_row["stock_market_investment"] = copy.deepcopy(stock_market_investment)
+                changed = True
             existing = _resolve_points_account(accounts, display_name)
             return {"ok": True, "already_applied": True,
-                    "balance": _points_balance(existing[1]) if existing else 0}, False
+                    "balance": _points_balance(existing[1]) if existing else 0}, changed
         resolved = _resolve_points_account(accounts, display_name)
         if not resolved:
             if delta < 0:
@@ -4144,12 +4246,17 @@ def _apply_points_delta_once(username, delta, transaction_id, reason):
         old_balance = _points_balance(item)
         if delta < 0 and old_balance < -delta:
             return {"ok": False, "error": "insufficient", "balance": old_balance}, False
-        new_balance = old_balance + delta
+        repayment = 0
+        if repay_loan and delta > 0:
+            basis = delta if loan_repayment_basis is None else loan_repayment_basis
+            repayment = _apply_loan_repayment(item, basis)
+        credited_delta = delta - repayment
+        new_balance = old_balance + credited_delta
         item["username"] = _preferred_display_name(item.get("username"), display_name)
         item["points"] = new_balance
         accounts[key] = item
         positive = delta > 0
-        history.append({
+        audit_row = {
             "id": txid, "timestamp": int(time.time()),
             "sender": (
                 "wager_refund" if positive and str(reason or "").casefold().startswith("refund expired")
@@ -4158,17 +4265,228 @@ def _apply_points_delta_once(username, delta, transaction_id, reason):
             "sender_key": "" if positive else key,
             "recipient": item["username"] if positive else "stock_market",
             "recipient_key": key if positive else "",
-            "amount": abs(delta), "sender_balance_after": None if positive else new_balance,
+            "amount": abs(credited_delta), "gross_amount": abs(delta),
+            "loan_repayment": repayment,
+            "sender_balance_after": None if positive else new_balance,
             "recipient_balance_after": new_balance if positive else None,
             "reason": str(reason or "stock_market"),
-        })
+        }
+        if stock_market_investment:
+            audit_row["stock_market_investment"] = copy.deepcopy(stock_market_investment)
+        history.append(audit_row)
         del history[:-_POINT_TRANSFER_HISTORY_LIMIT]
-        return {"ok": True, "already_applied": False, "balance": new_balance}, True
+        return {
+            "ok": True, "already_applied": False, "balance": new_balance,
+            "gross_amount": delta, "loan_repayment": repayment,
+            "loan_debt": max(0, int(item.get("loan_debt", 0) or 0)),
+        }, True
 
     try:
         return _mutate_points_state(update)
     except Exception as exc:
         print(f"[POINTS] idempotent game mutation failed: {exc}", flush=True)
+        return {"ok": False, "error": "persistence_failed"}
+
+
+def _request_points_loan(username):
+    """Issue one 100b loan only when balance is below 100b and no debt remains."""
+    display_name = str(username or "").strip().lstrip("@")
+    if not _norm_user(display_name):
+        return {"ok": False, "error": "invalid_user"}
+    now = int(time.time())
+
+    def update(accounts, history):
+        resolved = _resolve_points_account(accounts, display_name)
+        if resolved:
+            key, saved = resolved
+            item = dict(saved)
+        else:
+            key = _norm_user(display_name)
+            item = {"username": display_name, "points": 0}
+        balance = _points_balance(item)
+        debt = max(0, int(item.get("loan_debt", 0) or 0))
+        if debt > 0:
+            return {"ok": False, "error": "outstanding_loan", "balance": balance, "loan_debt": debt}, False
+        if balance >= LOAN_AMOUNT:
+            return {"ok": False, "error": "balance_too_high", "balance": balance, "loan_debt": 0}, False
+        item["username"] = _preferred_display_name(item.get("username"), display_name)
+        item["points"] = balance + LOAN_AMOUNT
+        item["loan_debt"] = LOAN_AMOUNT
+        item["loan_repay_carry"] = 0
+        accounts[key] = item
+        history.append({
+            "id": f"loan-issued:{uuid.uuid4().hex}", "timestamp": now,
+            "sender": "loan_service", "sender_key": "loan_service",
+            "recipient": item["username"], "recipient_key": key,
+            "amount": LOAN_AMOUNT, "reason": "100b points loan issued",
+        })
+        del history[:-_POINT_TRANSFER_HISTORY_LIMIT]
+        return {"ok": True, "balance": item["points"], "loan_debt": LOAN_AMOUNT}, True
+
+    try:
+        return _mutate_points_state(update)
+    except Exception as exc:
+        print(f"[LOAN] issue failed: {exc}", flush=True)
+        return {"ok": False, "error": "persistence_failed"}
+
+
+def _create_wallet_position(username, asset_id, amount, room="", now=None):
+    """Atomically debit the stake and append an hour-maturity wallet position."""
+    try:
+        asset_id, amount = int(asset_id), int(amount)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid_amount"}
+    if asset_id not in WALLET_ASSETS:
+        return {"ok": False, "error": "invalid_asset"}
+    if amount < WALLET_MIN_INVESTMENT or amount > WALLET_MAX_INVESTMENT:
+        return {"ok": False, "error": "amount_out_of_range"}
+    display_name = str(username or "").strip().lstrip("@")
+    if not _norm_user(display_name):
+        return {"ok": False, "error": "invalid_user"}
+    now = time.time() if now is None else float(now)
+    position_id = uuid.uuid4().hex
+    txid = f"wallet-buy:{position_id}"
+
+    def update(accounts, history):
+        if any(isinstance(row, dict) and str(row.get("id") or "") == txid for row in history):
+            resolved = _resolve_points_account(accounts, display_name)
+            return {"ok": True, "already_applied": True,
+                    "balance": _points_balance(resolved[1]) if resolved else 0}, False
+        resolved = _resolve_points_account(accounts, display_name)
+        if not resolved:
+            return {"ok": False, "error": "target_not_found", "balance": 0}, False
+        key, saved = resolved
+        item = dict(saved)
+        balance = _points_balance(item)
+        if balance < amount:
+            return {"ok": False, "error": "insufficient", "balance": balance}, False
+        positions = item.get("wallet_positions", [])
+        positions = [dict(row) for row in positions if isinstance(row, dict)] if isinstance(positions, list) else []
+        if len(positions) >= WALLET_MAX_ACTIVE_POSITIONS:
+            return {"ok": False, "error": "too_many_positions", "balance": balance}, False
+        asset = WALLET_ASSETS[asset_id]
+        position = {
+            "id": position_id, "username": str(item.get("username") or display_name),
+            "asset_id": asset_id, "amount": amount, "room": str(room or ""),
+            "created_at": now, "due_at": now + WALLET_MATURITY_SECONDS,
+        }
+        positions.append(position)
+        item["username"] = _preferred_display_name(item.get("username"), display_name)
+        item["points"] = balance - amount
+        item["wallet_positions"] = positions
+        accounts[key] = item
+        history.append({
+            "id": txid, "timestamp": int(now), "sender": item["username"],
+            "sender_key": key, "recipient": "wallet_investment", "recipient_key": "wallet",
+            "amount": amount, "sender_balance_after": balance - amount,
+            "reason": f"wallet investment in {asset['en']}",
+        })
+        del history[:-_POINT_TRANSFER_HISTORY_LIMIT]
+        return {"ok": True, "position": position, "balance": balance - amount}, True
+
+    try:
+        return _mutate_points_state(update)
+    except Exception as exc:
+        print(f"[WALLET] purchase failed: {exc}", flush=True)
+        return {"ok": False, "error": "persistence_failed"}
+
+
+def _wallet_due_positions(now=None):
+    now = time.time() if now is None else float(now)
+    with _GAME_STATE_LOCK:
+        accounts = copy.deepcopy(_points_data())
+    due = []
+    for key, item in accounts.items():
+        if not isinstance(item, dict):
+            continue
+        username = str(item.get("username") or key or "").strip()
+        for position in item.get("wallet_positions", []) if isinstance(item.get("wallet_positions"), list) else []:
+            if not isinstance(position, dict):
+                continue
+            try:
+                if float(position.get("due_at", 0) or 0) <= now:
+                    due.append((username, str(position.get("id") or "")))
+            except (TypeError, ValueError):
+                continue
+    return [(username, position_id) for username, position_id in due if username and position_id]
+
+
+def _settle_wallet_position(username, position_id, now=None):
+    """Settle a due wallet position and its debt sweep in one points.json transaction."""
+    display_name = str(username or "").strip().lstrip("@")
+    position_id = str(position_id or "").strip()
+    now = time.time() if now is None else float(now)
+    txid = f"wallet-settle:{position_id}"
+    if not _norm_user(display_name) or not position_id:
+        return {"ok": False, "error": "invalid_transaction"}
+
+    def update(accounts, history):
+        resolved = _resolve_points_account(accounts, display_name)
+        if not resolved:
+            return {"ok": False, "error": "target_not_found"}, False
+        key, saved = resolved
+        item = dict(saved)
+        positions = item.get("wallet_positions", [])
+        positions = [dict(row) for row in positions if isinstance(row, dict)] if isinstance(positions, list) else []
+        position = next((row for row in positions if str(row.get("id") or "") == position_id), None)
+        if not position:
+            prior = next((row for row in history if isinstance(row, dict) and row.get("id") == txid), None)
+            if prior:
+                return {"ok": True, "already_applied": True,
+                        "balance": _points_balance(item)}, False
+            return {"ok": False, "error": "position_not_found"}, False
+        try:
+            if float(position.get("due_at", 0) or 0) > now:
+                return {"ok": False, "error": "not_due"}, False
+            principal = int(position.get("amount", 0) or 0)
+            asset_id = int(position.get("asset_id", 0) or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid_position"}, False
+        if principal < WALLET_MIN_INVESTMENT or asset_id not in WALLET_ASSETS:
+            return {"ok": False, "error": "invalid_position"}, False
+        outcome = "profit" if secrets.randbelow(2) else "loss"
+        change = max(1, principal * 5 // 100)
+        payout = principal + change if outcome == "profit" else max(0, principal - change)
+        net_change = payout - principal
+        repayment = _apply_loan_repayment(item, net_change) if outcome == "profit" else 0
+        credited = payout - repayment
+        balance = _points_balance(item)
+        new_balance = balance + credited
+        item["points"] = new_balance
+        item["wallet_positions"] = [row for row in positions if str(row.get("id") or "") != position_id]
+        settled_row = {
+            **position, "status": "settled", "outcome": outcome,
+            "change_percent": 5, "change": change, "payout": payout,
+            "net_change": net_change, "loan_repayment": repayment,
+            "loan_debt": max(0, int(item.get("loan_debt", 0) or 0)),
+            "balance_after": new_balance, "settled_at": now,
+        }
+        wallet_history = item.get("wallet_history", [])
+        wallet_history = [dict(row) for row in wallet_history if isinstance(row, dict)] if isinstance(wallet_history, list) else []
+        wallet_history.append(settled_row)
+        item["wallet_history"] = wallet_history[-WALLET_HISTORY_LIMIT:]
+        accounts[key] = item
+        history.append({
+            "id": txid, "timestamp": int(now), "sender": "wallet_investment",
+            "sender_key": "wallet", "recipient": item["username"], "recipient_key": key,
+            "amount": credited, "gross_amount": payout, "loan_repayment": repayment,
+            "sender_balance_after": None, "recipient_balance_after": new_balance,
+            "reason": f"wallet {outcome} settlement ({WALLET_ASSETS[asset_id]['en']})",
+        })
+        del history[:-_POINT_TRANSFER_HISTORY_LIMIT]
+        return {
+            "ok": True, "settled": True, "username": item["username"],
+            "asset_id": asset_id, "principal": principal, "payout": payout,
+            "net_change": net_change, "outcome": outcome,
+            "loan_repayment": repayment,
+            "loan_debt": max(0, int(item.get("loan_debt", 0) or 0)),
+            "balance": new_balance,
+        }, True
+
+    try:
+        return _mutate_points_state(update)
+    except Exception as exc:
+        print(f"[WALLET] settlement failed for {position_id}: {exc}", flush=True)
         return {"ok": False, "error": "persistence_failed"}
 
 
@@ -6320,24 +6638,65 @@ def _draw_centered(draw, center, raw_text, size, fill, max_width, *, force_ltr=F
     )
 
 
-def _load_sender_avatar(photo_url, size=190):
-    """Download a sender profile photo and crop it to a circular avatar."""
-    if not photo_url or not photo_url.startswith(("http://", "https://")):
+_PROFILE_PHOTO_CACHE = {}
+_PROFILE_PHOTO_CACHE_LOCK = threading.RLock()
+_PROFILE_PHOTO_CACHE_TTL = 300.0
+_PROFILE_PHOTO_CACHE_MAX = 80
+
+
+def _download_profile_photo(photo_url):
+    """Fetch and decode a profile image once, with sane limits and short caching."""
+    if not PIL_AVAILABLE:
         return None
+    url = str(photo_url or "").strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    if not url.startswith(("http://", "https://")):
+        return None
+    now = time.time()
+    with _PROFILE_PHOTO_CACHE_LOCK:
+        cached = _PROFILE_PHOTO_CACHE.get(url)
+        if cached and now - cached[0] < _PROFILE_PHOTO_CACHE_TTL:
+            return cached[1].copy()
+        if cached:
+            _PROFILE_PHOTO_CACHE.pop(url, None)
     try:
-        r = requests.get(photo_url, headers={"User-Agent":"TalkinBot/22"}, timeout=3)
-        if r.status_code != 200 or not r.content:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; TalkinBot/23)",
+                     "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"},
+            timeout=(8, 15), allow_redirects=True,
+        )
+        content = getattr(response, "content", b"") or b""
+        if int(getattr(response, "status_code", 0) or 0) != 200 or not content or len(content) > 8 * 1024 * 1024:
             return None
         from io import BytesIO
-        av = Image.open(BytesIO(r.content)).convert("RGB")
-        av = _fit_crop(av, (size,size)).convert("RGBA")
-        mask = Image.new("L", (size,size), 0)
-        md = ImageDraw.Draw(mask)
-        md.ellipse((2,2,size-2,size-2), fill=255)
-        out = Image.new("RGBA", (size,size), (0,0,0,0))
-        out.paste(av, (0,0), mask)
-        ring = ImageDraw.Draw(out)
-        ring.ellipse((2,2,size-2,size-2), outline=(248,202,91,255), width=7)
+        with Image.open(BytesIO(content)) as source:
+            if source.width <= 0 or source.height <= 0 or source.width * source.height > 20_000_000:
+                return None
+            source.load()
+            image = source.convert("RGB")
+        with _PROFILE_PHOTO_CACHE_LOCK:
+            _PROFILE_PHOTO_CACHE[url] = (now, image.copy())
+            while len(_PROFILE_PHOTO_CACHE) > _PROFILE_PHOTO_CACHE_MAX:
+                _PROFILE_PHOTO_CACHE.pop(next(iter(_PROFILE_PHOTO_CACHE)))
+        return image
+    except Exception:
+        return None
+
+
+def _load_sender_avatar(photo_url, size=190):
+    """Download a sender profile photo and crop it to a circular avatar."""
+    av = _download_profile_photo(photo_url)
+    if av is None:
+        return None
+    try:
+        av = _fit_crop(av, (size, size)).convert("RGBA")
+        mask = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(mask).ellipse((2, 2, size - 2, size - 2), fill=255)
+        out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        out.paste(av, (0, 0), mask)
+        ImageDraw.Draw(out).ellipse((2, 2, size - 2, size - 2), outline=(248, 202, 91, 255), width=7)
         return out
     except Exception:
         return None
@@ -7359,24 +7718,22 @@ def render_explore_card(text, username, photo_url=""):
     image = Image.alpha_composite(image, border_layer)
 
     avatar = None
-    if photo_url and str(photo_url).startswith(("http://", "https://")):
+    source_photo = _download_profile_photo(photo_url)
+    if source_photo is not None:
         try:
-            response = requests.get(photo_url, headers={"User-Agent": "TalkinBot/22", "Accept": "image/*"}, timeout=(3, 6))
-            if response.status_code == 200 and response.content and len(response.content) <= 8 * 1024 * 1024:
-                source_photo = Image.open(io.BytesIO(response.content)).convert("RGB")
-                scale = max(photo_size / source_photo.width, photo_size / source_photo.height)
-                resized = source_photo.resize(
-                    (max(photo_size, int(source_photo.width * scale)),
-                     max(photo_size, int(source_photo.height * scale))),
-                    Image.Resampling.LANCZOS,
-                )
-                crop_left = (resized.width - photo_size) // 2
-                # Favor the upper face slightly so eyes and forehead remain
-                # visible beneath the heart's top cleft.
-                crop_top = int((resized.height - photo_size) * .38)
-                avatar = resized.crop(
-                    (crop_left, crop_top, crop_left + photo_size, crop_top + photo_size)
-                ).convert("RGBA")
+            scale = max(photo_size / source_photo.width, photo_size / source_photo.height)
+            resized = source_photo.resize(
+                (max(photo_size, int(source_photo.width * scale)),
+                 max(photo_size, int(source_photo.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+            crop_left = (resized.width - photo_size) // 2
+            # Favor the upper face slightly so eyes and forehead remain
+            # visible beneath the heart's top cleft.
+            crop_top = int((resized.height - photo_size) * .38)
+            avatar = resized.crop(
+                (crop_left, crop_top, crop_left + photo_size, crop_top + photo_size)
+            ).convert("RGBA")
         except Exception:
             avatar = None
     if avatar is None:
@@ -8441,6 +8798,7 @@ class TalkinBot:
             row for row in saved_stock_rows
             if isinstance(row, dict) and row.get("id") and row.get("username")
         ] if isinstance(saved_stock_rows, list) else []
+        self._recover_stock_market_investments_from_points_history()
         # Global wager queues, crop timers, and fruit-match state. A wager
         # reserves points immediately, so it must survive a process restart.
         self.wager_waiting = self._load_wager_state()
@@ -8477,6 +8835,7 @@ class TalkinBot:
         self._load_social_features()
         self._load_departure_replies()
         threading.Thread(target=self._crop_worker, name="crop-worker", daemon=True).start()
+        threading.Thread(target=self._wallet_settlement_worker, name="wallet-settlement-worker", daemon=True).start()
         if not MASTER_SERVICE_ENABLED:
             threading.Thread(target=self._fishing_event_worker, name="fishing-event-worker", daemon=True).start()
             threading.Thread(target=self._stock_market_worker, name="stock-market-worker", daemon=True).start()
@@ -13923,31 +14282,33 @@ class TalkinBot:
         if not isinstance(item, dict):
             return []
 
-        # APK UserItem schema observed in the app:
-        # 1 username, 2 user_id, 3 photo, 4 status, 5 online, 6 role.
-        # A wrapper such as {1:"admins_list"} is NOT a UserItem, so require
-        # at least one identity/metadata field in addition to username.
-        vals1=item.get(1)
-        username=""
-        if isinstance(vals1, list):
-            username=as_text(vals1[0]).strip() if vals1 else ""
-        elif vals1 is not None:
-            username=as_text(vals1).strip()
-        if username.startswith("@"): username=username[1:]
+        # APK UserItem schema: 1 username, 2 user_id, 3 photo, 4 status,
+        # 5 online, 6 role. Some gateways convert protobuf numeric keys to
+        # strings, while others return ordinary username/photo_url objects.
+        def field(number, *aliases):
+            for key in (number, str(number), *aliases):
+                if key in item and item.get(key) is not None:
+                    value = item.get(key)
+                    if isinstance(value, list):
+                        value = value[0] if value else ""
+                    return as_text(value).strip()
+            return ""
 
-        has_metadata = any(k in item for k in (2,3,4,5,6))
-        if username and (has_metadata or set(item.keys()).issubset({1})):
-            def txt(n):
-                v=item.get(n, "")
-                if isinstance(v, list): v=v[0] if v else ""
-                return as_text(v).strip()
+        username = field(1, "username", "user_name", "nick", "name").lstrip("@")
+        photo = field(3, "photo", "photo_url", "profile_photo", "profile_photo_url",
+                      "avatar", "avatar_url", "profile_picture", "profile_picture_url",
+                      "image", "image_url", "picture")
+        status = field(4, "status", "signature")
+        user_id = field(2, "user_id", "uid", "id")
+        role = field(6, "role", "user_role")
+        online = field(5, "online", "is_online", "is_present")
+        has_metadata = any(k in item or str(k) in item for k in (2, 3, 4, 5, 6))
+        explicit_profile = bool(photo or role or status or user_id or online)
+        if username and (has_metadata or explicit_profile or set(item.keys()).issubset({1, "1"})):
             return [{
-                "username": username,
-                "role": txt(6).lower() or "none",
-                "user_id": txt(2),
-                "photo": txt(3),
-                "status": txt(4),
-                "online": txt(5),
+                "username": username, "role": role.lower() or "none",
+                "user_id": user_id, "photo": photo, "status": status,
+                "online": online,
             }]
 
         # The server may wrap users one level deeper. Walk nested protobuf
@@ -14106,72 +14467,65 @@ class TalkinBot:
             return False
 
     def _cache_user_photos_from_result(self, result):
-        """Cache Talkin profile photo URLs from any occupants/users response."""
+        """Cache Talkin profile URLs using the shared RoomAdmin/UserItem decoder."""
         try:
             if not isinstance(getattr(self, "user_photos", None), dict):
                 self.user_photos = {}
-            for user in (result.get("users") or []):
-                if not isinstance(user, dict):
-                    continue
-                username = str(user.get(1, "") or "").strip()
-                photo = str(user.get(3, "") or "").strip()
-                status = str(user.get(4, "") or "").strip()
-                if username and username.casefold() == BOT_ID.casefold() and status:
-                    with self._profile_status_lock:
-                        self._profile_current_status = status
-                        if status == getattr(self, "_profile_status_pending", ""):
-                            self._profile_status_pending = ""
-                        if self._profile_status_timer is None and not BOT_BASE_STATUS:
-                            self._profile_base_status = status
-                if username and photo and username != BOT_ID and photo.startswith(("http://", "https://")):
-                    self.user_photos[username.casefold()] = photo
-                    self.user_photos[_norm_user(username)] = photo
-            for user in self._users_from_room_admin(result.get("room_admin") or {}):
-                username = str(user.get("username") or "").strip()
+            users = self._extract_room_list_users(result if isinstance(result, dict) else {})
+            for user in users:
+                username = str(user.get("username") or "").strip().lstrip("@")
                 photo = str(user.get("photo") or "").strip()
                 status = str(user.get("status") or "").strip()
-                if username and username.casefold() == BOT_ID.casefold() and status:
+                if username and _norm_user(username) == _norm_user(BOT_ID) and status:
                     with self._profile_status_lock:
                         self._profile_current_status = status
                         if status == getattr(self, "_profile_status_pending", ""):
                             self._profile_status_pending = ""
                         if self._profile_status_timer is None and not BOT_BASE_STATUS:
                             self._profile_base_status = status
-                if username and photo and photo.startswith(("http://", "https://")):
+                if (username and _norm_user(username) != _norm_user(BOT_ID)
+                        and photo.startswith(("http://", "https://"))):
                     self.user_photos[username.casefold()] = photo
                     self.user_photos[_norm_user(username)] = photo
         except Exception as exc:
             self.log("[GIFT] photo cache failed:", repr(exc))
 
     def _lookup_profile_photo(self, username):
-        """Best-effort profile-photo lookup for a gift receiver not in cache."""
+        """Best-effort photo lookup using the exact Talkin username first."""
         raw_username = str(username or "").strip().lstrip("@")
-        username = raw_username.casefold()
-        if not username:
+        normalized = raw_username.casefold()
+        if not normalized:
             return ""
         photos = getattr(self, "user_photos", {})
-        for cache_key in (username, _norm_user(raw_username)):
+        for cache_key in (normalized, _norm_user(raw_username)):
             photo = str(photos.get(cache_key, "") or "").strip() if isinstance(photos, dict) else ""
-            if photo.startswith(("http://", "https://")):
-                return photo
+            if photo.startswith(("http://", "https://", "//")):
+                return "https:" + photo if photo.startswith("//") else photo
         client = getattr(getattr(self, "db", None), "client", None)
         if not client:
             return ""
+        photo_fields = (
+            "photo_url", "photo", "avatar_url", "avatar", "image_url", "picture",
+            "profile_photo", "profile_photo_url", "profile_picture_url",
+        )
         try:
-            response = (client.table("profiles").select("*")
-                        .eq("username", username).limit(1).execute())
-            rows = getattr(response, "data", None) or []
-            if rows:
-                row = rows[0] if isinstance(rows[0], dict) else {}
-                photo = next((str(row.get(key) or "").strip() for key in
-                              ("photo_url", "photo", "avatar_url", "avatar", "image_url")
-                              if str(row.get(key) or "").strip().startswith(("http://", "https://"))), "")
-                if photo:
-                    if not isinstance(getattr(self, "user_photos", None), dict):
-                        self.user_photos = {}
-                    self.user_photos[username] = photo
-                    self.user_photos[_norm_user(raw_username)] = photo
-                    return photo
+            for candidate in dict.fromkeys((raw_username, normalized)):
+                response = (client.table("profiles").select("*")
+                            .eq("username", candidate).limit(1).execute())
+                rows = getattr(response, "data", None) or []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    photo = next((str(row.get(key) or "").strip() for key in photo_fields
+                                  if str(row.get(key) or "").strip().startswith(("http://", "https://", "//"))), "")
+                    if photo:
+                        if photo.startswith("//"):
+                            photo = "https:" + photo
+                        if not isinstance(getattr(self, "user_photos", None), dict):
+                            self.user_photos = {}
+                        self.user_photos[normalized] = photo
+                        self.user_photos[_norm_user(raw_username)] = photo
+                        return photo
         except Exception as exc:
             self.log("[GIFT] receiver photo lookup failed:", repr(exc))
         return ""
@@ -15469,12 +15823,12 @@ class TalkinBot:
         return ok
 
     def _game_award(self, username, amount):
-        # الماستر يلعب مثل أي عضو: المكاسب تُضاف إلى رصيده وتُسجل لعباته.
-        # الاستثناء الوحيد المقصود للماستر موجود في أمر تحويل النقاط sb@،
-        # وليس في الألعاب.
+        # The common reward path atomically diverts 20% to an outstanding loan.
         if not username:
             return 0
-        return _add_points(username, int(amount))
+        result = _add_points(username, int(amount), repay_loan=True, return_details=True)
+        self._notify_loan_repayment(username, result)
+        return int(result.get("balance", 0) or 0) if isinstance(result, dict) else int(result or 0)
 
     def _game_ready(self, username, room, cooldown=40.0, game_name=""):
         # الفاصل مستقل لكل لعبة ولكل مستخدم. لا نفرض 40 ثانية هنا،
@@ -15853,7 +16207,11 @@ class TalkinBot:
         # Both players enter at the first player's shared stake. Both stakes
         # were reserved atomically when they joined. Do not debit again here:
         # return the winner's stake and add the loser's stake to the winner.
-        _add_points(winner.get("user"), winner_stake + loser_stake)
+        award = _add_points(
+            winner.get("user"), winner_stake + loser_stake,
+            repay_loan=True, loan_repayment_basis=loser_stake, return_details=True,
+        )
+        self._notify_loan_repayment(winner.get("user"), award)
 
         game_key = {
             "رهان":"bet", "مراهنة":"bet", "مضاربة":"duel", "مضاربه":"duel",
@@ -16085,7 +16443,11 @@ class TalkinBot:
 
         # Both stakes were reserved when players joined. Return the winner's
         # stake plus the loser's stake; never debit again at settlement.
-        _add_points(winner.get("user"), prize * 2)
+        award = _add_points(
+            winner.get("user"), prize * 2,
+            repay_loan=True, loan_repayment_basis=prize, return_details=True,
+        )
+        self._notify_loan_repayment(winner.get("user"), award)
 
         game_key=game_name
         _record_game(loser.get("user"), game_key, -prize, prize)
@@ -16669,7 +17031,10 @@ class TalkinBot:
             target = str(game.get("target") or username).strip().lstrip("@")
             reward = int(game.get("defuse_reward") or secrets.choice((500_000, 1_000_000)))
             transaction_id = f"bomb-defuse-reward:{game.get('id') or _norm_room(destination) + ':' + _norm_user(target) + ':' + str(int(game.get('expires_at', 0)))}"
-            award = _apply_points_delta_once(target, reward, transaction_id, "bomb defusal reward")
+            award = _apply_points_delta_once(
+                target, reward, transaction_id, "bomb defusal reward", repay_loan=True
+            )
+            self._notify_loan_repayment(target, award)
             if award.get("ok"):
                 try:
                     _record_game(target, "bomb_defuse", reward, 0)
@@ -17233,7 +17598,10 @@ class TalkinBot:
                 job = str(pending.get("job") or "وظيفة")
                 shown_job = PAYROLL_JOBS_EN.get(job, job) if english else job
                 txid = "payroll:" + str(pending.get("id") or "")
-                result = _apply_points_delta_once(username, amount, txid, "work salary")
+                result = _apply_points_delta_once(
+                    username, amount, txid, "work salary", repay_loan=True
+                )
+                self._notify_loan_repayment(username, result)
                 if not result.get("ok"):
                     self.send_room_text(room, tr("⚠️ تعذر حفظ الراتب الآن؛ بقي راتبك محفوظًا. أعد كتابة راتبي بعد قليل.", "⚠️ Salary could not be saved. Your claim remains pending; type salary again shortly."))
                     return True
@@ -17554,6 +17922,45 @@ class TalkinBot:
             self._send_game_winner_card("luck", sender, [room], respect_room_filter=False)
         return True
 
+    def _recover_stock_market_investments_from_points_history(self):
+        """Rebuild missing pending stock rows from their durable point-debit journal."""
+        try:
+            _points_data()  # Loads the shared transfer journal on a cold start.
+            transactions = [row for row in (_POINTS_TRANSFER_CACHE or []) if isinstance(row, dict)]
+        except Exception as exc:
+            self.log("[STOCK] point-journal recovery read failed:", repr(exc))
+            return 0
+        with self._stock_market_lock:
+            known_ids = {
+                str(row.get("id") or "")
+                for row in getattr(self, "stock_investments", []) + getattr(self, "stock_market_history", [])
+                if isinstance(row, dict)
+            }
+            paid_ids = {
+                str(row.get("id") or "").partition("stock-market-payout:")[2]
+                for row in transactions
+                if str(row.get("id") or "").startswith("stock-market-payout:")
+            }
+            recovered = []
+            for transaction in transactions:
+                investment = transaction.get("stock_market_investment")
+                if not isinstance(investment, dict):
+                    continue
+                investment_id = str(investment.get("id") or "").strip()
+                if (not investment_id or investment_id in known_ids or investment_id in paid_ids
+                        or not investment.get("username")):
+                    continue
+                row = copy.deepcopy(investment)
+                row.setdefault("status", "pending_debit")
+                recovered.append(row)
+                known_ids.add(investment_id)
+            if not recovered:
+                return 0
+            self.stock_investments.extend(recovered)
+            self._save_stock_investments()
+        self.log("[STOCK] recovered pending investments from points journal:", len(recovered))
+        return len(recovered)
+
     def _save_stock_investments(self):
         with self._stock_market_lock:
             snapshot = [dict(row) for row in self.stock_investments if isinstance(row, dict)]
@@ -17731,6 +18138,157 @@ class TalkinBot:
             )[:1]
         self._queue_stock_market_round_broadcast(ordered_rooms)
         return event
+
+    def _notify_loan_repayment(self, username, result):
+        if not isinstance(result, dict) or int(result.get("loan_repayment", 0) or 0) <= 0:
+            return False
+        try:
+            self.send_private_text(
+                username,
+                f"💸 تم اقتطاع {_fmt_points(result.get('loan_repayment', 0))} نقطة من مكسبك لسداد سلفة 100 مليار. "
+                f"المتبقي من السلفة: {_fmt_points(result.get('loan_debt', 0))} نقطة.",
+            )
+            return True
+        except Exception as exc:
+            self.log("[LOAN] repayment notice failed:", repr(exc))
+            return False
+
+    def _wallet_menu_key(self, room, username):
+        return (_norm_room(room), _norm_user(username))
+
+    def _wallet_show_catalog(self, room, username, page=1):
+        page = max(1, min(2, int(page or 1)))
+        state = getattr(self, "wallet_pending_pages", {})
+        if not isinstance(state, dict):
+            state = {}
+        state[self._wallet_menu_key(room, username)] = {"mode": "catalog", "page": page, "created": time.time()}
+        self.wallet_pending_pages = state
+        start = (page - 1) * WALLET_PAGE_SIZE
+        assets = list(WALLET_ASSETS.items())[start:start + WALLET_PAGE_SIZE]
+        lines = [f"🧳 محفظة الاستثمارات — القائمة {page}/2", "اختر سلعة ثم أرسل: شراء اسم السلعة المبلغ"]
+        lines.extend(f"{asset_id}. {asset['icon']} {asset['ar']} ({asset['en']})" for asset_id, asset in assets)
+        lines.append("مثال: شراء ذهب 30b — كل قطعة تُباع تلقائيًا بعد ساعة بربح 5% أو خسارة 5%.")
+        lines.append("اكتب ns لعرض القائمة التالية. يمكنك شراء عدة سلع.")
+        self.send_room_text(room, "\n".join(lines))
+        return True
+
+    def _wallet_show_holdings(self, room, username, page=1):
+        accounts = _points_data()
+        resolved = _resolve_points_account(accounts, username)
+        positions = []
+        if resolved:
+            item = resolved[1]
+            positions = [dict(row) for row in item.get("wallet_positions", [])
+                         if isinstance(row, dict)] if isinstance(item.get("wallet_positions"), list) else []
+        pages = max(1, (len(positions) + WALLET_PAGE_SIZE - 1) // WALLET_PAGE_SIZE)
+        page = max(1, min(pages, int(page or 1)))
+        state = getattr(self, "wallet_pending_pages", {})
+        if not isinstance(state, dict):
+            state = {}
+        state[self._wallet_menu_key(room, username)] = {"mode": "holdings", "page": page, "pages": pages, "created": time.time()}
+        self.wallet_pending_pages = state
+        start = (page - 1) * WALLET_PAGE_SIZE
+        selected = positions[start:start + WALLET_PAGE_SIZE]
+        if not positions:
+            self.send_room_text(room, "🧳 محفظتك فارغة حاليًا. أرسل محفظة لعرض السلع أو شراء سلعة.")
+            return True
+        lines = [f"🧳 القطع النشطة في محفظتك — الصفحة {page}/{pages}"]
+        for row in selected:
+            asset = WALLET_ASSETS.get(int(row.get("asset_id", 0) or 0), {})
+            remaining = max(0, int(float(row.get("due_at", 0) or 0) - time.time()))
+            lines.append(
+                f"{asset.get('icon','📦')} {asset.get('ar','سلعة')} | قيمة الشراء: {_fmt_points(row.get('amount', 0))} نقطة | "
+                f"البيع خلال {remaining // 60} دقيقة"
+            )
+        if pages > page:
+            lines.append("اكتب ns لعرض المزيد.")
+        self.send_room_text(room, "\n".join(lines))
+        return True
+
+    def _wallet_handle_next_page(self, room, username, text):
+        if str(text or "").strip().casefold() not in {"ns", "التالي", "القائمة التالية", "next"}:
+            return False
+        state = getattr(self, "wallet_pending_pages", {})
+        key = self._wallet_menu_key(room, username)
+        entry = state.get(key) if isinstance(state, dict) else None
+        if not isinstance(entry, dict):
+            return False
+        if time.time() - float(entry.get("created", 0) or 0) > 600:
+            state.pop(key, None)
+            return False
+        page = int(entry.get("page", 1) or 1)
+        if entry.get("mode") == "catalog":
+            if page >= 2:
+                self.send_room_text(room, "📋 هذه آخر قائمة. أرسل محفظة للعودة للقائمة الأولى.")
+                return True
+            return self._wallet_show_catalog(room, username, page + 1)
+        if entry.get("mode") == "holdings":
+            if page >= int(entry.get("pages", 1) or 1):
+                self.send_room_text(room, "📋 لا توجد صفحات أخرى في المحفظة.")
+                return True
+            return self._wallet_show_holdings(room, username, page + 1)
+        return False
+
+    def _wallet_purchase_command(self, room, username, parsed_order):
+        asset_id, amount = parsed_order
+        result = _create_wallet_position(username, asset_id, amount, room=room)
+        if result.get("ok"):
+            asset = WALLET_ASSETS[asset_id]
+            position = result.get("position", {})
+            self.send_room_text(
+                room,
+                f"✅ أُضيفت {asset['icon']} {asset['ar']} إلى محفظتك بقيمة {_fmt_points(amount)} نقطة. "
+                f"سيتم بيعها تلقائيًا بعد ساعة بربح 5% أو خسارة 5%. "
+                f"رصيدك المتبقي: {_fmt_points(result.get('balance', 0))}.",
+            )
+            self.log("[WALLET] position created", username, position.get("id"), asset_id, amount)
+            return True
+        messages = {
+            "target_not_found": "❌ لا يوجد سجل نقاط لهذا الحساب؛ العب أو اكسب نقاطًا أولًا.",
+            "insufficient": f"❌ رصيدك لا يكفي. رصيدك الحالي: {_fmt_points(result.get('balance', 0))} نقطة.",
+            "amount_out_of_range": f"❌ قيمة القطعة يجب أن تكون بين {_fmt_points(WALLET_MIN_INVESTMENT)} و{_fmt_points(WALLET_MAX_INVESTMENT)} نقطة.",
+            "too_many_positions": f"❌ وصلت للحد الأقصى ({WALLET_MAX_ACTIVE_POSITIONS}) من القطع النشطة. انتظر بيع بعضها أولًا.",
+        }
+        self.send_room_text(room, messages.get(result.get("error"), "❌ تعذر شراء القطعة الآن؛ لم يُخصم شيء."))
+        return True
+
+    def _process_wallet_investments(self, now=None):
+        now = time.time() if now is None else float(now)
+        for username, position_id in _wallet_due_positions(now):
+            result = _settle_wallet_position(username, position_id, now=now)
+            if not result.get("ok") or not result.get("settled"):
+                continue
+            asset = WALLET_ASSETS.get(int(result.get("asset_id", 0) or 0), {})
+            outcome = result.get("outcome")
+            direction = "ربح 5%" if outcome == "profit" else "خسارة 5%"
+            sign = "+" if int(result.get("net_change", 0) or 0) >= 0 else "-"
+            message = (
+                f"📦 تم بيع {asset.get('icon','')} {asset.get('ar','القطعة')} من محفظتك تلقائيًا بعد ساعة.\n"
+                f"النتيجة: {direction}.\n"
+                f"قيمة الشراء: {_fmt_points(result.get('principal', 0))} نقطة\n"
+                f"العائد قبل سداد السلفة: {_fmt_points(result.get('payout', 0))} نقطة "
+                f"({sign}{_fmt_points(abs(int(result.get('net_change', 0) or 0)))}).\n"
+            )
+            if int(result.get("loan_repayment", 0) or 0) > 0:
+                message += (
+                    f"💸 سداد السلفة من الربح: {_fmt_points(result['loan_repayment'])} نقطة.\n"
+                    f"المتبقي من السلفة: {_fmt_points(result.get('loan_debt', 0))} نقطة.\n"
+                )
+            message += f"💳 رصيدك الحالي: {_fmt_points(result.get('balance', 0))} نقطة."
+            try:
+                self.send_private_text(username, message)
+            except Exception as exc:
+                self.log("[WALLET] private sale notice failed:", username, repr(exc))
+            self.log("[WALLET] position settled", username, position_id, outcome, result.get("payout"))
+
+    def _wallet_settlement_worker(self):
+        """Settle matured wallet assets independently of stock-market settings."""
+        while not self.stop_event.is_set():
+            try:
+                self._process_wallet_investments()
+            except Exception as exc:
+                self.log("[WALLET] settlement worker iteration failed; will retry:", repr(exc))
+            self.stop_event.wait(2.0)
 
     def _stock_market_worker(self):
         while not self.stop_event.is_set():
@@ -18006,11 +18564,13 @@ class TalkinBot:
             else:
                 credit = _apply_points_delta_once(
                     username, payout, f"stock-market-payout:{investment_id}",
-                    f"stock market {outcome} settlement",
+                    f"stock market {outcome} settlement", repay_loan=True,
+                    loan_repayment_basis=max(0, payout - amount),
                 )
             if not credit.get("ok"):
                 self.log("[STOCK] settlement failed; investment kept for retry:", investment_id, credit.get("error"))
                 continue
+            self._notify_loan_repayment(username, credit)
             net_change = payout - amount
             history_row = dict(row)
             history_row.update({
@@ -18916,17 +19476,40 @@ class TalkinBot:
 
     def _route_active_board_game_join(self, room, sender_name, text):
         """Give an active Ludo/Snake join request priority over cricket's Join."""
-        command = _normalize_game_command_text(text).strip().casefold()
-        if command not in {"join", "انضمام"}:
+        command = " ".join(_normalize_game_command_text(text).strip().casefold().replace("ة", "ه").split())
+        board_aliases = {
+            "join", "انضمام", "join ludo", "join snake", "join snake game", "join ludo game",
+            "انضمام ثعبان", "انضمام لعبة ثعبان", "انضمام لعبه ثعبان",
+            "انضمام لودو", "انضمام لعبة لودو", "انضمام لعبه لودو",
+        }
+        if command not in board_aliases:
             return False
+        target_snake = "ثعبان" in command or "snake" in command
+        target_ludo = "لودو" in command or "ludo" in command
         room_key = _norm_room(room)
         ludo = getattr(self, "ludo_games", {}).get(f"ludo:{room_key}")
         snake = getattr(self, "snake_games", {}).get(f"snake:{room_key}")
+        if target_snake and not isinstance(snake, dict):
+            self.send_room_text(room, "⏳ لا توجد لعبة ثعبان نشطة في هذه الغرفة الآن.")
+            return True
+        if target_ludo and not isinstance(ludo, dict):
+            self.send_room_text(room, "⏳ لا توجد لعبة لودو نشطة في هذه الغرفة الآن.")
+            return True
+        if target_snake and isinstance(snake, dict):
+            if not _is_verified_user(sender_name):
+                self.send_room_text(room, f"🔒 @{sender_name} حسابك غير موثق لاستخدام الألعاب.\n{_verification_notice()}")
+                return True
+            return self._run_game_command_async(room, "انضمام لعبة ثعبان", sender_name)
+        if target_ludo and isinstance(ludo, dict):
+            if not _is_verified_user(sender_name):
+                self.send_room_text(room, f"🔒 @{sender_name} حسابك غير موثق لاستخدام الألعاب.\n{_verification_notice()}")
+                return True
+            return self._run_game_command_async(room, "انضمام لعبة لودو", sender_name)
         if not isinstance(ludo, dict) and not isinstance(snake, dict):
             return False
         if not _is_verified_user(sender_name):
             return False
-        return self._run_game_command_async(room, text, sender_name)
+        return self._run_game_command_async(room, "join", sender_name)
 
     def _game_public_image(self, path, route="games"):
         base=_public_base_url()
@@ -18974,14 +19557,8 @@ class TalkinBot:
             return None
         try:
             photo = self.user_photos.get(username.casefold(), "") or self._lookup_profile_photo(username)
-            if not photo or not photo.startswith(("http://", "https://")):
-                return None
-            r = requests.get(photo, headers={"User-Agent":"TalkinBot/23"}, timeout=3)
-            if r.status_code != 200 or not r.content:
-                return None
-            from io import BytesIO
-            av = Image.open(BytesIO(r.content)).convert("RGB")
-            return _fit_crop(av, (size, size)).convert("RGB")
+            av = _download_profile_photo(photo)
+            return _fit_crop(av, (size, size)).convert("RGB") if av is not None else None
         except Exception:
             return None
 
@@ -19325,8 +19902,10 @@ class TalkinBot:
                 self.send_room_text(r,f"🎲 @{sender} وقف الرول على {roll} وانتقل من {old_pos} إلى {final}.")
             if final>=100:
                 photo=self.user_photos.get(str(sender).casefold(), "") or self._lookup_profile_photo(sender); win_img=self._render_snake_board(game,winner_name=sender)
-                new_points = _add_points(sender, self.SNAKE_WIN_REWARD)
-                self._broadcast_game_result_all_rooms(f"🏆 فاز @{sender} بلعبة السلم والثعبان!\n🎲 الرول الأخير: {roll}\n📍 وصل إلى الخانة 100.\n💰 جائزة الفوز: +{self.SNAKE_WIN_REWARD:,} نقطة\n💳 رصيده الآن: {new_points:,} نقطة",win_img,""); 
+                award = _add_points(sender, self.SNAKE_WIN_REWARD, repay_loan=True, return_details=True)
+                self._notify_loan_repayment(sender, award)
+                new_points = int(award.get("balance", 0) or 0)
+                self._broadcast_game_result_all_rooms(f"🏆 فاز @{sender} بلعبة السلم والثعبان!\n🎲 الرول الأخير: {roll}\n📍 وصل إلى الخانة 100.\n💰 جائزة الفوز: +{self.SNAKE_WIN_REWARD:,} نقطة\n💸 سداد السلفة: {_fmt_points(award.get('loan_repayment', 0))} نقطة\n💳 رصيده الآن: {new_points:,} نقطة",win_img,"");
                 try: game.get("timeout_timer").cancel()
                 except Exception: pass
                 self.snake_games.pop(key,None)
@@ -19572,8 +20151,10 @@ class TalkinBot:
                 self.send_room_text(r,f"🎲 @{sender} وقف الرول على {roll} وانتقل من المربع {old} إلى {new}.")
             if new>=58:
                 win_img=self._render_ludo_board(game,winner_name=sender); photo=self.user_photos.get(str(sender).casefold(), "") or self._lookup_profile_photo(sender)
-                new_points = _add_points(sender, self.LUDO_WIN_REWARD)
-                self._broadcast_game_result_all_rooms(f"🏆 مبروك! فاز @{sender} بلعبة لودو.\n🎲 الرول الأخير: {roll}\n📍 وصل إلى نهاية المسار.\n💰 جائزة الفوز: +{self.LUDO_WIN_REWARD:,} نقطة\n💳 رصيده الآن: {new_points:,} نقطة",win_img,""); 
+                award = _add_points(sender, self.LUDO_WIN_REWARD, repay_loan=True, return_details=True)
+                self._notify_loan_repayment(sender, award)
+                new_points = int(award.get("balance", 0) or 0)
+                self._broadcast_game_result_all_rooms(f"🏆 مبروك! فاز @{sender} بلعبة لودو.\n🎲 الرول الأخير: {roll}\n📍 وصل إلى نهاية المسار.\n💰 جائزة الفوز: +{self.LUDO_WIN_REWARD:,} نقطة\n💸 سداد السلفة: {_fmt_points(award.get('loan_repayment', 0))} نقطة\n💳 رصيده الآن: {new_points:,} نقطة",win_img,"");
                 try: game.get("timeout_timer").cancel()
                 except Exception: pass
                 self.ludo_games.pop(key,None); return True
@@ -20204,8 +20785,10 @@ class TalkinBot:
         prize_label_en = f"{prize_amount:,} points"
         try:
             winner_credit = _apply_points_delta_once(
-                winner, prize_amount, f"{round_id}:winner:{winner_key}", f"{game_key} prize"
+                winner, prize_amount, f"{round_id}:winner:{winner_key}", f"{game_key} prize",
+                repay_loan=True,
             )
+            self._notify_loan_repayment(winner, winner_credit)
         except Exception as exc:
             self.log("[TREASURE-CYCLE] winner credit failed:", winner, repr(exc))
             winner_credit = {"ok": False}
@@ -20309,7 +20892,7 @@ class TalkinBot:
         transaction_id = f"mining-redemption:{pending.get('id') or ''}"
         credited = _apply_points_delta_once(
             sender_name, int(pending.get("points", 0) or 0),
-            transaction_id, "treasure mining redemption",
+            transaction_id, "treasure mining redemption", repay_loan=True,
         )
         if not credited.get("ok"):
             self.send_room_text(
@@ -20589,6 +21172,7 @@ class TalkinBot:
             credited = _apply_points_delta_once(
                 sender_name, pending["points"],
                 f"mining-redemption:{pending['id']}", "treasure mining redemption",
+                repay_loan=True,
             )
             if not credited.get("ok"):
                 self.send_room_text(room, "⚠️ حُجزت الكنوز للاستبدال بأمان، لكن تعذر اعتماد النقاط الآن. أعد Rdem لاحقًا؛ لن تُخصم الكنوز مرتين.")
@@ -20657,9 +21241,15 @@ class TalkinBot:
 
     def handle_game_command(self, room, text, sender_name):
         original_raw = str(text or "").strip()
-        auto_gold = original_raw.casefold() in {"بورصة", "بورصه", "stock", "market", "بورصة ذهب", "بورصة الذهب", "gold auto"}
-        confirm_gold = original_raw.casefold() in {"تأكيد", "موافق", "أوافق", "قبول", "تأكيد ذهب", "تأكيد الذهب", "confirm", "join", "confirm gold"}
+        auto_gold = original_raw.casefold() == "gold auto"
+        pending_gold = getattr(self, "_stock_auto_gold_pending", {})
+        pending_gold_key = (_norm_room(room), _norm_user(sender_name))
+        confirm_gold = (
+            original_raw.casefold() in {"تأكيد", "موافق", "أوافق", "قبول", "تأكيد ذهب", "تأكيد الذهب", "confirm", "confirm gold"}
+            and isinstance(pending_gold, dict) and pending_gold_key in pending_gold
+        )
         stock_order = _parse_stock_market_order(text)
+        wallet_order = _parse_wallet_purchase(text)
         raw=_normalize_game_command_text(text)
         raw_digits = raw.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
         if stock_order:
@@ -20749,7 +21339,26 @@ class TalkinBot:
                 )
             if pending_stock.get("kind") == "market_choice" and re.fullmatch(r"[1-4]",raw_digits):
                 return self._stock_exchange_game(room,sender_name,int(raw_digits))
+        if self._wallet_handle_next_page(room, sender_name, raw):
+            return True
         if self._handle_pending_bot_choice(room, raw, sender_name):
+            return True
+        join_alias = " ".join(raw.strip().casefold().replace("ة", "ه").split())
+        if join_alias in {"انضمام لعبه ثعبان", "انضمام ثعبان", "انضمام لعبه لودو", "انضمام لودو"}:
+            if not _is_verified_user(sender_name):
+                self.send_room_text(room, f"🔒 @{sender_name} حسابك غير موثق لاستخدام الألعاب.\n{_verification_notice()}")
+                return True
+            if not _games_enabled_for_room(room):
+                self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
+                return True
+            if "ثعبان" in join_alias:
+                if self._snake_command(room, sender_name, "join"):
+                    return True
+                self.send_room_text(room, "⏳ لا توجد لعبة ثعبان نشطة في هذه الغرفة الآن.")
+            else:
+                if self._ludo_command(room, sender_name, "join"):
+                    return True
+                self.send_room_text(room, "⏳ لا توجد لعبة لودو نشطة في هذه الغرفة الآن.")
             return True
         # Do not run the verification gate for ordinary conversation.
         if not _looks_like_bot_command(raw):
@@ -20807,6 +21416,28 @@ class TalkinBot:
         if not _games_enabled_for_room(room):
             self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
             return True
+        if game_low in ("سلفني", "loan"):
+            result = _request_points_loan(sender_name)
+            if result.get("ok"):
+                self.send_room_text(
+                    room,
+                    f"✅ تمت الموافقة على سلفتك: {_fmt_points(LOAN_AMOUNT)} نقطة. "
+                    f"رصيدك الآن: {_fmt_points(result.get('balance', 0))}. "
+                    f"سيُخصم 20% من مكاسبك حتى سداد {_fmt_points(LOAN_AMOUNT)} نقطة.",
+                )
+            elif result.get("error") == "balance_too_high":
+                self.send_room_text(room, f"❌ لا يمكنك الاستلاف؛ رصيدك {_fmt_points(result.get('balance', 0))} نقطة ويجب أن يكون أقل من 100 مليار.")
+            elif result.get("error") == "outstanding_loan":
+                self.send_room_text(room, f"⏳ لديك سلفة قائمة متبقية: {_fmt_points(result.get('loan_debt', 0))} نقطة. تُتاح سلفة جديدة بعد سدادها.")
+            else:
+                self.send_room_text(room, "❌ تعذر تسجيل السلفة الآن؛ لم يتغير رصيدك.")
+            return True
+        if game_low in ("محفظه", "wallet", "portfolio"):
+            return self._wallet_show_catalog(room, sender_name, 1)
+        if game_low in ("محفظتي", "my wallet"):
+            return self._wallet_show_holdings(room, sender_name, 1)
+        if wallet_order:
+            return self._wallet_purchase_command(room, sender_name, wallet_order)
         # Keep the user's original mining text: the game normalizer maps "تنقيب"
         # and "احفر" to "الماس", but only the original "تنقيب" joins the timed
         # rare-diamond expedition instead of starting an ordinary dig.
@@ -20879,7 +21510,7 @@ class TalkinBot:
         if _norm_user(game_low) in fixed_lookup:
             game_name=fixed_lookup[_norm_user(game_low)]
             return self._queue_fixed_game(room,sender_name,game_name,500)
-        if game_low in ("بورصه", "بورصة"):
+        if game_low in ("بورصه", "بورصة", "stock", "market"):
             return self._stock_exchange_game(room, sender_name)
         # PvP games: outcome is decided by strong random selection, never by
         # who entered first or second.

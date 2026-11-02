@@ -527,7 +527,12 @@ class CricketIntegration:
                 message = message.encode("utf-8")[:977].decode("utf-8", "ignore") + "..."
             self._send_private(sender, room, message) if is_private else self.send_room_text(room, message)
             return True
-        join_command = low in {"join", "انضمام"}
+        join_aliases = {
+            "انضمام كركيت", "انضمام كريكيت", "انضمام كركت",
+            "انضمام لعبه كركيت", "انضمام لعبه كريكيت", "انضمام لعبه الكركيت",
+            "join cricket", "join cricket game",
+        }
+        join_command = low in {"join", "انضمام"} or control in join_aliases
         defer_resume = not is_private and join_command
         if not defer_resume:
             self._resume_after_restart()

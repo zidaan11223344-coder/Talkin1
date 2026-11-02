@@ -857,6 +857,17 @@ class CricketIntegrationRegressions(unittest.TestCase):
             self.assertIn("N1", integration.game.current()["rooms"][0]["players"])
             self.assertTrue(any("بدأت لعبة الكريكيت" in text for _, text in room_messages[1:]))
 
+    def test_arabic_cricket_join_phrase_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            room_messages, private_messages, media_messages = [], [], []
+            integration = self.make_integration(Path(temp), room_messages, private_messages, media_messages)
+            integration.game.set_enabled("North", True)
+            integration.game.start("North", 1, mode="rooms")
+            room_messages.clear()
+
+            self.assertTrue(integration.handle("North", "N1", "انضمام كركيت"))
+            self.assertIn("N1", integration.game.current()["rooms"][0]["players"])
+
     def test_legacy_single_match_state_is_migrated_to_matches_map(self):
         with tempfile.TemporaryDirectory() as temp:
             game = CricketGame(Path(temp) / "cricket_state.json")
