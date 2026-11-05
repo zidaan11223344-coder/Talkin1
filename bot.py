@@ -5672,7 +5672,7 @@ def _default_help_sections():
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
-            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي أو صورتك — عرض صورة حسابك الحقيقية\n.صوره اسم_المستخدم — عرض صورة الحساب الحقيقية للمستخدم\nشبيه@اسم — بحث آمن عن الشبيه\nشبيهك@اسم — بحث آمن عن شبيهك\n\n📌 لا يستبدل البوت صورة الحساب بصور عشوائية من الإنترنت.',
+            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي أو صورتك — عرض صورة حسابك الحقيقية فقط\n.صوره اسم أو موضوع — صورة عشوائية من الإنترنت، مثل: .صوره قرود / .صوره شباب وسيمين / .صوره بنات حلوه\nشبيه@اسم — بحث آمن عن الشبيه\nشبيهك@اسم — بحث آمن عن شبيهك\n\n📌 البحث عن الصور منفصل تماماً عن صور الحساب، وبحث النساء يستخدم استعلاماً للبالغات.',
         ],
         3: [
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
@@ -20115,15 +20115,114 @@ class TalkinBot:
             return ("بنات حلوات safe for work", "بنات بشعات بشكل كوميدي", "بنات عرب محترمات")
         return ("أشخاص مضحكون safe for work", "شخصيات كرتونية", "قرود لطيفة")
 
+    def _random_internet_picture_query(self, requested):
+        """Map common Arabic themes to safe, adult-specific web image searches."""
+        text = str(requested or "").strip()
+        normalized = _norm_user(text)
+        if not text:
+            category = secrets.choice(("monkey", "men", "women"))
+        elif any(word in normalized for word in ("قرد", "قرود", "شمبانزي", "monkey", "chimp")):
+            category = "monkey"
+        elif any(word in normalized for word in ("شاب", "شباب", "رجل", "رجال", "وسيم", "وسيمين")):
+            category = "men"
+        elif any(word in normalized for word in ("بنت", "بنات", "فتاه", "فتاة", "نساء", "امراه", "مراه", "حلوه", "حلوة")):
+            category = "women"
+        else:
+            return f"{text} portrait", text, False
+
+        if category == "monkey":
+            return "monkeys wildlife", "قرود", True
+        if category == "men":
+            return "handsome adult men portraits", "شباب وسيمين بالغين", False
+        return "beautiful adult women portraits", "نساء بالغات", False
+
+    def _handle_internet_picture_command(self, room, body, sender):
+        """Search the web for a random image; this is separate from account avatars."""
+        text = str(body or "").strip()
+        if text.casefold() == ".صوره":
+            requested = ""
+        else:
+            match = re.fullmatch(r"\.صوره(?:@|\s+)(.+)", text, re.I)
+            if not match:
+                return False
+            requested = match.group(1).strip()
+        if not room:
+            return True
+
+        busy = getattr(self, "_internet_picture_busy", set())
+        key = (_norm_user(sender), _norm_room(room))
+        if key in busy:
+            return True
+        busy.add(key)
+        self._internet_picture_busy = busy
+
+        def worker():
+            try:
+                search_query, label, is_monkey = self._random_internet_picture_query(requested)
+                recent = getattr(self, "_internet_picture_recent", {})
+                query_key = _norm_user(search_query)
+                excluded = set(recent.get(query_key, []))
+                image_url = (
+                    _search_monkey_image(exclude_urls=excluded)
+                    if is_monkey
+                    else _search_lookalike_image(search_query, exclude_urls=excluded)
+                )
+                if not image_url and excluded:
+                    image_url = _search_monkey_image() if is_monkey else _search_lookalike_image(search_query)
+                if not image_url:
+                    self.send_room_text(room, "❌ لم أجد صورة مناسبة من الإنترنت؛ جرّب كلمة أخرى.")
+                    return
+
+                local = _download_lookalike_image(image_url, f"internet_{uuid.uuid4().hex}")
+                if not local:
+                    self.send_room_text(room, "❌ عثرت على صورة لكن تعذر تجهيزها للإرسال؛ جرّب مرة أخرى.")
+                    return
+                base = _public_base_url()
+                if not base:
+                    self.send_room_text(room, "❌ رابط الوسائط العام غير مضبوط لإرسال الصورة.")
+                    return
+                public_url = f"{base.rstrip('/')}/lookalikes/{local.name}"
+                try:
+                    self._verify_public_media_url(public_url, "image")
+                except Exception as exc:
+                    self.log("[RANDOM-PICTURE] public image check failed:", type(exc).__name__)
+                    self.send_room_text(room, "❌ تعذر الوصول إلى رابط الصورة العام حالياً.")
+                    return
+
+                sent = self.send_room_media(room, public_url, "image") is not False
+                if not sent:
+                    self.send_room_text(room, "❌ تعذر إرسال الصورة إلى الغرفة.")
+                    return
+                history = list(recent.get(query_key, []))
+                history.append(image_url)
+                recent[query_key] = history[-8:]
+                self._internet_picture_recent = recent
+                self.send_room_text(room, f"🖼️ صورة عشوائية من الإنترنت عن: {label}.")
+            except Exception as exc:
+                self.log("[RANDOM-PICTURE] search failed:", type(exc).__name__, str(exc)[:200])
+                try:
+                    self.send_room_text(room, "❌ تعذر البحث عن صورة من الإنترنت حالياً.")
+                except Exception:
+                    pass
+            finally:
+                busy.discard(key)
+
+        try:
+            threading.Thread(target=worker, name="internet-picture-search", daemon=True).start()
+        except Exception as exc:
+            busy.discard(key)
+            self.log("[RANDOM-PICTURE] worker start failed:", type(exc).__name__)
+            self.send_room_text(room, "❌ تعذر بدء البحث عن الصورة حالياً.")
+        return True
+
     def _handle_random_picture_command(self, room, body, sender):
-        """عرض صورة الحساب الفعلية من كاش الغرفة أو profiles، دون صور ويب عشوائية."""
+        """عرض صورة الحساب الفعلية فقط؛ البحث من الإنترنت له أمر مستقل."""
         if not room:
             return True
         text = str(body or "").strip()
-        match = re.fullmatch(r"\.صوره(?:@|\s+)(.+)", text, re.I)
-        target = match.group(1).strip().lstrip("@") if match else str(sender or "").strip().lstrip("@")
-        if not match and text.casefold() not in {"صورتي", "صورتك"}:
+        if text.casefold() not in {"صورتي", "صورتك"}:
             return False
+        target = str(sender or "").strip().lstrip("@")
         if not target:
             self.send_room_text(room, "❌ لم أتمكن من تحديد اسم الحساب.")
             return True
@@ -23208,7 +23307,7 @@ class TalkinBot:
                 ],
                 2: [
                     "🎵 Music\n━━━━━━━━━━━━\n.sa song name / play song name — play music\nstop music / stop — stop the current song\nsher@name — share the current song",
-                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nmy photo / lookalike@name — safe image search",
+                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nmy photo — your account avatar only\n.photo <name or topic> — random internet image; e.g. monkeys, handsome men, adult women",
                 ],
                 3: [
                     "🎮 Games — solo games\n━━━━━━━━━━━━\nrock / paper / scissors — play against the bot\ninvestment, luck, coin@heads/tails, wheel\nbox@1-3, cup@1-3, monster, volcano, bird, star\ntable, uno\nType ns for the next games list.",
@@ -28500,12 +28599,14 @@ class TalkinBot:
             self._request_custom_gift_image(room, frm, gift_request.group(1))
             return
 
-        # أوامر الكمين وتوب المراهنين وصورة الحساب الفعلية.
+        # أوامر الكمين وتوب المراهنين والصور الشخصية/العشوائية.
         if self._handle_kemin_command(room, body, frm):
             return
         if self._handle_top_wagerers(room, body):
             return
         profile_sender = username or frm or str(event.get(17, "") or "").strip()
+        if self._handle_internet_picture_command(room, body, profile_sender):
+            return
         if self._handle_random_picture_command(room, body, profile_sender):
             return
 
