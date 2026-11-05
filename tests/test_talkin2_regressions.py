@@ -1826,11 +1826,13 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         bot._cleanup_expired_wagers = lambda: None
         bot._game_cooldown_notice = lambda *_args: True
         bot.send_room_text = lambda *_args: None
+        bot.broadcast_game_rooms = lambda *_args, **_kwargs: None
         resolved = []
         bot._wager_result = lambda first, second, game: resolved.append((first, second, game))
         deducted = []
         with patch.object(bot_module, "_get_points", return_value=2_000_000_000), patch.object(
-            bot_module, "_add_points", side_effect=lambda user, amount: deducted.append((user, amount))
+            bot_module, "_apply_points_delta_once",
+            side_effect=lambda user, amount, *_args, **_kwargs: deducted.append((user, amount)) or {"ok": True},
         ):
             self.assertTrue(bot._queue_wager("South", "Said", "رهان", 100_000))
         first, second, game = resolved[0]
@@ -4909,6 +4911,89 @@ class NewFeatureRegressions(unittest.TestCase):
             self.assertTrue(bot.handle_game_command("Hall", "حظي 1b", "Player"))
         self.assertEqual(investments, [(1, 1_000_000)])
         self.assertEqual(wagers, [("حظي", 1_000_000_000)])
+
+    def test_wager_accepts_arabic_indic_digits_and_bare_number_for_single_open_wager(self):
+        self.assertEqual(bot_module._parse_compact_amount("١"), 1)
+        self.assertEqual(bot_module._parse_compact_amount("۱۰۰b"), 100_000_000_000)
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot.stock_pending = {}
+        bot.wager_waiting = {"رهان": {"user": "Ahmed", "game": "رهان", "stake": 100}}
+        bot._snake_command = lambda *_args: False
+        bot._ludo_command = lambda *_args: False
+        bot._wallet_handle_next_page = lambda *_args: False
+        bot._handle_pending_bot_choice = lambda *_args: False
+        wagers = []
+        bot._queue_wager = lambda room, user, game, amount: wagers.append((game, amount)) or True
+        with patch.object(bot_module, "_is_verified_user", return_value=True), patch.object(
+            bot_module, "_games_enabled_for_room", return_value=True
+        ):
+            self.assertTrue(bot.handle_game_command("Hall", "رهان ١", "Player"))
+            self.assertTrue(bot.handle_game_command("Hall", "1", "Player"))
+        self.assertEqual(wagers, [("رهان", 1), ("رهان", 1)])
+
+    def test_receive_router_passes_bare_stake_only_when_wager_is_waiting(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot.wager_waiting = {"رهان": {"user": "Ahmed", "game": "رهان", "stake": 1}}
+        bot._capture_room_response_language = lambda *_args: "ar"
+        bot._localized_room_worker = lambda _room, _language, worker: worker
+        bot._remember_bot_action = lambda *_args, **_kwargs: None
+        handled = []
+        bot.handle_game_command = lambda room, text, sender: handled.append((room, text, sender))
+
+        class ImmediateThread:
+            def __init__(self, target, **_kwargs):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with patch.object(bot_module.threading, "Thread", ImmediateThread):
+            self.assertTrue(bot._run_game_command_async("Hall", "1", "Player"))
+            bot.wager_waiting.clear()
+            self.assertFalse(bot._run_game_command_async("Hall", "1", "Player"))
+        self.assertEqual(handled, [("Hall", "1", "Player")])
+
+    def test_active_wager_stake_is_not_double_counted_against_later_wager(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot.game_lock = threading.RLock()
+        bot.wager_waiting = {
+            "مضاربة": {"user": "Player", "room": "North", "stake": 60_000_000_000,
+                        "status": "active", "reserved": True, "game": "مضاربة",
+                        "created": bot_module.time.time()},
+        }
+        bot._cleanup_expired_wagers = lambda: None
+        bot._game_cooldown_notice = lambda *_args: True
+        bot._save_wager_state = lambda: None
+        bot.broadcast_game_rooms = lambda *_args, **_kwargs: None
+        bot._effective_room_language = lambda _room: "ar"
+        messages, debits = [], []
+        bot.send_room_text = lambda _room, text: messages.append(text)
+        with patch.object(bot_module, "_get_points", return_value=120_000_000_000), patch.object(
+            bot_module, "_apply_points_delta_once",
+            side_effect=lambda user, amount, *_args, **_kwargs: debits.append((user, amount)) or {"ok": True},
+        ):
+            self.assertTrue(bot._queue_wager("North", "Player", "رهان", 100_000_000_000))
+        self.assertEqual(debits, [("Player", -100_000_000_000)])
+        self.assertFalse(messages)
+        self.assertEqual(bot.wager_waiting["مضاربة"]["status"], "active")
+
+    def test_insufficient_join_notice_explains_first_players_higher_stake(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot.game_lock = threading.RLock()
+        bot.wager_waiting = {
+            "رهان": {"user": "Ahmed", "room": "North", "stake": 200_000_000_000,
+                     "status": "active", "game": "رهان", "created": bot_module.time.time()},
+        }
+        bot._cleanup_expired_wagers = lambda: None
+        bot._game_cooldown_notice = lambda *_args: True
+        bot._effective_room_language = lambda _room: "ar"
+        messages = []
+        bot.send_room_text = lambda _room, text: messages.append(text)
+        with patch.object(bot_module, "_get_points", return_value=150_000_000_000):
+            self.assertTrue(bot._queue_wager("South", "Player", "رهان", 100_000_000_000))
+        self.assertTrue(messages)
+        self.assertIn("رهان اللاعب الأول", messages[0])
+        self.assertIn("200", messages[0])
 
     def test_single_invite_sends_a_fresh_private_invitation_on_each_command(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)

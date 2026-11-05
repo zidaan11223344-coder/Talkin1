@@ -1,4 +1,5 @@
 import re
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -506,3 +507,83 @@ def test_unverified_room_owner_broadcast_reaches_live_music_handler():
 
     assert calls and calls[0][1].get("live_stream") is True
     assert not any("غير موثق" in text for _room, text in sent)
+
+
+def test_my_picture_acknowledges_before_profile_network_lookup(monkeypatch):
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.user_photos = {}
+    bot._profile_picture_busy = set()
+    bot.stop_event = threading.Event()
+    bot.stop_event.set()  # Skip polling; exercise the worker's DB fallback directly.
+    replies, media, lookups, threads = [], [], [], []
+    bot.send_room_text = lambda room, text: replies.append((room, text)) or True
+    bot.send_room_media = lambda *args: media.append(args) or True
+    bot._queue_profile_roster_refresh = lambda *_args: True
+    bot._lookup_profile_photo = lambda username: lookups.append(username) or "https://cdn.example/avatar.jpg"
+
+    class DeferredThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+            threads.append(self)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(bot_module.threading, "Thread", DeferredThread)
+    with patch.object(bot_module, "_store_profile_photo_for_public_media", return_value=None), patch.object(
+        bot_module, "_public_base_url", return_value=""
+    ):
+        assert bot._handle_random_picture_command("Hall", "صورتي", "FancyUser") is True
+        assert replies == []  # User requested silent searching.
+        assert lookups == []  # No Supabase/network lookup on the event thread.
+        assert len(threads) == 1
+        threads[0].target()
+
+    assert lookups == ["FancyUser"]
+    assert media == [("Hall", "https://cdn.example/avatar.jpg", "image")]
+    assert any("صورتك هي الصورة" in text for _room, text in replies)
+    assert not bot._profile_picture_busy
+
+
+def test_native_avatar_roster_refresh_is_per_member_and_not_db_short_circuited():
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.ws = object()
+    bot.send_query = lambda _query: True
+    bot.log = lambda *_args: None
+    completed = threading.Event()
+    calls = []
+
+    def native_request(room):
+        calls.append(room)
+        if len(calls) == 2:
+            completed.set()
+        return True
+
+    bot._request_native_profile_roster = native_request
+    assert bot._queue_profile_roster_refresh("Hall", "Alice")
+    assert bot._queue_profile_roster_refresh("Hall", "Bob")
+    assert completed.wait(2)
+    assert sorted(calls) == ["Hall", "Hall"]
+
+
+def test_database_roster_refresh_caches_profile_ids_for_avatar_lookup():
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.db = SimpleNamespace(room_users=lambda _room: [{
+        "username": "Alice", "user_id": "profile-123", "role": "member",
+    }])
+    bot.room_users = {}
+    bot.user_profile_ids = {}
+    bot.user_photos = {}
+    bot.last_joined_room = ""
+    with patch.object(bot_module, "_remember_roster"):
+        assert bot.request_room_occupants("Hall")
+    assert bot.user_profile_ids[bot_module._norm_user("Alice")] == "profile-123"
+
+
+def test_join_event_does_not_treat_room_event_to_field_as_avatar():
+    assert bot_module._extract_room_event_profile_photo({
+        3: "https://chat.example/recipient", 17: "Alice",
+    }) == ""
+    assert bot_module._extract_room_event_profile_photo({
+        3: "https://chat.example/recipient", "avatar_url": "https://cdn.example/alice.jpg",
+    }) == "https://cdn.example/alice.jpg"

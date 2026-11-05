@@ -640,7 +640,9 @@ WALLET_ASSET_LOOKUP = {
 
 def _parse_compact_amount(value):
     """Convert plain/compact amounts, including compounds such as 10m10b."""
-    token = str(value or "").strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    token = str(value or "").strip().translate(str.maketrans(
+        "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"
+    ))
     token = token.translate(str.maketrans({"ك": "k", "م": "m", "ب": "b"}))
     token = token.replace(",", "")
     parts = re.findall(r"[0-9]+(?:\.[0-9]+)?[kmb]?", token, re.I)
@@ -1561,6 +1563,26 @@ def _extract_media_url_universal(event, body=""):
         if val.startswith(("http://", "https://")):
             return val
     return find_url(event) or find_url(body) or first_http_url(event) or first_http_url(body) or ""
+
+
+def _extract_room_event_profile_photo(event):
+    """Extract only explicit avatar fields; numeric RoomEvent field 3 is `to`."""
+    if not isinstance(event, dict):
+        return ""
+    photo_keys = (
+        "photo_url", "avatar_url", "profile_photo_url", "profile_picture_url",
+        "photo", "avatar", "profile_photo", "profile_picture", "picture",
+        "image_url", "image", "user", "profile",
+    )
+    for key in photo_keys:
+        if key not in event:
+            continue
+        value = event.get(key)
+        url = _extract_media_url_universal({"photo": value})
+        if url:
+            return url
+    return ""
+
 
 def first_http_url(value):
     """Find the first public HTTP(S) URL in a decoded Talkin payload."""
@@ -10966,6 +10988,26 @@ class TalkinBot:
                         "user_id": str(user.get("user_id") or ""),
                     })
             if users_info:
+                if not isinstance(getattr(self, "user_profile_ids", None), dict):
+                    self.user_profile_ids = {}
+                if not isinstance(getattr(self, "user_photos", None), dict):
+                    self.user_photos = {}
+                for user in db_users:
+                    if not isinstance(user, dict):
+                        continue
+                    username = str(user.get("username") or "").strip().lstrip("@")
+                    user_id = str(user.get("user_id") or "").strip()
+                    if username and user_id:
+                        self.user_profile_ids[username.casefold()] = user_id
+                        self.user_profile_ids[_norm_user(username)] = user_id
+                    photo_value = next((user.get(key) for key in (
+                        "photo_url", "photo", "avatar_url", "avatar", "image_url",
+                        "picture", "profile_photo_url", "profile_picture_url",
+                    ) if user.get(key) is not None), None)
+                    photo = _extract_media_url_universal({"photo": photo_value}) if photo_value is not None else ""
+                    if username and photo:
+                        self.user_photos[username.casefold()] = photo
+                        self.user_photos[_norm_user(username)] = photo
                 self.room_users[room] = {u["username"]: u.get("role", "none") for u in users_info}
                 _remember_roster(room, users_info)
                 self.last_joined_room = room
@@ -15460,11 +15502,30 @@ class TalkinBot:
         except Exception as exc:
             self.log("[GIFT] photo cache failed:", repr(exc))
 
-    def _queue_profile_roster_refresh(self, room):
-        """Refresh the room roster in the background, at most once per room/30s."""
+    def _request_native_profile_roster(self, room):
+        """Ask Talkin's native occupants endpoint for UserItems including avatars."""
         room = str(room or "").strip()
-        key = _norm_room(room)
-        if not room or not key:
+        if not room:
+            return False
+        try:
+            if not getattr(self, "ws", None):
+                return False
+            sent = self.send_query(encode_query(
+                "room_admin", type_="occupants_list", room=room,
+                to=BOT_ID, value="none",
+            ))
+            return sent is not False
+        except Exception as exc:
+            self.log("[PROFILE-PHOTO] native roster request failed:", room, type(exc).__name__)
+            return False
+
+    def _queue_profile_roster_refresh(self, room, username=""):
+        """Refresh Talkin's native avatar roster in the background per member."""
+        room = str(room or "").strip()
+        room_key = _norm_room(room)
+        user_key = _norm_user(username) if username else "*"
+        key = (room_key, user_key)
+        if not room or not room_key:
             return False
         lock = getattr(self, "_profile_roster_refresh_lock", None)
         if lock is None:
@@ -15479,7 +15540,10 @@ class TalkinBot:
 
         def refresh():
             try:
-                self.request_room_occupants(room)
+                # request_room_occupants() prefers Supabase and returns before
+                # asking Talkin. Avatars are delivered in Talkin UserItems, so
+                # explicitly request the native roster here.
+                self._request_native_profile_roster(room)
             except Exception as exc:
                 self.log("[PROFILE-PHOTO] room roster refresh failed:", type(exc).__name__)
 
@@ -17480,6 +17544,32 @@ class TalkinBot:
         if amount <= 0:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
+
+        def insufficient_notice(balance, required, reserved_points=0, joining=False):
+            balance = max(0, int(balance or 0))
+            required = max(0, int(required or 0))
+            reserved_points = max(0, int(reserved_points or 0))
+            available = max(0, balance - reserved_points)
+            if self._effective_room_language(room) == "en":
+                note = (
+                    f"\nYour command amount does not lower the first player's stake ({_fmt_points(required)})."
+                    if joining else ""
+                )
+                return (
+                    f"❌ Insufficient available balance. Balance: {_fmt_points(balance)}; "
+                    f"available now: {_fmt_points(available)}; required: {_fmt_points(required)}."
+                    + (f" Pending debit: {_fmt_points(reserved_points)}." if reserved_points else "") + note
+                )
+            note = (
+                f"\n📌 مبلغك المكتوب لا يخفض رهان اللاعب الأول ({_fmt_points(required)})."
+                if joining else ""
+            )
+            return (
+                f"❌ رصيدك المتاح لا يكفي. رصيدك الحالي: {_fmt_points(balance)}، "
+                f"المتاح الآن: {_fmt_points(available)}، والمطلوب: {_fmt_points(required)}."
+                + (f"\n⏳ يوجد خصم رهان لم يكتمل بعد بقيمة {_fmt_points(reserved_points)}." if reserved_points else "")
+                + note
+            )
         # أولاً ننظف الألعاب التي تجاوزت دقيقتين، ثم نتحقق هل لدى المستخدم
         # نفس اللعبة معلقة بالفعل. هذا الفحص يسبق فاصل الـ40 ثانية حتى يظهر
         # تنبيه واضح بدلاً من أن يصمت البوت أو يعطي رسالة فاصل عادية.
@@ -17535,9 +17625,14 @@ class TalkinBot:
 
             # A player cannot spend points that are already committed to another
             # open global challenge. The current challenge itself is excluded.
+            # Active challenges already had their stake deducted from the
+            # balance. Counting them again here double-reserved the same points
+            # and caused false "insufficient balance" errors. Only an interrupted
+            # pending_debit still needs to be held against concurrent wagers.
             reserved = sum(
                 int(w.get("stake", 0) or 0) for k, w in self.wager_waiting.items()
                 if k != key and _norm_user(w.get("user")) == _norm_user(sender)
+                and str(w.get("status") or "active").casefold() == "pending_debit"
             )
             # The first player sets the stake for the whole round. A later
             # player's amount in the command does not change that stake: they
@@ -17545,10 +17640,7 @@ class TalkinBot:
             round_stake = int(waiting.get("stake", 0) or 0) if waiting else amount
             balance = _get_points(sender)
             if error is None and balance < round_stake + reserved:
-                    error = _reply_template(
-                        "game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"],
-                        balance=_fmt_points(balance)
-                    )
+                    error = insufficient_notice(balance, round_stake, reserved, joining=bool(waiting))
 
             if error is None and waiting:
                 # A second player may enter ANY amount, from the same room or another room.
@@ -17582,9 +17674,8 @@ class TalkinBot:
                 if not debit.get("ok"):
                     self.wager_waiting.pop(key, None)
                     self._save_wager_state()
-                    error = _reply_template(
-                        "game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"],
-                        balance=_fmt_points(_get_points(sender)),
+                    error = insufficient_notice(
+                        _get_points(sender), amount, reserved,
                     ) if debit.get("error") == "insufficient" else "❌ تعذر حفظ حجز الرهان بأمان."
                 else:
                     self.wager_waiting[key]["status"] = "active"
@@ -17607,9 +17698,9 @@ class TalkinBot:
             if not debit.get("ok"):
                 self.send_room_text(
                     room,
-                    _reply_template(
-                        "game_insufficient", DEFAULT_REPLY_MESSAGES["game_insufficient"],
-                        balance=_fmt_points(_get_points(sender)),
+                    insufficient_notice(
+                        _get_points(sender), round_stake,
+                        joining=True,
                     ) if debit.get("error") == "insufficient" else
                     "❌ تعذر تثبيت مبلغ الرهان بأمان؛ لم تُقبل المشاركة."
                 )
@@ -20015,75 +20106,101 @@ class TalkinBot:
         busy = getattr(self, "_profile_picture_busy", set())
         key = (str(room), _norm_user(target))
         if key in busy:
-            self.send_room_text(room, f"⏳ جاري تجهيز صورة @{target}...")
             return True
         busy.add(key)
         self._profile_picture_busy = busy
-        try:
-            photo_url = self._lookup_profile_photo(target)
-            if photo_url:
+
+        def profile_photo_worker():
+            try:
+                # Request Talkin's actual UserItem roster first. The generic
+                # room-roster helper returns from Supabase before requesting
+                # avatars from Talkin on many deployments.
+                self._queue_profile_roster_refresh(room, target)
+
+                def cached_photo():
+                    photos = getattr(self, "user_photos", {})
+                    if not isinstance(photos, dict):
+                        return ""
+                    for cache_key in (target.casefold(), _norm_user(target)):
+                        value = str(photos.get(cache_key) or "").strip()
+                        if value.startswith(("http://", "https://", "//")):
+                            return "https:" + value if value.startswith("//") else value
+                    return ""
+
+                deadline = time.monotonic() + 4.0
+                photo_url = cached_photo()
+                while not photo_url and time.monotonic() < deadline:
+                    stop_event = getattr(self, "stop_event", None)
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    time.sleep(0.25)
+                    photo_url = cached_photo()
+
+                # Supabase/profile lookup may involve network I/O, so it must
+                # never run on the WebSocket command-dispatch thread.
+                if not photo_url:
+                    photo_url = self._lookup_profile_photo(target)
+                if not photo_url:
+                    # Allow a late native roster result to arrive after the DB
+                    # fallback; never loop on a potentially slow DB request.
+                    deadline = time.monotonic() + 5.0
+                    while time.monotonic() < deadline:
+                        stop_event = getattr(self, "stop_event", None)
+                        if stop_event is not None and stop_event.is_set():
+                            break
+                        time.sleep(0.25)
+                        photo_url = cached_photo()
+                        if photo_url:
+                            break
+                if not photo_url:
+                    self.log("[PROFILE-PICTURE] no avatar source for user:", _norm_user(target))
+                    self.send_room_text(
+                        room,
+                        f"❌ لم أتمكن من جلب صورة الحساب @{target}. "
+                        "تحقق من أن Talkin يرسل صورة الحساب في بيانات الأعضاء أو أن رابطها محفوظ في profiles.",
+                    )
+                    return
+
                 media_url = photo_url
                 hosted_photo = _store_profile_photo_for_public_media(photo_url)
                 public_base = _public_base_url()
                 if hosted_photo and public_base:
-                    hosted_url = f"{public_base}/publish/{hosted_photo.name}"
+                    hosted_url = f"{public_base.rstrip('/')}/publish/{hosted_photo.name}"
                     try:
                         self._verify_public_media_url(hosted_url, "image")
                         media_url = hosted_url
                     except Exception as host_exc:
-                        self.log("[PROFILE-PICTURE] hosted copy unavailable; trying source URL:", type(host_exc).__name__)
-                self.send_room_text(room, f"🖼️ صورة الحساب الحقيقية لـ @{target}:")
-                sent = self.send_room_media(room, media_url, "image")
-                if sent is False and media_url != photo_url:
-                    self.send_room_media(room, photo_url, "image")
-                busy.discard(key)
-                return True
+                        self.log("[PROFILE-PICTURE] hosted copy unavailable:", type(host_exc).__name__)
 
-            # The room's roster packet is the authoritative source of Talkin
-            # avatars on deployments where profiles has no photo column. Ask
-            # for a fresh roster, then retry outside the WebSocket receive loop.
-            self.send_room_text(room, f"🔎 جاري جلب صورة الحساب الأصلية لـ @{target}...")
-            def retry_profile_photo():
+                sent = False
                 try:
+                    sent = self.send_room_media(room, media_url, "image") is not False
+                except Exception as media_exc:
+                    self.log("[PROFILE-PICTURE] media send failed:", type(media_exc).__name__)
+                if not sent and media_url != photo_url:
                     try:
-                        self.request_room_occupants(room)
-                    except Exception as request_exc:
-                        self.log("[PROFILE-PICTURE] roster refresh failed:", repr(request_exc))
-                    deadline = time.time() + 12.0
-                    found = ""
-                    while time.time() < deadline and not self.stop_event.is_set():
-                        found = self._lookup_profile_photo(target)
-                        if found:
-                            break
-                        time.sleep(0.4)
-                    if found:
-                        self.send_room_text(room, f"🖼️ صورة الحساب الحقيقية لـ @{target}:")
-                        media_url = found
-                        hosted_photo = _store_profile_photo_for_public_media(found)
-                        public_base = _public_base_url()
-                        if hosted_photo and public_base:
-                            hosted_url = f"{public_base}/publish/{hosted_photo.name}"
-                            try:
-                                self._verify_public_media_url(hosted_url, "image")
-                                media_url = hosted_url
-                            except Exception as host_exc:
-                                self.log("[PROFILE-PICTURE] hosted retry unavailable; trying source URL:", type(host_exc).__name__)
-                        sent = self.send_room_media(room, media_url, "image")
-                        if sent is False and media_url != found:
-                            self.send_room_media(room, found, "image")
-                    else:
-                        self.send_room_text(room, f"❌ لم يرسل خادم TalkinChat صورة الحساب لـ @{target} ضمن بيانات الغرفة، ولا توجد صورة محفوظة في profiles.")
-                except Exception as retry_exc:
-                    self.log("[PROFILE-PICTURE] retry failed:", repr(retry_exc))
-                    self.send_room_text(room, "❌ تعذر جلب صورة الحساب حالياً.")
-                finally:
-                    busy.discard(key)
-            threading.Thread(target=retry_profile_photo, name="profile-photo-lookup", daemon=True).start()
-            return True
+                        sent = self.send_room_media(room, photo_url, "image") is not False
+                    except Exception as media_exc:
+                        self.log("[PROFILE-PICTURE] source URL send failed:", type(media_exc).__name__)
+                if sent:
+                    self.send_room_text(room, f"🖼️ صورتك هي الصورة يا @{target}.")
+                else:
+                    self.send_room_text(room, f"❌ عثرت على رابط الصورة لـ @{target} لكن TalkinChat رفض إرسالها؛ راجع سجل PROFILE-PICTURE.")
+            except Exception as exc:
+                self.log("[PROFILE-PICTURE] worker failed:", type(exc).__name__, str(exc)[:240])
+                try:
+                    self.send_room_text(room, f"❌ تعذر جلب صورة @{target} هذه المرة. أعد المحاولة بعد قليل.")
+                except Exception:
+                    pass
+            finally:
+                busy.discard(key)
+
+        try:
+            threading.Thread(target=profile_photo_worker, name="profile-photo-lookup", daemon=True).start()
         except Exception as exc:
-            self.log("[PROFILE-PICTURE] failed:", repr(exc))
-            self.send_room_text(room, "❌ تعذر تحميل صورة الحساب حالياً.")
             busy.discard(key)
+            self.log("[PROFILE-PICTURE] worker start failed:", type(exc).__name__)
+            self.send_room_text(room, "❌ تعذر بدء البحث عن الصورة حالياً.")
         return True
 
     def _handle_kemin_command(self, room, body, sender):
@@ -20734,7 +20851,18 @@ class TalkinBot:
                 or pending_key in getattr(self, "_stock_auto_gold_pending", {})
             )
             is_ludo_choice = raw in {"1", "2", "3", "4", "١", "٢", "٣", "٤"} and bool(ludo_game)
-            if not (has_pending_bomb or has_pending_choice or has_pending_stock or is_ludo_choice):
+            ascii_digits = raw.translate(str.maketrans(
+                "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"
+            ))
+            is_bare_wager_stake = bool(re.fullmatch(
+                r"[0-9][0-9,]*(?:\.[0-9]+)?[kmb]?", ascii_digits, re.I
+            ))
+            wager_states = getattr(self, "wager_waiting", {})
+            has_pending_wager = is_bare_wager_stake and any(
+                isinstance(value, dict) and not value.get("_refund_pending")
+                for value in (wager_states.values() if isinstance(wager_states, dict) else [])
+            )
+            if not (has_pending_bomb or has_pending_choice or has_pending_stock or is_ludo_choice or has_pending_wager):
                 return False
         response_language = self._capture_room_response_language(room, text)
         def worker():
@@ -22554,7 +22682,9 @@ class TalkinBot:
         stock_order = _parse_stock_market_order(text)
         wallet_order = _parse_wallet_purchase(text)
         raw=_normalize_game_command_text(text)
-        raw_digits = raw.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+        raw_digits = raw.translate(str.maketrans(
+            "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"
+        ))
         if stock_order:
             raw = "بورصة"
         if not raw or not sender_name: return False
@@ -22663,10 +22793,37 @@ class TalkinBot:
                     return True
                 self.send_room_text(room, "⏳ لا توجد لعبة لودو نشطة في هذه الغرفة الآن.")
             return True
+        # A bare stake (for example `1` or `100b`) may join the only open
+        # wager. Never guess when multiple wager types are waiting.
+        bare_stake_match = re.fullmatch(r"[0-9][0-9,]*(?:\.[0-9]+)?[kmb]?", raw_digits.strip(), re.I)
+        if bare_stake_match:
+            open_wagers = getattr(self, "wager_waiting", {})
+            open_wagers = [
+                (str(key), value) for key, value in (open_wagers.items() if isinstance(open_wagers, dict) else [])
+                if isinstance(value, dict) and not value.get("_refund_pending")
+            ]
+            if len(open_wagers) == 1:
+                if not _is_verified_user(sender_name):
+                    self.send_room_text(room, f"🔒 @{sender_name} حسابك غير موثق لاستخدام الألعاب.\n{_verification_notice()}")
+                    return True
+                if not _games_enabled_for_room(room):
+                    self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
+                    return True
+                game_key, waiting_wager = open_wagers[0]
+                game_name = str(waiting_wager.get("game") or game_key)
+                amount = _parse_compact_amount(raw_digits.strip())
+                if amount is not None:
+                    return self._queue_wager(room, sender_name, game_name, amount)
+            if len(open_wagers) > 1:
+                self.send_room_text(
+                    room,
+                    "⚠️ توجد رهانات متعددة معلّقة. اكتب اسم اللعبة مع الرقم، مثل: رهان 1 أو مضاربة 1.",
+                )
+                return True
         # Do not run the verification gate for ordinary conversation.
         if not _looks_like_bot_command(raw):
             return False
-        normalized_raw = raw.replace("ة", "ه")
+        normalized_raw = raw_digits.replace("ة", "ه")
         # Game-name normalization: Arabic ه/ة variants are treated as the same
         # command (e.g. سناره/سنارة, حصانه/حصانة), while preserving raw text
         # for commands that contain user arguments.
@@ -27749,13 +27906,10 @@ class TalkinBot:
                         self.log("[JOINLEAVE] ban failed", repr(exc))
         
         if event_type == "user_joined" and username:
-            # Learn each member's avatar from the native join event whenever the
-            # gateway includes it. Game winner cards and Explore reuse this cache.
-            joined_photo = (event.get(3, "") or event.get("photo_url", "")
-                            or event.get("avatar_url", "") or event.get("photo", "")
-                            or event.get("avatar", "") or event.get("image_url", "")
-                            or event.get("picture", ""))
-            joined_photo = _extract_media_url_universal({"photo": joined_photo}) or str(joined_photo or "").strip()
+            # Numeric RoomEvent field 3 is `to`, not a profile photo. Only
+            # trust explicitly named avatar fields; UserItem field 3 is handled
+            # separately by the roster decoder.
+            joined_photo = _extract_room_event_profile_photo(event)
             if joined_photo.startswith("//"):
                 joined_photo = "https:" + joined_photo
             if joined_photo.startswith(("http://", "https://")):
@@ -27766,23 +27920,43 @@ class TalkinBot:
             else:
                 # Join notifications often omit the profile URL; refresh the
                 # full roster asynchronously so game cards can use it later.
-                self._queue_profile_roster_refresh(room)
+                self._queue_profile_roster_refresh(room, username)
 
             # Optional room protection: reject accounts with no profile photo.
             # The cache above is used as a fallback when a join event omits it.
             if (_room_protection_cfg(room).get("no_photo")
                     and _norm_user(username) != _norm_user(BOT_ID)
                     and _auto_ban_candidate(self, room, username, role if role_field_present else None)):
-                joined_photo = str(event.get(3, "") or event.get("photo", "") or "").strip()
+                joined_photo = _extract_room_event_profile_photo(event)
                 joined_photo = joined_photo or str(getattr(self, "user_photos", {}).get(_norm_user(username), "") or "").strip()
                 if not joined_photo:
-                    try:
-                        self.send_admin(room, username, "ban")
-                        _record_filter_ban(username, room, "حساب بلا صورة", "حماية الصورة")
-                        self.send_room_text(room, f"🚫 تم حظر @{username} لعدم وجود صورة حساب.")
-                    except Exception as exc:
-                        self.log("[NO-PHOTO] ban failed", repr(exc))
-                    return
+                    # A join event commonly omits the avatar even when the
+                    # account has one. Let the native roster request above
+                    # populate the cache before enforcing this room rule.
+                    def verify_joined_photo():
+                        deadline = time.monotonic() + 8.0
+                        while time.monotonic() < deadline:
+                            photos = getattr(self, "user_photos", {})
+                            photo = (photos.get(_norm_user(username), "") or
+                                     photos.get(username.casefold(), "")) if isinstance(photos, dict) else ""
+                            if str(photo or "").startswith(("http://", "https://")):
+                                return
+                            stop_event = getattr(self, "stop_event", None)
+                            if stop_event is not None and stop_event.is_set():
+                                return
+                            time.sleep(0.25)
+                        try:
+                            self.send_admin(room, username, "ban")
+                            _record_filter_ban(username, room, "حساب بلا صورة", "حماية الصورة")
+                            self.send_room_text(room, f"🚫 تم حظر @{username} لعدم وجود صورة حساب.")
+                        except Exception as exc:
+                            self.log("[NO-PHOTO] deferred ban failed", repr(exc))
+
+                    threading.Thread(
+                        target=verify_joined_photo,
+                        name="no-profile-photo-check",
+                        daemon=True,
+                    ).start()
             room_members = self.room_users.setdefault(room, {})
             already_present = any(_norm_user(member) == norm_u for member in room_members)
             room_members[username] = role or "none"
