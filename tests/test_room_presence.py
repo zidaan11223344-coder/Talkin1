@@ -397,3 +397,112 @@ def test_rank_command_falls_back_to_legacy_bot_target_after_app_timeout(monkeypa
     assert not bot._pending_room_lists
     assert not bot._pending_bot_room_role_checks
     assert timers[0].cancelled
+
+
+def test_profile_photo_lookup_uses_roster_user_id_and_nested_profiles_value():
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.user_photos = {}
+    bot.user_profile_ids = {}
+    bot.log = lambda *_args: None
+    bot._cache_user_photos_from_result({
+        "users": [{"1": "FancyUser", "2": "talkin-user-uuid"}]
+    })
+    assert bot.user_profile_ids[bot_module._norm_user("FancyUser")] == "talkin-user-uuid"
+
+    calls = []
+
+    class Query:
+        def __init__(self):
+            self.column = self.value = ""
+
+        def select(self, _columns):
+            return self
+
+        def eq(self, column, value):
+            self.column, self.value = column, value
+            return self
+
+        def limit(self, _count):
+            return self
+
+        def execute(self):
+            calls.append((self.column, self.value))
+            rows = ([{
+                "id": "talkin-user-uuid",
+                "username": "FancyUser",
+                "avatar": {"image": {"src": "https://cdn.example/fancy.jpg"}},
+            }] if self.column == "id" else [])
+            return SimpleNamespace(data=rows)
+
+    class Client:
+        def table(self, _name):
+            return Query()
+
+    bot.db = SimpleNamespace(client=Client())
+    assert bot._lookup_profile_photo("FancyUser") == "https://cdn.example/fancy.jpg"
+    assert calls[0] == ("id", "talkin-user-uuid")
+
+
+def test_profile_photo_decoder_accepts_nested_roster_photo_url():
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    users = bot._extract_room_list_users({
+        "users": [{"1": "FancyUser", "2": "id-2", "3": {"image": {"url": "//cdn.example/photo.webp"}}}]
+    })
+    assert users[0]["photo"] == "https://cdn.example/photo.webp"
+
+
+def test_only_room_owner_can_bypass_verification_for_explicit_live_music():
+    bot = SimpleNamespace(room_users={
+        "Hall": {"FancyOwner": "owner", "RoomAdmin": "admin"},
+    })
+    assert bot_module._owner_live_music_allowed(bot, "Hall", "FancyOwner", "بث اسم الأغنية")
+    assert not bot_module._owner_live_music_allowed(bot, "Hall", "RoomAdmin", "بث اسم الأغنية")
+    assert not bot_module._owner_live_music_allowed(bot, "Hall", "FancyOwner", ".تشغيل اسم الأغنية")
+
+
+def test_unverified_room_owner_broadcast_reaches_live_music_handler():
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.room = "Hall"
+    bot.known_rooms = set()
+    bot.connected_rooms = set()
+    bot.blocked_rooms = set()
+    bot._blocked_room_notices = set()
+    bot.room_users = {"Hall": {"OwnerName": "owner", "TalkinBot": "owner"}}
+    bot.bot_blocked_users = set()
+    bot._bot_block_notice_at = {}
+    bot.banned_words = set()
+    bot.music_last = {}
+    bot.music_current = {}
+    bot.reaction_targets = {}
+    bot.log = lambda *_args, **_kwargs: None
+    sent, calls = [], []
+    bot.send_room_text = lambda room, text: sent.append((room, text)) or True
+    bot.send_private_text = lambda *_args, **_kwargs: True
+    bot.handle_music_command = lambda *args, **kwargs: calls.append((args, kwargs)) or True
+    bot._remember_inflight_command = lambda *_args, **_kwargs: None
+    bot._report_monitored_event = lambda *_args, **_kwargs: None
+    bot._complete_pending_room_list_text = lambda *_args, **_kwargs: False
+    bot._handle_telegram_log_command = lambda *_args, **_kwargs: False
+    bot._is_duplicate_incoming = lambda *_args, **_kwargs: False
+    bot._handle_kemin_command = lambda *_args, **_kwargs: False
+    bot._handle_top_wagerers = lambda *_args, **_kwargs: False
+    bot._handle_random_picture_command = lambda *_args, **_kwargs: False
+    bot._handle_lookalike_command = lambda *_args, **_kwargs: False
+    bot._handle_explore_command = lambda *_args, **_kwargs: False
+    bot._handle_reaction_command = lambda *_args, **_kwargs: False
+    bot._route_room_game_input = lambda *_args, **_kwargs: False
+    bot._remember_bot_action = lambda *_args, **_kwargs: None
+
+    with patch.object(bot_module, "_verified_identity_candidate", return_value=""), patch.object(
+        bot_module, "_looks_like_bot_command", return_value=True
+    ), patch.object(bot_module, "_room_moderation_config", return_value={"words": []}), patch.object(
+        bot_module, "_room_protection_cfg", return_value={"flood": False, "swear": False, "repeat_limit": 20}
+    ), patch.object(bot_module, "_verification_notice", return_value="verify"), patch.object(
+        bot_module, "BOT_ID", "TalkinBot"
+    ):
+        bot.handle_room_event({"room_event": {
+            1: "text", 2: "OwnerName", 6: "بث اسم الاغنية", 13: "Hall", 22: "OwnerName",
+        }})
+
+    assert calls and calls[0][1].get("live_stream") is True
+    assert not any("غير موثق" in text for _room, text in sent)

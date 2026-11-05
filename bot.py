@@ -5499,6 +5499,21 @@ def _room_role(bot, room, sender, event_role=None):
                 return str(role or "none").strip().casefold(), True
     return "", False
 
+def _room_owner_for_music(bot, room, sender):
+    """Allow a native room owner to request live music without general verification."""
+    role, known = _room_role(bot, room, sender)
+    if not known:
+        return False
+    role_key = re.sub(r"[\s_-]+", "", str(role or "").casefold())
+    return role_key in {
+        "owner", "creator", "roomowner", "roomcreator", "host",
+        "مالك", "صانع", "صانعي", "صانعالغرفة", "صانعالغرفه",
+    }
+
+def _owner_live_music_allowed(bot, room, sender, text):
+    """Only the explicit live-broadcast command gets the room-owner exception."""
+    return str(text or "").strip().startswith("بث ") and _room_owner_for_music(bot, room, sender)
+
 def _auto_ban_candidate(bot, room, sender, event_role=None):
     """Auto-ban every known role except room owners and supervision roles."""
     if not sender or _is_master_name(sender) or _is_room_creator(room, sender):
@@ -15418,12 +15433,18 @@ class TalkinBot:
         try:
             if not isinstance(getattr(self, "user_photos", None), dict):
                 self.user_photos = {}
+            if not isinstance(getattr(self, "user_profile_ids", None), dict):
+                self.user_profile_ids = {}
             users = self._extract_room_list_users(result if isinstance(result, dict) else {})
             for user in users:
                 username = str(user.get("username") or "").strip().lstrip("@")
                 photo = str(user.get("photo") or "").strip()
+                user_id = str(user.get("user_id") or "").strip()
                 if photo.startswith("//"):
                     photo = "https:" + photo
+                if username and user_id:
+                    self.user_profile_ids[username.casefold()] = user_id
+                    self.user_profile_ids[_norm_user(username)] = user_id
                 status = str(user.get("status") or "").strip()
                 if username and _norm_user(username) == _norm_user(BOT_ID) and status:
                     with self._profile_status_lock:
@@ -15466,7 +15487,7 @@ class TalkinBot:
         return True
 
     def _lookup_profile_photo(self, username):
-        """Best-effort photo lookup using the exact Talkin username first."""
+        """Resolve a photo by cached Talkin user id first, then by username."""
         raw_username = str(username or "").strip().lstrip("@")
         normalized = raw_username.casefold()
         if not normalized:
@@ -15479,38 +15500,79 @@ class TalkinBot:
         client = getattr(getattr(self, "db", None), "client", None)
         if not client:
             return ""
+        profile_ids = getattr(self, "user_profile_ids", {})
+        user_id = ""
+        if isinstance(profile_ids, dict):
+            user_id = str(profile_ids.get(normalized) or profile_ids.get(_norm_user(raw_username)) or "").strip()
         photo_fields = (
             "photo_url", "photo", "avatar_url", "avatar", "image_url", "picture",
             "profile_photo", "profile_photo_url", "profile_picture_url",
             "profile_image_url", "profile_image", "profile_picture", "profile_pic",
-            "picture_url", "photoURL", "avatarUrl",
+            "picture_url", "photoURL", "avatarUrl", "profilePicture", "image",
+            "pictureUrl", "profile_photo_url", "photo_uri", "avatar_uri", "media",
         )
-        try:
-            for candidate in dict.fromkeys((raw_username, normalized)):
+        queries = []
+        if user_id:
+            queries.append(("id", user_id))
+        queries.extend(("username", candidate) for candidate in dict.fromkeys((raw_username, normalized)))
+        for column, value in queries:
+            try:
                 response = (client.table("profiles").select("*")
-                            .eq("username", candidate).limit(1).execute())
+                            .eq(column, value).limit(1).execute())
                 rows = getattr(response, "data", None) or []
+            except Exception as exc:
+                self.log("[PROFILE-PHOTO] profiles lookup failed:", column, type(exc).__name__)
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                photo = ""
+                for key in photo_fields:
+                    value = row.get(key)
+                    if value is None:
+                        continue
+                    candidate_url = _extract_media_url_universal({"photo": value})
+                    if candidate_url:
+                        photo = candidate_url
+                        break
+                if not photo:
+                    continue
+                if photo.startswith("//"):
+                    photo = "https:" + photo
+                if not isinstance(getattr(self, "user_photos", None), dict):
+                    self.user_photos = {}
+                self.user_photos[normalized] = photo
+                self.user_photos[_norm_user(raw_username)] = photo
+                row_id = str(row.get("id") or "").strip()
+                if row_id:
+                    if not isinstance(getattr(self, "user_profile_ids", None), dict):
+                        self.user_profile_ids = {}
+                    self.user_profile_ids[normalized] = row_id
+                    self.user_profile_ids[_norm_user(raw_username)] = row_id
+                return photo
+        # Supabase username columns are often case-sensitive under `eq`; some
+        # deployments preserve account-name casing differently from Talkin.
+        ilike = getattr(client.table("profiles").select("*"), "ilike", None)
+        if callable(ilike):
+            for candidate in dict.fromkeys((raw_username, normalized)):
+                try:
+                    response = (client.table("profiles").select("*")
+                                .ilike("username", candidate).limit(1).execute())
+                    rows = getattr(response, "data", None) or []
+                except Exception as exc:
+                    self.log("[PROFILE-PHOTO] case-insensitive lookup failed:", type(exc).__name__)
+                    continue
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
-                    photo = ""
-                    for key in photo_fields:
-                        value = row.get(key)
-                        value_url = _extract_media_url_universal({"photo": value})
-                        value = str(value_url or value or "").strip()
-                        if value.startswith(("http://", "https://", "//")):
-                            photo = value
-                            break
+                    photo = next((url for key in photo_fields
+                                  if (url := _extract_media_url_universal({"photo": row.get(key)}))), "")
                     if photo:
                         if photo.startswith("//"):
                             photo = "https:" + photo
-                        if not isinstance(getattr(self, "user_photos", None), dict):
-                            self.user_photos = {}
                         self.user_photos[normalized] = photo
                         self.user_photos[_norm_user(raw_username)] = photo
                         return photo
-        except Exception as exc:
-            self.log("[GIFT] receiver photo lookup failed:", repr(exc))
         return ""
 
     def process_occupants_for_invite(self, result):
@@ -28279,6 +28341,7 @@ class TalkinBot:
         verified_sender = _verified_identity_candidate(username, frm, event.get(17, ""))
         is_verified = bool(verified_sender)
         command_sender = verified_sender or username or frm or str(event.get(17, "") or "").strip()
+        owner_live_music_allowed = _owner_live_music_allowed(self, room, command_sender, body)
         cricket_sender = command_sender
         # Bomb replies use digits that Cricket also accepts, so the shared
         # router claims active bomb wires before routing any board-game input.
@@ -28291,6 +28354,7 @@ class TalkinBot:
         # restricted to masters. Unverified command attempts receive one clear
         # notice instead of being silently ignored.
         if (not is_verified
+                and not owner_live_music_allowed
                 and _looks_like_bot_command(body)
                 and not re.match(r"^دخول\s*@\s*.+$", body.strip(), re.I)
                 and body.strip().casefold() not in {"توب", "top", "توب الألعاب", "توب الالعاب", "top games", "games top", "ملياري", "مليارات", "مليوني", "ملايين"}):
@@ -28365,7 +28429,7 @@ class TalkinBot:
             return
         if (body.strip().startswith((".تشغيل ", "بث "))
                 or re.match(r"^(?:play|music|song)\s+.+$", body.strip(), re.I)):
-            if not is_verified:
+            if not is_verified and not owner_live_music_allowed:
                 self.send_room_text(room, f"🔒 @{frm} غير موثّق لتشغيل الأغاني.\n{_verification_notice()}")
                 return
             is_room_broadcast = body.strip().startswith("بث ")
