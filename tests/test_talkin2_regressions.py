@@ -4913,11 +4913,11 @@ class NewFeatureRegressions(unittest.TestCase):
         self.assertEqual(wagers, [("حظي", 1_000_000_000)])
 
     def test_wager_accepts_arabic_indic_digits_and_bare_number_for_single_open_wager(self):
-        self.assertEqual(bot_module._parse_compact_amount("١"), 1)
+        self.assertEqual(bot_module._parse_compact_amount("١٠٠k"), 100_000)
         self.assertEqual(bot_module._parse_compact_amount("۱۰۰b"), 100_000_000_000)
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
         bot.stock_pending = {}
-        bot.wager_waiting = {"رهان": {"user": "Ahmed", "game": "رهان", "stake": 100}}
+        bot.wager_waiting = {"رهان": {"user": "Ahmed", "game": "رهان", "stake": 100_000}}
         bot._snake_command = lambda *_args: False
         bot._ludo_command = lambda *_args: False
         bot._wallet_handle_next_page = lambda *_args: False
@@ -4927,9 +4927,46 @@ class NewFeatureRegressions(unittest.TestCase):
         with patch.object(bot_module, "_is_verified_user", return_value=True), patch.object(
             bot_module, "_games_enabled_for_room", return_value=True
         ):
-            self.assertTrue(bot.handle_game_command("Hall", "رهان ١", "Player"))
-            self.assertTrue(bot.handle_game_command("Hall", "1", "Player"))
-        self.assertEqual(wagers, [("رهان", 1), ("رهان", 1)])
+            self.assertTrue(bot.handle_game_command("Hall", "رهان ١٠٠k", "Player"))
+            self.assertTrue(bot.handle_game_command("Hall", "100k", "Player"))
+        self.assertEqual(wagers, [("رهان", 100_000), ("رهان", 100_000)])
+
+    def test_wager_rejects_amounts_below_100k_in_pvp_and_paid_luck(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        messages = []
+        bot.send_room_text = lambda _room, text: messages.append(text)
+        bot._effective_room_language = lambda _room: "ar"
+        for amount in (1, 2, 99_999):
+            self.assertTrue(bot._queue_wager("Hall", "Player", "رهان", amount))
+        self.assertEqual(len(messages), 3)
+        self.assertTrue(all("100k" in message for message in messages))
+
+        bot._game_cooldown_notice = lambda *_args: self.fail("tiny wager must be rejected before consuming cooldown")
+        for amount in (1, 2):
+            self.assertTrue(bot._lottery_game("Hall", "Player", amount))
+        self.assertEqual(len(messages), 5)
+        self.assertTrue(all("100k" in message for message in messages[3:]))
+
+    def test_old_open_wager_below_minimum_cannot_be_joined(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot.game_lock = threading.RLock()
+        bot.wager_waiting = {
+            "رهان": {"user": "Ahmed", "room": "Hall", "stake": 2, "status": "active",
+                     "game": "رهان", "created": bot_module.time.time(), "reserved": True, "id": "old"},
+        }
+        bot._cleanup_expired_wagers = lambda: None
+        bot._game_cooldown_notice = lambda *_args: True
+        bot._effective_room_language = lambda _room: "ar"
+        messages, debits = [], []
+        bot.send_room_text = lambda _room, text: messages.append(text)
+        with patch.object(bot_module, "_get_points", return_value=1_000_000), patch.object(
+            bot_module, "_apply_points_delta_once",
+            side_effect=lambda *args, **kwargs: debits.append(args) or {"ok": True},
+        ):
+            self.assertTrue(bot._queue_wager("Hall", "Player", "رهان", 100_000))
+        self.assertTrue(messages)
+        self.assertIn("أقل من الحد الأدنى", messages[0])
+        self.assertFalse(debits)
 
     def test_receive_router_passes_bare_stake_only_when_wager_is_waiting(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
@@ -4972,8 +5009,8 @@ class NewFeatureRegressions(unittest.TestCase):
             bot_module, "_apply_points_delta_once",
             side_effect=lambda user, amount, *_args, **_kwargs: debits.append((user, amount)) or {"ok": True},
         ):
-            self.assertTrue(bot._queue_wager("North", "Player", "رهان", 100_000_000_000))
-        self.assertEqual(debits, [("Player", -100_000_000_000)])
+            self.assertTrue(bot._queue_wager("North", "Player", "رهان", bot_module.WAGER_MIN_AMOUNT))
+        self.assertEqual(debits, [("Player", -bot_module.WAGER_MIN_AMOUNT)])
         self.assertFalse(messages)
         self.assertEqual(bot.wager_waiting["مضاربة"]["status"], "active")
 

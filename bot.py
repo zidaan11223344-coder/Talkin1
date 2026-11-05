@@ -554,6 +554,7 @@ TIMED_TREASURE_GAME_ALIASES = {
 
 MILLION_BANK_COOLDOWN_SECONDS = 60.0
 WAGER_GAME_COOLDOWN_SECONDS = 120.0
+WAGER_MIN_AMOUNT = 100_000
 try:
     BILLION_GAME_COOLDOWN_SECONDS = max(1.0, float(os.getenv("BILLION_GAME_COOLDOWN_SECONDS", "60") or 60))
 except (TypeError, ValueError):
@@ -5675,7 +5676,7 @@ def _default_help_sections():
         ],
         3: [
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
-            '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n14. رهان@مبلغ — bet/wager\n15. مضاربة@مبلغ — duel\n16. حظي@مبلغ — my luck\n17. استثمار@مبلغ — investment\n18. حظ@مبلغ — luck@amount\n44. كمين — تحدي لاعبَين؛ من يتفادى الفخ يفوز بمليار نقطة.\nتوب المراهنين / توب رهان — ترتيب أعلى 10 حسب إجمالي الرهانات المسجلة.\n📌 حدد المبلغ بعد الاسم.',
+            '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n14. رهان@مبلغ — bet/wager\n15. مضاربة@مبلغ — duel\n16. حظي@مبلغ — my luck\n17. استثمار@مبلغ — investment\n18. حظ@مبلغ — luck@amount\n44. كمين — تحدي لاعبَين؛ من يتفادى الفخ يفوز بمليار نقطة.\nتوب المراهنين / توب رهان — ترتيب أعلى 10 حسب إجمالي الرهانات المسجلة.\n📌 الحد الأدنى لجميع الرهانات المدفوعة 100k نقطة؛ اكتب 100k أو أكثر. «حظ» بلا مبلغ يبقى مجانيًا.',
             '🎮 A3 — الألعاب — 3: البنك والجوائز\n━━━━━━━━━━━━\n19. بنك مليون — bank million\n20. مليار — billion\n21. زرع@رمز — farm/crop@item\n22. فيس@اسم — face@name\n📌 زرع أو farm يعرض المحاصيل؛ 30 محصولاً كحد أقصى في كل قائمة، ثم ns للتالي. الأسماء العربية والإنجليزية مقبولة.',
             '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ: 1% ربح، 1% خسارة، و98% دون ربح أو خسارة.',
             '🎮 A3 — ألعاب إضافية\n━━━━━━━━━━━━\n30. زواج / marriage\n31. تحدي / challenge\n32. لغز / riddle\n33. مزاج / mood\n34. حصانه / horse\n35. تسليه / entertainment\n36. بورصة / stock — استثمار تلقائي بالذهب بعد التحذير؛ بورصتي لسجلك\n37. اسرق@اسم / steal\n38. شبيه@اسم / lookalike\n39. Shot / شوت — صيد عادي؛ التنين بعد الإعلان\n40. صيد مزه / صيد مز — اختيار عضو عشوائي وصورة عامة\n41. طليقي — اختيار طليق عشوائي\n42. خلع — حكم مزاح ورد النفقات\n43. طلاق — حكم مزاح بالثلاث\n📌 ns للقائمة التالية.',
@@ -17544,6 +17545,14 @@ class TalkinBot:
         if amount <= 0:
             self.send_room_text(room, _reply_template("game_invalid_amount", DEFAULT_REPLY_MESSAGES["game_invalid_amount"]))
             return True
+        if amount < WAGER_MIN_AMOUNT:
+            message = (
+                "❌ الحد الأدنى للرهان هو 100k نقطة. اكتب 100k أو مبلغًا أكبر."
+                if self._effective_room_language(room) != "en"
+                else "❌ The minimum wager is 100k points. Enter 100k or more."
+            )
+            self.send_room_text(room, message)
+            return True
 
         def insufficient_notice(balance, required, reserved_points=0, joining=False):
             balance = max(0, int(balance or 0))
@@ -17639,6 +17648,13 @@ class TalkinBot:
             # must have enough balance for the original challenge amount.
             round_stake = int(waiting.get("stake", 0) or 0) if waiting else amount
             balance = _get_points(sender)
+            if error is None and waiting and round_stake < WAGER_MIN_AMOUNT:
+                error = (
+                    "❌ هذا الرهان المعلّق أقل من الحد الأدنى الجديد (100k)؛ لن أقبل الانضمام إليه، "
+                    "وسينتهي تلقائيًا ثم يُعاد مبلغ صاحبه."
+                    if self._effective_room_language(room) != "en"
+                    else "❌ This open wager is below the 100k minimum and cannot be joined. It will expire and be refunded."
+                )
             if error is None and balance < round_stake + reserved:
                     error = insufficient_notice(balance, round_stake, reserved, joining=bool(waiting))
 
@@ -19195,11 +19211,19 @@ class TalkinBot:
         return True
 
     def _lottery_game(self, room, sender, amount=0):
-        if not self._game_cooldown_notice(room, sender, WAGER_GAME_COOLDOWN_SECONDS, "حظ"):
-            return True
         amount = int(amount or 0)
         if amount < 0:
             self.send_room_text(room, "❌ المبلغ غير صحيح.")
+            return True
+        if 0 < amount < WAGER_MIN_AMOUNT:
+            message = (
+                "❌ الحد الأدنى لرهان الحظ المدفوع هو 100k نقطة. اكتب حظ 100k أو أكثر."
+                if self._effective_room_language(room) != "en"
+                else "❌ The minimum paid-luck wager is 100k points. Enter luck 100k or more."
+            )
+            self.send_room_text(room, message)
+            return True
+        if not self._game_cooldown_notice(room, sender, WAGER_GAME_COOLDOWN_SECONDS, "حظ"):
             return True
         # جوائز الحظ تقع دائماً بين 5,000 و100,000 نقطة. في اللعب المدفوع
         # لا تُصرف الجائزة إلا عند الفوز، ويبقى مبلغ الرهان مستقلاً عن الجائزة.
@@ -22817,7 +22841,7 @@ class TalkinBot:
             if len(open_wagers) > 1:
                 self.send_room_text(
                     room,
-                    "⚠️ توجد رهانات متعددة معلّقة. اكتب اسم اللعبة مع الرقم، مثل: رهان 1 أو مضاربة 1.",
+                    "⚠️ توجد رهانات متعددة معلّقة. اكتب اسم اللعبة مع مبلغ لا يقل عن 100k، مثل: رهان 100k أو مضاربة 100k.",
                 )
                 return True
         # Do not run the verification gate for ordinary conversation.
