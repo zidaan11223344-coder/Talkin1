@@ -16741,7 +16741,14 @@ class TalkinBot:
             except Exception as exc:
                 self.log("[MUSIC] request failed:", repr(exc), "room=", room)
                 if room_output:
-                    self.send_room_text(room, "❌ تعذر جلب الأغنية.")
+                    failure_detail = str(exc).casefold()
+                    message = "❌ تعذر جلب الأغنية."
+                    if "sign in to confirm" in failure_detail or "not a bot" in failure_detail:
+                        message += (
+                            "\n⚙️ YouTube طلب تحققًا إضافيًا من الاستضافة."
+                            " أضف YOUTUBE_COOKIES أو YOUTUBE_COOKIES_FILE في متغيرات Altare."
+                        )
+                    self.send_room_text(room, message)
 
         self.send_room_text(room, f"⏳ جاري تجهيز طلب الأغنية\n@{requester}")
         threading.Thread(

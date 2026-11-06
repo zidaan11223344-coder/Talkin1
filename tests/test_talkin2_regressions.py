@@ -2902,6 +2902,35 @@ class BotGameAndMusicRegressions(unittest.TestCase):
             self.assertTrue(bot.handle_music_command("Hall", ".sa dua", "Tester", with_reactions=False))
         self.assertTrue(any("تعذر جلب الأغنية" in text for _, text in sent))
 
+    def test_youtube_bot_verification_error_explains_cookie_variables(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot.music_last = {}
+        bot.music_current = {}
+        bot.reaction_targets = {}
+        sent = []
+        bot.send_room_text = lambda room, text: sent.append((room, text))
+        bot._music_download = lambda _query: (_ for _ in ()).throw(
+            RuntimeError("Sign in to confirm you’re not a bot")
+        )
+        bot.log = lambda *_args: None
+        bot.report_master_error = lambda *_args: None
+
+        class ImmediateThread:
+            def __init__(self, target=None, args=(), **_kwargs):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        with patch.object(bot_module, "_public_base_url", lambda: "https://bot.example"), patch.object(
+            bot_module.threading, "Thread", ImmediateThread
+        ):
+            self.assertTrue(bot.handle_music_command("Hall", ".sa song", "Tester", with_reactions=False))
+
+        message = "\n".join(text for _room, text in sent)
+        self.assertIn("YOUTUBE_COOKIES", message)
+        self.assertIn("YOUTUBE_COOKIES_FILE", message)
+
     def test_live_broadcast_skips_local_path_audio_attachments(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
         sent_packets = []
@@ -2932,6 +2961,76 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         ):
             self.assertTrue(bot._play_music_in_live_room("Hall", "/tmp/local-song.mp3", 30))
         self.assertEqual(sent_packets, [])
+
+    def test_live_broadcast_disconnects_automatically_after_audio_eof(self):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot._live_room_is_active = lambda _room: (
+            "Hall", {"room_id": "room-id", "session_id": "session-id"}, True
+        )
+        bot._livekit_active_Hall = True
+        bot._livekit_source_Hall = object()
+
+        class FakeLoop:
+            @staticmethod
+            def is_closed():
+                return False
+
+        class FakeRoom:
+            disconnected = False
+
+            async def disconnect(self):
+                self.disconnected = True
+
+        bot._livekit_loop_Hall = FakeLoop()
+        bot._livekit_room_Hall = FakeRoom()
+        bot._live_ready_rooms = {"Hall"}
+        bot._pending_live_accepts = {"Hall": {"session_id": "session-id"}}
+        bot._live_session_by_room = {"Hall": {"session_id": "session-id"}}
+        bot._live_room_ids = {"Hall": "room-id"}
+        bot._pending_live_tracks = {}
+        bot._live_playback_tokens = {}
+        bot._last_live_play_status_by_room = {}
+        bot.send_query = lambda _packet: True
+        bot.log = lambda *_args: None
+        bot._reassert_live_speaker = lambda *_args: True
+
+        def start_audio(room, *_args):
+            setattr(bot, f"_livekit_audio_feeding_{room}", True)
+            return True
+
+        bot._feed_livekit_audio = start_audio
+        started_threads = []
+
+        class DeferredThread:
+            def __init__(self, target=None, args=(), **_kwargs):
+                self.target, self.args = target, args
+                started_threads.append(self)
+
+            def start(self):
+                return None
+
+        class CompletedFuture:
+            def result(self, **_kwargs):
+                return True
+
+        def run_disconnect(coro, _loop):
+            bot_module.asyncio.run(coro)
+            return CompletedFuture()
+
+        with patch.object(bot_module, "_public_base_url", lambda: ""), patch.object(
+            bot_module.threading, "Thread", DeferredThread
+        ), patch.object(bot_module.asyncio, "run_coroutine_threadsafe", run_disconnect):
+            self.assertTrue(bot._play_music_in_live_room("Hall", "https://audio.test/song.mp3", 30))
+            self.assertEqual(len(started_threads), 1)
+            # This flag is cleared by the feeder when FFmpeg reaches EOF.
+            bot._livekit_audio_feeding_Hall = False
+            with patch.object(bot_module.time, "sleep", lambda _seconds: None):
+                started_threads[0].target(*started_threads[0].args)
+
+        self.assertTrue(bot._livekit_room_Hall.disconnected)
+        self.assertFalse(bot._livekit_active_Hall)
+        self.assertNotIn("Hall", bot._live_ready_rooms)
+        self.assertEqual(bot._last_live_play_status_by_room["Hall"], "broadcast_stopped")
 
     def test_room_protection_exempts_owner_and_moderator_but_not_member(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
