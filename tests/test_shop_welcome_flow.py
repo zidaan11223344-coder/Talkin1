@@ -84,3 +84,44 @@ def test_member_can_buy_and_activate_text_and_image_welcome(tmp_path, monkeypatc
     assert sent_images[0][1].startswith("https://bot.example/welcomes/welcome_")
     assert "Player" in drawn_names
     assert all("@" not in name for name in drawn_names)
+
+    # Deletion must clear saved text/image and pending uploads without revoking purchases.
+    key = bot_module._norm_user("Player")
+    bot.custom_welcome_text_pending = {key: {"username": "Player", "created_at": 0}}
+    bot.custom_welcome_image_pending = {key: {"username": "Player", "created_at": 0}}
+    assert bot._handle_management_command("", "حذف ترحيب", "Player", is_private=True) is True
+    assert key not in bot.custom_welcomes
+    assert key not in bot.custom_welcome_text_pending
+    assert key not in bot.custom_welcome_image_pending
+    assert shop.active("custom_welcome", username="Player")
+    assert shop.active("image_welcome", username="Player")
+    assert "ما زالت ميزات المتجر مفعّلة" in replies[-1][1]
+
+
+def test_delete_welcome_image_or_text_independently(tmp_path):
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    key = bot_module._norm_user("Player")
+    bot.custom_welcomes = {
+        key: {"username": "Player", "message": "Hello {username}", "image_url": "https://cdn.example/welcome.jpg"}
+    }
+    bot.custom_welcome_text_pending = {key: {"username": "Player", "created_at": 123}}
+    bot.custom_welcome_image_pending = {key: {"username": "Player", "created_at": 123}}
+    bot._master_reply_local = threading.local()
+    bot.send_private_text = lambda *_args: True
+    bot.send_room_text = lambda *_args: None
+    bot._save_social_features = lambda: None
+    bot._remember_bot_action = lambda *_args, **_kwargs: None
+
+    assert bot._handle_management_command("", "حذف ترحيب الصورة", "Player", is_private=True) is True
+    assert bot.custom_welcomes[key]["message"] == "Hello {username}"
+    assert "image_url" not in bot.custom_welcomes[key]
+    assert key in bot.custom_welcome_text_pending
+    assert key not in bot.custom_welcome_image_pending
+
+    bot.custom_welcomes[key]["image_url"] = "https://cdn.example/welcome.jpg"
+    bot.custom_welcome_image_pending[key] = {"username": "Player", "created_at": 123}
+    assert bot._handle_management_command("", "حذف ترحيب النص", "Player", is_private=True) is True
+    assert "message" not in bot.custom_welcomes[key]
+    assert bot.custom_welcomes[key]["image_url"] == "https://cdn.example/welcome.jpg"
+    assert key not in bot.custom_welcome_text_pending
+    assert key in bot.custom_welcome_image_pending

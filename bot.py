@@ -20170,40 +20170,34 @@ class TalkinBot:
                 if not image_url and excluded:
                     image_url = _search_monkey_image() if is_monkey else _search_lookalike_image(search_query)
                 if not image_url:
-                    self.send_room_text(room, "❌ لم أجد صورة مناسبة من الإنترنت؛ جرّب كلمة أخرى.")
+                    self.log("[RANDOM-PICTURE] no matching image for query:", search_query[:120])
                     return
 
                 local = _download_lookalike_image(image_url, f"internet_{uuid.uuid4().hex}")
                 if not local:
-                    self.send_room_text(room, "❌ عثرت على صورة لكن تعذر تجهيزها للإرسال؛ جرّب مرة أخرى.")
+                    self.log("[RANDOM-PICTURE] image download/processing returned no file")
                     return
                 base = _public_base_url()
                 if not base:
-                    self.send_room_text(room, "❌ رابط الوسائط العام غير مضبوط لإرسال الصورة.")
+                    self.log("[RANDOM-PICTURE] public media URL is not configured")
                     return
                 public_url = f"{base.rstrip('/')}/lookalikes/{local.name}"
                 try:
                     self._verify_public_media_url(public_url, "image")
                 except Exception as exc:
                     self.log("[RANDOM-PICTURE] public image check failed:", type(exc).__name__)
-                    self.send_room_text(room, "❌ تعذر الوصول إلى رابط الصورة العام حالياً.")
                     return
 
                 sent = self.send_room_media(room, public_url, "image") is not False
                 if not sent:
-                    self.send_room_text(room, "❌ تعذر إرسال الصورة إلى الغرفة.")
                     return
                 history = list(recent.get(query_key, []))
                 history.append(image_url)
                 recent[query_key] = history[-8:]
                 self._internet_picture_recent = recent
-                self.send_room_text(room, f"🖼️ صورة عشوائية من الإنترنت عن: {label}.")
+                self.send_room_text(room, "صورتك هي الصورة")
             except Exception as exc:
                 self.log("[RANDOM-PICTURE] search failed:", type(exc).__name__, str(exc)[:200])
-                try:
-                    self.send_room_text(room, "❌ تعذر البحث عن صورة من الإنترنت حالياً.")
-                except Exception:
-                    pass
             finally:
                 busy.discard(key)
 
@@ -20212,7 +20206,6 @@ class TalkinBot:
         except Exception as exc:
             busy.discard(key)
             self.log("[RANDOM-PICTURE] worker start failed:", type(exc).__name__)
-            self.send_room_text(room, "❌ تعذر بدء البحث عن الصورة حالياً.")
         return True
 
     def _handle_random_picture_command(self, room, body, sender):
@@ -20277,11 +20270,6 @@ class TalkinBot:
                             break
                 if not photo_url:
                     self.log("[PROFILE-PICTURE] no avatar source for user:", _norm_user(target))
-                    self.send_room_text(
-                        room,
-                        f"❌ لم أتمكن من جلب صورة الحساب @{target}. "
-                        "تحقق من أن Talkin يرسل صورة الحساب في بيانات الأعضاء أو أن رابطها محفوظ في profiles.",
-                    )
                     return
 
                 media_url = photo_url
@@ -20306,15 +20294,9 @@ class TalkinBot:
                     except Exception as media_exc:
                         self.log("[PROFILE-PICTURE] source URL send failed:", type(media_exc).__name__)
                 if sent:
-                    self.send_room_text(room, f"🖼️ صورتك هي الصورة يا @{target}.")
-                else:
-                    self.send_room_text(room, f"❌ عثرت على رابط الصورة لـ @{target} لكن TalkinChat رفض إرسالها؛ راجع سجل PROFILE-PICTURE.")
+                    self.send_room_text(room, "صورتك هي الصورة")
             except Exception as exc:
                 self.log("[PROFILE-PICTURE] worker failed:", type(exc).__name__, str(exc)[:240])
-                try:
-                    self.send_room_text(room, f"❌ تعذر جلب صورة @{target} هذه المرة. أعد المحاولة بعد قليل.")
-                except Exception:
-                    pass
             finally:
                 busy.discard(key)
 
@@ -20323,7 +20305,6 @@ class TalkinBot:
         except Exception as exc:
             busy.discard(key)
             self.log("[PROFILE-PICTURE] worker start failed:", type(exc).__name__)
-            self.send_room_text(room, "❌ تعذر بدء البحث عن الصورة حالياً.")
         return True
 
     def _handle_kemin_command(self, room, body, sender):
@@ -23626,6 +23607,15 @@ class TalkinBot:
             or re.fullmatch(r"(?:ترحيب|welcome)@.+", shop_command_text, re.I | re.S)
             or pending_welcome_text
         )
+        welcome_content_delete_command = shop_command_text.casefold() in {
+            "حذف ترحيب", "حذف الترحيب", "إلغاء الترحيب", "الغاء الترحيب",
+            "حذف ترحيب نص", "حذف الترحيب نص", "حذف ترحيب النص", "حذف الترحيب النص",
+            "حذف ترحيب نصي", "حذف الترحيب نصي", "حذف الترحيب النصي",
+            "حذف ترحيب صورة", "حذف الترحيب صورة", "حذف ترحيب الصورة", "حذف الترحيب الصورة",
+            "حذف ترحيب صوره", "حذف الترحيب صوره", "حذف ترحيب الصوره", "حذف الترحيب الصوره",
+            "delete welcome", "remove welcome", "delete welcome text", "remove welcome text",
+            "delete welcome image", "remove welcome image",
+        }
         points_transfer_command = bool(re.fullmatch(r"sb@([^@]+)@([^@]+)", str(body or "").strip(), re.I))
         master_points_transfer_command = bool(re.fullmatch(r"msb@([^@]+)@([^@]+)", str(body or "").strip(), re.I))
         master_points_deduction_command = str(body or "").strip().casefold().startswith("-sb@")
@@ -23720,6 +23710,7 @@ class TalkinBot:
                 and not (is_publish and _is_verified_user(sender))
                 and not (points_transfer_command and _is_verified_user(sender))
                 and not (member_shop_command and _is_verified_user(sender))
+                and not welcome_content_delete_command
                 and not is_publish_unban
                 and not join_command
                 and not join_all_command
@@ -24737,6 +24728,92 @@ class TalkinBot:
         text=str(body or "").strip()
         low=text.casefold()
 
+        delete_text_commands = {
+            "حذف ترحيب نص", "حذف الترحيب نص", "حذف ترحيب النص", "حذف الترحيب النص",
+            "حذف ترحيب نصي", "حذف الترحيب نصي", "حذف الترحيب النصي",
+            "delete welcome text", "remove welcome text",
+        }
+        delete_image_commands = {
+            "حذف ترحيب صورة", "حذف الترحيب صورة", "حذف ترحيب الصورة", "حذف الترحيب الصورة",
+            "حذف ترحيب صوره", "حذف الترحيب صوره", "حذف ترحيب الصوره", "حذف الترحيب الصوره",
+            "delete welcome image", "remove welcome image",
+        }
+        delete_all_commands = {
+            "حذف ترحيب", "حذف الترحيب", "إلغاء الترحيب", "الغاء الترحيب",
+            "delete welcome", "remove welcome",
+        }
+        cancel_welcome_purchase_commands = {
+            "إلغاء شراء الترحيب", "الغاء شراء الترحيب",
+            "إلغاء شراء الترحيب المخصص", "الغاء شراء الترحيب المخصص",
+            "cancel welcome purchase",
+        }
+        delete_scope = (
+            "text" if low in delete_text_commands else
+            "image" if low in delete_image_commands else
+            "all" if low in delete_all_commands else
+            "purchase" if low in cancel_welcome_purchase_commands else None
+        )
+        if delete_scope:
+            key = _norm_user(sender)
+            welcomes = getattr(self, "custom_welcomes", None)
+            if not isinstance(welcomes, dict):
+                welcomes = self.custom_welcomes = {}
+            pending_text = getattr(self, "custom_welcome_text_pending", None)
+            pending_image = getattr(self, "custom_welcome_image_pending", None)
+            if not isinstance(pending_text, dict):
+                pending_text = self.custom_welcome_text_pending = {}
+            if not isinstance(pending_image, dict):
+                pending_image = self.custom_welcome_image_pending = {}
+
+            if delete_scope == "purchase":
+                removed_unlocks = member_shop.remove_welcome_unlocks(
+                    sender,
+                    user_id=_stored_user_id(sender, room),
+                    aliases=_stored_user_aliases(sender, room),
+                )
+                removed_pending = pending_text.pop(key, None) is not None
+                removed_pending = pending_image.pop(key, None) is not None or removed_pending
+                entry = welcomes.pop(key, None)
+                removed_content = bool(
+                    isinstance(entry, dict) and (entry.get("message") or entry.get("image_url"))
+                )
+                self._save_social_features()
+                removed = bool(removed_unlocks or removed_pending or removed_content)
+                reply = (
+                    "✅ أُلغي شراء ميزات الترحيب وحُذفت إعداداتها المحفوظة."
+                    if removed else
+                    "ℹ️ لا توجد ميزة ترحيب مشتراة أو إعدادات محفوظة لهذا الحساب."
+                )
+            else:
+                removed = False
+                if delete_scope in {"all", "text"}:
+                    removed = pending_text.pop(key, None) is not None or removed
+                if delete_scope in {"all", "image"}:
+                    removed = pending_image.pop(key, None) is not None or removed
+                entry = welcomes.get(key)
+                if isinstance(entry, dict):
+                    if delete_scope in {"all", "text"}:
+                        removed = bool(entry.pop("message", None)) or removed
+                    if delete_scope in {"all", "image"}:
+                        removed = bool(entry.pop("image_url", None)) or removed
+                    if not entry.get("message") and not entry.get("image_url"):
+                        welcomes.pop(key, None)
+                elif entry is not None and delete_scope in {"all", "text"}:
+                    welcomes.pop(key, None)
+                    removed = True
+                self._save_social_features()
+                if delete_scope == "text":
+                    reply = "✅ حُذف ترحيبك النصي." if removed else "ℹ️ لا يوجد ترحيب نصي محفوظ أو قيد الإعداد."
+                elif delete_scope == "image":
+                    reply = "✅ حُذفت صورة ترحيبك." if removed else "ℹ️ لا توجد صورة ترحيب محفوظة أو قيد الإعداد."
+                else:
+                    reply = (
+                        "✅ حُذف الترحيب النصي والصوري المحفوظ. ما زالت ميزات المتجر مفعّلة."
+                        if removed else "ℹ️ لا يوجد ترحيب محفوظ أو إعداد قيد الانتظار."
+                    )
+            self.send_private_text(sender, reply)
+            return True
+
         enable_name_aliases = {
             "تشغيل الاسما", "تشغيل الاسماء", "تشغيل الأسماء", "تشغيل الاسم",
             "تشغيل الأسماء المعدلة", "تشغيل الاسماء المعدله",
@@ -24971,7 +25048,7 @@ class TalkinBot:
                 self.custom_welcome_enabled = True
                 self._save_social_features()
                 pending_text.pop(pending_key, None)
-                self.send_private_text(sender, "✅ تم حفظ نص الترحيب المخصص.")
+                self.send_private_text(sender, "✅ تم حفظ نص الترحيب المخصص. للحذف: حذف ترحيب النص، أو حذف ترحيب لحذف النص والصورة.")
                 return True
 
         result_toggle = re.fullmatch(r"sf@(on|off)", text, re.I)
@@ -26938,24 +27015,6 @@ class TalkinBot:
             self._save_social_features()
             self.send_private_text(sender, "✅ تم تشغيل الردود التلقائية." if self.auto_replies_enabled else "⛔ تم إيقاف الردود التلقائية.")
             return True
-        if low in {"حذف الترحيب", "حذف ترحيب", "إلغاء الترحيب", "الغاء الترحيب", "إلغاء شراء الترحيب", "الغاء شراء الترحيب", "delete welcome", "remove welcome"}:
-            key = _norm_user(sender)
-            removed = member_shop.remove_welcome_unlocks(
-                sender,
-                user_id=_stored_user_id(sender, room),
-                aliases=_stored_user_aliases(sender, room),
-            )
-            getattr(self, "custom_welcome_text_pending", {}).pop(key, None)
-            getattr(self, "custom_welcome_image_pending", {}).pop(key, None)
-            self.custom_welcomes.pop(key, None)
-            self._save_social_features()
-            self.send_private_text(
-                sender,
-                "✅ تم إلغاء شراء الترحيب النصي والصوري وحذف الترحيب المحفوظ."
-                if removed else
-                "ℹ️ لا يوجد ترحيب مشترى أو محفوظ لهذا الحساب."
-            )
-            return True
         if low in {"متجر", "shop", "store", "story"}:
             self.send_private_text(sender, member_shop.render_catalog())
             return True
@@ -27025,7 +27084,7 @@ class TalkinBot:
                 getattr(self, "custom_welcome_text_pending", {}).pop(welcome_key, None)
                 self.custom_welcome_enabled = True
                 self._save_social_features()
-                self.send_private_text(sender, "✅ تم حفظ ترحيبك المخصص.")
+                self.send_private_text(sender, "✅ تم حفظ ترحيبك المخصص. للحذف: حذف ترحيب النص، أو حذف ترحيب لحذف النص والصورة.")
             return True
         if low in {"ترحيب_صورة", "welcome_image"}:
             if not member_shop.active(
@@ -27463,7 +27522,7 @@ class TalkinBot:
             pending_map.pop(sender_key, None)
             self.custom_welcome_enabled = True
             self._save_social_features()
-            self.send_private_text(username, "✅ تم حفظ صورة الترحيب. ستظهر عند دخولك الجديد للغرفة.")
+            self.send_private_text(username, "✅ تم حفظ صورة الترحيب. ستظهر عند دخولك الجديد للغرفة. للحذف: حذف ترحيب الصورة، أو حذف ترحيب لحذف النص والصورة.")
             return True
         return False
 

@@ -541,7 +541,32 @@ def test_my_picture_acknowledges_before_profile_network_lookup(monkeypatch):
 
     assert lookups == ["FancyUser"]
     assert media == [("Hall", "https://cdn.example/avatar.jpg", "image")]
-    assert any("صورتك هي الصورة" in text for _room, text in replies)
+    assert replies == [("Hall", "صورتك هي الصورة")]
+    assert not bot._profile_picture_busy
+
+
+def test_profile_photo_search_is_silent_when_no_avatar_exists(monkeypatch):
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot.user_photos = {}
+    bot._profile_picture_busy = set()
+    bot.stop_event = threading.Event()
+    bot.stop_event.set()
+    replies = []
+    bot.send_room_text = lambda room, text: replies.append((room, text)) or True
+    bot._queue_profile_roster_refresh = lambda *_args: True
+    bot._lookup_profile_photo = lambda _username: ""
+    bot.log = lambda *_args: None
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(bot_module.threading, "Thread", InlineThread)
+    assert bot._handle_random_picture_command("Hall", "صورتي", "FancyUser") is True
+    assert replies == []
     assert not bot._profile_picture_busy
 
 
@@ -580,7 +605,30 @@ def test_internet_picture_command_searches_adult_women_and_sends_hosted_image(mo
     assert queries == ["beautiful adult women portraits"]
     assert verified == [("https://media.example/lookalikes/random-woman.jpg", "image")]
     assert media == [("Hall", "https://media.example/lookalikes/random-woman.jpg", "image")]
-    assert any("نساء بالغات" in text for _room, text in replies)
+    assert replies == [("Hall", "صورتك هي الصورة")]
+    assert not bot._internet_picture_busy
+
+
+def test_internet_picture_search_is_silent_when_no_image_is_found(monkeypatch):
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot._internet_picture_busy = set()
+    bot._internet_picture_recent = {}
+    replies = []
+    bot.send_room_text = lambda room, text: replies.append((room, text)) or True
+    bot.send_room_media = lambda *_args: True
+    bot.log = lambda *_args: None
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(bot_module.threading, "Thread", InlineThread)
+    monkeypatch.setattr(bot_module, "_search_lookalike_image", lambda *_args, **_kwargs: None)
+    assert bot._handle_internet_picture_command("Hall", ".صوره بنات حلوه", "FancyUser") is True
+    assert replies == []
     assert not bot._internet_picture_busy
 
 
