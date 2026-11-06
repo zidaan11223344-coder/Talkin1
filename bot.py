@@ -5672,7 +5672,7 @@ def _default_help_sections():
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
-            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي أو صورتك — عرض صورة حسابك الحقيقية فقط\n.صوره اسم أو موضوع — صورة عشوائية من الإنترنت، مثل: .صوره قرود / .صوره شباب وسيمين / .صوره بنات حلوه\nشبيه@اسم — بحث آمن عن الشبيه\nشبيهك@اسم — بحث آمن عن شبيهك\n\n📌 البحث عن الصور منفصل تماماً عن صور الحساب، وبحث النساء يستخدم استعلاماً للبالغات.',
+            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — عرض صورة حسابك الحقيقية فقط\n.صوره اسم_المستخدم أو موضوع — بحث آمن عن صورة من الإنترنت\n.صوره — صورة عشوائية: 30% قرود والباقي صورة بالغ/بالغة حسب الجنس المعروف\nشبيه@اسم / شبيهك@اسم — بحث آمن عن صورة شبيهة\n📌 SafeSearch صارم، وطلبات الصور المخلة محظورة.',
         ],
         3: [
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
@@ -8637,10 +8637,31 @@ def _extract_image_urls_from_bing(html_text):
     return urls
 
 
+def _is_explicit_picture_query(query):
+    """Fail closed for explicitly sexual image searches; normal searches use strict SafeSearch."""
+    text = re.sub(r"\s+", " ", str(query or "").casefold()).strip()
+    english_terms = {
+        "nsfw", "xxx", "porn", "porno", "nude", "nudes", "nudity",
+        "erotic", "hentai", "sex", "sexual", "sexy",
+    }
+    if set(re.findall(r"[a-z0-9]+", text)) & english_terms:
+        return True
+    normalized = _norm_user(text)
+    return any(term in normalized for term in (
+        "اباحي", "اباحيه", "عاري", "عاريه", "تعري", "عري", "مخل", "فاضح",
+        "سكس", "جنس", "مثير", "مثيرة", "خلاعي",
+    ))
+
+
+def _is_monkey_picture_query(query):
+    normalized = _norm_user(query)
+    return any(term in normalized for term in ("قرد", "قرود", "شمبانزي", "monkey", "chimp"))
+
+
 def _search_lookalike_images(query, exclude_urls=None, limit=12):
-    """Return several current Bing results, falling back to Commons search."""
+    """Return strict-SafeSearch Bing images; Commons fallback is limited to animal searches."""
     q = str(query or "").strip()
-    if not q:
+    if not q or _is_explicit_picture_query(q):
         return []
     excluded = {str(x).strip() for x in (exclude_urls or []) if str(x).strip()}
     urls = []
@@ -8649,10 +8670,11 @@ def _search_lookalike_images(query, exclude_urls=None, limit=12):
                       "Chrome/120.0 Mobile Safari/537.36",
         "Accept-Language": "ar,en;q=0.8",
     }
+    safe_query = q if re.search(r"\bsafe for work\b", q, flags=re.I) else q + " safe for work"
     try:
         r = requests.get(
             "https://www.bing.com/images/search",
-            params={"q": q + " safe for work", "form": "HDRSC2", "first": "1", "adlt": "strict"},
+            params={"q": safe_query, "form": "HDRSC2", "first": "1", "adlt": "strict"},
             headers=headers,
             timeout=(3, 6),
         )
@@ -8661,11 +8683,11 @@ def _search_lookalike_images(query, exclude_urls=None, limit=12):
     except Exception:
         urls = []
     fresh = list(dict.fromkeys(url for url in urls if url and url not in excluded))
-    if len(fresh) < min(3, max(1, int(limit))):
-        # Bing can block datacenter IPs or change its image-result markup.
-        # Commons' public API is a stable, license-aware image-search fallback.
+    if len(fresh) < min(3, max(1, int(limit))) and _is_monkey_picture_query(q):
+        # Commons is used only for animal searches: unlike Bing's `adlt=strict`,
+        # Commons does not provide a SafeSearch filter suitable for portraits.
         try:
-            commons_query = re.sub(r"\b(?:celebrity|portrait|safe for work)\b", " ", q, flags=re.I)
+            commons_query = re.sub(r"\b(?:safe for work)\b", " ", q, flags=re.I)
             commons_query = re.sub(r"\s+", " ", commons_query).strip() or q
             response = requests.get(
                 "https://commons.wikimedia.org/w/api.php",
@@ -20112,22 +20134,41 @@ class TalkinBot:
         return self._classify_picture_name(name)
 
     def _picture_search_queries_for_name(self, name, gender=None):
-        """Return mostly monkey results, with safe gender-aware playful categories."""
+        """Pick 30% playful monkey results and otherwise an adult SFW gender-matched portrait."""
         gender = gender or self._picture_gender_hint(name)
-        if secrets.randbelow(100) < 60:
+        if secrets.randbelow(100) < 30:
             return ("قرود لطيفة", "قرود مضحكة", "monkeys safe for work", "قرود في الطبيعة")
         if gender == "male":
-            return ("شباب وسيمين safe for work", "شباب بشعين بشكل كوميدي", "شباب عرب محترمين")
+            return (
+                "handsome adult men portrait safe for work",
+                "شباب بالغون وسيمون بملابس محتشمة",
+                "handsome Arab adult man portrait, fully clothed",
+            )
         if gender == "female":
-            return ("بنات حلوات safe for work", "بنات بشعات بشكل كوميدي", "بنات عرب محترمات")
-        return ("أشخاص مضحكون safe for work", "شخصيات كرتونية", "قرود لطيفة")
+            return (
+                "beautiful adult women portrait safe for work",
+                "نساء بالغات بملابس محتشمة portrait",
+                "beautiful Arab adult woman portrait, fully clothed",
+            )
+        return (
+            "adult person portrait safe for work",
+            "شخص بالغ portrait بملابس محتشمة",
+            "fully clothed adult portrait, safe for work",
+        )
 
-    def _random_internet_picture_query(self, requested):
+    def _random_internet_picture_query(self, requested, gender=None):
         """Map common Arabic themes to safe, adult-specific web image searches."""
         text = str(requested or "").strip()
         normalized = _norm_user(text)
         if not text:
-            category = secrets.choice(("monkey", "men", "women"))
+            if secrets.randbelow(100) < 30:
+                category = "monkey"
+            elif gender == "male":
+                category = "men"
+            elif gender == "female":
+                category = "women"
+            else:
+                category = "people"
         elif any(word in normalized for word in ("قرد", "قرود", "شمبانزي", "monkey", "chimp")):
             category = "monkey"
         elif any(word in normalized for word in ("شاب", "شباب", "رجل", "رجال", "وسيم", "وسيمين")):
@@ -20135,12 +20176,14 @@ class TalkinBot:
         elif any(word in normalized for word in ("بنت", "بنات", "فتاه", "فتاة", "نساء", "امراه", "مراه", "حلوه", "حلوة")):
             category = "women"
         else:
-            return f"{text} portrait", text, False
+            return f"{text} portrait safe for work", text, False
 
         if category == "monkey":
             return "monkeys wildlife", "قرود", True
         if category == "men":
             return "handsome adult men portraits", "شباب وسيمين بالغين", False
+        if category == "people":
+            return "fully clothed adult people portraits", "بالغون وبالغات", False
         return "beautiful adult women portraits", "نساء بالغات", False
 
     def _handle_internet_picture_command(self, room, body, sender):
@@ -20153,6 +20196,8 @@ class TalkinBot:
             if not match:
                 return False
             requested = match.group(1).strip()
+        if _is_explicit_picture_query(requested):
+            return True
         if not room:
             return True
 
@@ -20165,7 +20210,9 @@ class TalkinBot:
 
         def worker():
             try:
-                search_query, label, is_monkey = self._random_internet_picture_query(requested)
+                search_query, label, is_monkey = self._random_internet_picture_query(
+                    requested, self._picture_gender_hint(sender)
+                )
                 recent = getattr(self, "_internet_picture_recent", {})
                 query_key = _norm_user(search_query)
                 excluded = set(recent.get(query_key, []))
@@ -20220,7 +20267,7 @@ class TalkinBot:
         if not room:
             return True
         text = str(body or "").strip()
-        if text.casefold() not in {"صورتي", "صورتك"}:
+        if text.casefold() != "صورتي":
             return False
         target = str(sender or "").strip().lstrip("@")
         if not target:
@@ -23295,7 +23342,7 @@ class TalkinBot:
                 ],
                 2: [
                     "🎵 Music\n━━━━━━━━━━━━\n.sa song name / play song name — play music\nstop music / stop — stop the current song\nsher@name — share the current song",
-                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nmy photo — your account avatar only\n.photo <name or topic> — random internet image; e.g. monkeys, handsome men, adult women",
+                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nصورتي — your account avatar only\n.صوره <username/topic> — strict-SafeSearch internet image\n.صوره — random image: 30% monkeys; otherwise adult portrait matching known gender\nشبيه@name / شبيهك@name — safe lookalike-style image\nExplicit/obscene image searches are blocked.",
                 ],
                 3: [
                     "🎮 Games — solo games\n━━━━━━━━━━━━\nrock / paper / scissors — play against the bot\ninvestment, luck, coin@heads/tails, wheel\nbox@1-3, cup@1-3, monster, volcano, bird, star\ntable, uno\nType ns for the next games list.",

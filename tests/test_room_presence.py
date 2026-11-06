@@ -573,6 +573,7 @@ def test_profile_photo_search_is_silent_when_no_avatar_exists(monkeypatch):
 def test_profile_photo_handler_does_not_claim_internet_photo_command():
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     assert bot._handle_random_picture_command("Hall", ".صوره قرود", "FancyUser") is False
+    assert bot._handle_random_picture_command("Hall", "صورتك", "FancyUser") is False
 
 
 def test_internet_picture_command_searches_adult_women_and_sends_hosted_image(monkeypatch, tmp_path):
@@ -632,7 +633,7 @@ def test_internet_picture_search_is_silent_when_no_image_is_found(monkeypatch):
     assert not bot._internet_picture_busy
 
 
-def test_random_internet_picture_categories_include_monkeys_and_adults():
+def test_random_internet_picture_categories_include_monkeys_and_adults(monkeypatch):
     bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
     monkey_query, monkey_label, is_monkey = bot._random_internet_picture_query("قرود")
     men_query, _men_label, men_is_monkey = bot._random_internet_picture_query("شباب وسيمين")
@@ -640,6 +641,130 @@ def test_random_internet_picture_categories_include_monkeys_and_adults():
     assert (monkey_query, monkey_label, is_monkey) == ("monkeys wildlife", "قرود", True)
     assert "adult men" in men_query and not men_is_monkey
     assert "adult women" in women_query and not women_is_monkey
+
+    monkeypatch.setattr(bot_module.secrets, "randbelow", lambda _limit: 29)
+    assert bot._random_internet_picture_query("", "male")[2] is True
+    assert all("قرود" in query or "monkey" in query for query in bot._picture_search_queries_for_name("Ahmed", "male"))
+
+    monkeypatch.setattr(bot_module.secrets, "randbelow", lambda _limit: 30)
+    male_random = bot._random_internet_picture_query("", "male")
+    female_random = bot._random_internet_picture_query("", "female")
+    unknown_random = bot._random_internet_picture_query("", "unknown")
+    assert "adult men" in male_random[0] and not male_random[2]
+    assert "adult women" in female_random[0] and not female_random[2]
+    assert "adult people" in unknown_random[0] and not unknown_random[2]
+    male_queries = bot._picture_search_queries_for_name("Ahmed", "male")
+    female_queries = bot._picture_search_queries_for_name("Amira", "female")
+    assert all(("adult men" in query or "adult man" in query or "بالغ" in query) and "women" not in query for query in male_queries)
+    assert all(
+        ("adult women" in query or "adult woman" in query or "بالغ" in query)
+        and "adult men" not in query and "handsome" not in query and "شباب" not in query
+        for query in female_queries
+    )
+
+
+def test_internet_picture_command_searches_named_user_with_safe_portrait_query(monkeypatch, tmp_path):
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+    bot._internet_picture_busy = set()
+    replies, media, queries = [], [], []
+    bot.send_room_text = lambda room, text: replies.append((room, text)) or True
+    bot.send_room_media = lambda *args: media.append(args) or True
+    bot._verify_public_media_url = lambda *_args: True
+    bot.log = lambda *_args: None
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(bot_module.threading, "Thread", InlineThread)
+    monkeypatch.setattr(
+        bot_module, "_search_lookalike_image",
+        lambda query, **_kwargs: queries.append(query) or "https://source.example/person.jpg",
+    )
+    monkeypatch.setattr(bot_module, "_search_monkey_image", lambda **_kwargs: None)
+    monkeypatch.setattr(bot_module, "_download_lookalike_image", lambda *_args: tmp_path / "person.jpg")
+    monkeypatch.setattr(bot_module, "_public_base_url", lambda: "https://media.example")
+
+    assert bot._handle_internet_picture_command("Hall", ".صوره FancyUser", "Requester") is True
+    assert queries == ["FancyUser portrait safe for work"]
+    assert media == [("Hall", "https://media.example/lookalikes/person.jpg", "image")]
+    assert replies == [("Hall", "صورتك هي الصورة")]
+
+
+def test_lookalike_commands_use_safe_gender_matched_searches(monkeypatch, tmp_path):
+    for command, target, gender, expected_query in (
+        ("شبيه@Ahmed", "Ahmed", "male", "handsome adult men portrait safe for work"),
+        ("شبيهك@Amira", "Amira", "female", "beautiful adult women portrait safe for work"),
+    ):
+        bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+        bot._lookalike_busy = set()
+        bot._lookalike_recent = {}
+        bot.room_users = {"Hall": {target: {"gender": gender}}}
+        bot.send_room_text = lambda *_args: True
+        bot.send_room_media = lambda *_args: True
+        bot.log = lambda *_args: None
+        bot._capture_room_response_language = lambda *_args: "ar"
+        bot._localized_room_worker = lambda _room, _language, worker: worker
+        queries = []
+
+        class InlineThread:
+            def __init__(self, target, **_kwargs):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        monkeypatch.setattr(bot_module.threading, "Thread", InlineThread)
+        monkeypatch.setattr(bot_module.secrets, "randbelow", lambda _limit: 30)
+        monkeypatch.setattr(bot_module.secrets, "choice", lambda choices: choices[0])
+        monkeypatch.setattr(
+            bot_module, "_search_lookalike_image",
+            lambda query, **_kwargs: queries.append(query) or "https://source.example/lookalike.jpg",
+        )
+        monkeypatch.setattr(bot_module, "_search_monkey_image", lambda **_kwargs: None)
+        monkeypatch.setattr(bot_module, "_download_lookalike_image", lambda *_args: tmp_path / "lookalike.jpg")
+        monkeypatch.setattr(bot_module, "_public_base_url", lambda: "https://media.example")
+
+        assert bot._handle_lookalike_command("Hall", command, "Requester") is True
+        assert queries == [expected_query]
+
+
+def test_human_image_search_uses_strict_bing_safesearch_without_commons_fallback(monkeypatch):
+    calls = []
+
+    class Response:
+        text = '{"murl":"https://images.example/adult-portrait.jpg"}'
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr(bot_module.requests, "get", fake_get)
+    urls = bot_module._search_lookalike_images("handsome adult men portrait", limit=8)
+
+    assert urls == ["https://images.example/adult-portrait.jpg"]
+    assert len(calls) == 1  # No unfiltered Wikimedia portrait fallback.
+    assert calls[0][0] == "https://www.bing.com/images/search"
+    assert calls[0][1]["params"]["adlt"] == "strict"
+    assert calls[0][1]["params"]["q"] == "handsome adult men portrait safe for work"
+
+
+def test_explicit_internet_image_search_is_blocked_without_network(monkeypatch):
+    bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("explicit image query should be blocked before search")
+
+    monkeypatch.setattr(bot_module.requests, "get", fail_if_called)
+    assert bot._handle_internet_picture_command("Hall", ".صوره صور مخلة", "FancyUser") is True
+    assert bot_module._search_lookalike_images("porn images") == []
 
 
 def test_native_avatar_roster_refresh_is_per_member_and_not_db_short_circuited():

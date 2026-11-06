@@ -2601,17 +2601,24 @@ class BotGameAndMusicRegressions(unittest.TestCase):
         self.assertEqual(metadata["source"], "Spotify")
         self.assertEqual(mocked_get.call_args.args[0], "https://open.spotify.com/oembed")
 
-    def test_lookalike_search_falls_back_to_wikimedia_when_bing_has_no_results(self):
+    def test_human_lookalike_search_does_not_use_unfiltered_wikimedia_fallback(self):
+        bing = type("Response", (), {"raise_for_status": lambda self: None, "text": "no image metadata"})()
+        with patch.object(bot_module.requests, "get", return_value=bing) as mocked_get:
+            urls = bot_module._search_lookalike_images("test celebrity", limit=3)
+        self.assertEqual(urls, [])
+        mocked_get.assert_called_once()
+
+    def test_monkey_search_can_use_wikimedia_fallback(self):
         bing = type("Response", (), {"raise_for_status": lambda self: None, "text": "no image metadata"})()
         commons = type("Response", (), {
             "raise_for_status": lambda self: None,
             "json": lambda self: {"query": {"pages": [
-                {"imageinfo": [{"thumburl": "https://upload.wikimedia.org/test.jpg", "mime": "image/jpeg"}]}
+                {"imageinfo": [{"thumburl": "https://upload.wikimedia.org/monkey.jpg", "mime": "image/jpeg"}]}
             ]}},
         })()
         with patch.object(bot_module.requests, "get", side_effect=[bing, commons]):
-            urls = bot_module._search_lookalike_images("test celebrity", limit=3)
-        self.assertIn("https://upload.wikimedia.org/test.jpg", urls)
+            urls = bot_module._search_lookalike_images("monkeys wildlife", limit=3)
+        self.assertIn("https://upload.wikimedia.org/monkey.jpg", urls)
 
     def test_room_audio_packet_contains_actual_room_and_attachment_url(self):
         bot = bot_module.TalkinBot.__new__(bot_module.TalkinBot)
