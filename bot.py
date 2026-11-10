@@ -9505,6 +9505,43 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
                 pass
 
 
+def _optimize_social_media_asset(path):
+    """Create a lightweight copy for fast room opening while preserving the source."""
+    if not PIL_AVAILABLE or not path:
+        return Path(path) if path else path
+    source = Path(path)
+    if not source.is_file():
+        return source
+    try:
+        with Image.open(source) as image:
+            max_side = 640 if source.suffix.casefold() == ".gif" else 720
+            scale = min(1.0, max_side / max(image.width, image.height))
+            target_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+            output = BASE_DIR / "generated_publish" / f"light_{source.stem}{source.suffix.casefold()}"
+            if source.suffix.casefold() in {".jpg", ".jpeg"}:
+                frame = image.convert("RGB")
+                if scale < 1.0:
+                    frame = frame.resize(target_size, Image.Resampling.LANCZOS)
+                frame.save(output, "JPEG", quality=78, optimize=True, progressive=True)
+            elif source.suffix.casefold() == ".gif":
+                total = max(1, int(getattr(image, "n_frames", 1)))
+                count = min(total, 8)
+                indexes = [min(total - 1, round(i * (total - 1) / max(1, count - 1))) for i in range(count)]
+                frames = []
+                for index in indexes:
+                    image.seek(index)
+                    frame = image.convert("RGB")
+                    if scale < 1.0:
+                        frame = frame.resize(target_size, Image.Resampling.LANCZOS)
+                    frames.append(frame.quantize(colors=64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
+                frames[0].save(output, "GIF", save_all=True, append_images=frames[1:],
+                               duration=170, loop=0, optimize=True, disposal=2)
+            else:
+                return source
+        return output if output.is_file() else source
+    except Exception:
+        return source
+
 def _prepare_talkin_animation_media(gif_path):
     """Keep animation as an animated GIF sent with Talkin's image media type.
 
@@ -30255,6 +30292,7 @@ class TalkinBot:
                 self._portrait_template_index = template_index
                 image_path = render_user_3d_portrait_gif(photo_url, sender, variant=template_index)
                 media_path, media_type = _prepare_talkin_animation_media(image_path)
+                media_path = _optimize_social_media_asset(media_path)
                 base = _public_base_url()
                 if not base:
                     raise RuntimeError("PUBLIC_BASE_URL غير مضبوط")
@@ -30444,6 +30482,7 @@ class TalkinBot:
             if mode == "animated" and not premium_template:
                 card, media_type = _prepare_talkin_animation_media(card)
                 self.log("[EXPLORE] animated media:", card.name, "type=", media_type)
+            card = _optimize_social_media_asset(card)
             base = _public_base_url()
             if not base:
                 raise RuntimeError("رابط الوسائط العام غير مضبوط")
