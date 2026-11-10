@@ -8871,8 +8871,8 @@ def render_explore_animated_card(text, username, photo_url="", language="ar", se
 # These are lightweight Pillow effects (not AI face reconstruction).
 # ============================================================
 
-def render_user_3d_portrait_gif(photo_url, username):
-    """Create a large 3D coffee-medallion portrait that rotates to the right as GIF."""
+def render_user_3d_portrait_gif(photo_url, username, variant=0):
+    """Create one of five animated 3D portrait styles, rotating clockwise."""
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير مثبت")
     avatar = _download_profile_photo(photo_url)
@@ -8890,17 +8890,26 @@ def render_user_3d_portrait_gif(photo_url, username):
     ImageDraw.Draw(circle_mask).ellipse((2, 2, diameter-3, diameter-3), fill=255)
     avatar.putalpha(circle_mask)
 
-    # Deep coffee/navy background with a soft blue halo behind the medallion.
+    variant = int(variant or 0) % 5
+    palettes = (
+        ((4, 9, 30), (17, 27, 72), (75, 220, 255), (249, 190, 91)),
+        ((22, 5, 32), (74, 12, 74), (255, 101, 188), (255, 211, 112)),
+        ((4, 25, 24), (10, 74, 70), (75, 245, 203), (255, 215, 122)),
+        ((26, 13, 4), (86, 34, 8), (255, 154, 66), (255, 226, 148)),
+        ((8, 8, 22), (35, 16, 78), (165, 116, 255), (255, 210, 103)),
+    )
+    accent, gold = palettes[variant][2], palettes[variant][3]
+    # Deep 3D background with a colored halo behind the medallion.
     bg = Image.new("RGB", (width, height))
     bg_draw = ImageDraw.Draw(bg)
-    top, bottom = (4, 9, 30), (17, 27, 72)
+    top, bottom = palettes[variant][0], palettes[variant][1]
     for y in range(height):
         t = y / max(1, height-1)
         col = tuple(int(top[i]*(1-t) + bottom[i]*t) for i in range(3))
         bg_draw.line((0, y, width, y), fill=col)
     glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse((35, 20, 685, 670), fill=(0, 138, 255, 45))
+    gd.ellipse((35, 20, 685, 670), fill=(*accent, 58))
     glow = glow.filter(ImageFilter.GaussianBlur(62))
     bg = Image.alpha_composite(bg.convert("RGBA"), glow)
 
@@ -8923,25 +8932,25 @@ def render_user_3d_portrait_gif(photo_url, username):
         d.ellipse((center_x-310, center_y-310, center_x+310, center_y+310),
                   fill=(1, 3, 17, 245), outline=(2, 7, 24, 255), width=20)
         d.ellipse((center_x-298, center_y-298, center_x+298, center_y+298),
-                  outline=(15, 92, 185, 255), width=17)
+                  outline=(*accent, 255), width=17)
         d.ellipse((center_x-282, center_y-282, center_x+282, center_y+282),
-                  outline=(75, 220, 255, 250), width=7)
+                  outline=(*accent, 250), width=7)
         d.ellipse((center_x-268, center_y-268, center_x+268, center_y+268),
-                  outline=(249, 190, 91, 220), width=4)
+                  outline=(*gold, 220), width=4)
 
         # The photograph itself turns around its vertical axis within the large disc.
         half_w = max(13, int((diameter/2 + 12) * perspective))
         d.ellipse((center_x-half_w, center_y-diameter//2-12,
                    center_x+half_w, center_y+diameter//2+12),
-                  fill=(3, 8, 28, 255), outline=(255, 203, 110, 250), width=6)
+                  fill=(3, 8, 28, 255), outline=(*gold, 250), width=6)
         frame.alpha_composite(face, (center_x-face_w//2, center_y-diameter//2))
 
         # A bright jewel travels clockwise around the medallion rim.
         bead_x = int(center_x + 292 * math.cos(angle - math.pi/2))
         bead_y = int(center_y + 292 * math.sin(angle - math.pi/2))
         d.ellipse((bead_x-18, bead_y-18, bead_x+18, bead_y+18),
-                  fill=(20, 91, 168, 205), outline=(86, 225, 255, 255), width=4)
-        d.ellipse((bead_x-7, bead_y-7, bead_x+7, bead_y+7), fill=(255, 235, 178, 255))
+                  fill=(*accent, 205), outline=(*accent, 255), width=4)
+        d.ellipse((bead_x-7, bead_y-7, bead_x+7, bead_y+7), fill=(*gold, 255))
 
         # Moving side lights reinforce the sense of rotation and depth.
         for j in range(6):
@@ -8949,12 +8958,12 @@ def render_user_3d_portrait_gif(photo_url, username):
             sx = int(center_x + 322*math.cos(a))
             sy = int(center_y + 322*math.sin(a)*0.88)
             r = 4 + (j % 2)*2
-            d.ellipse((sx-r, sy-r, sx+r, sy+r), fill=(140, 228, 255, 220))
+            d.ellipse((sx-r, sy-r, sx+r, sy+r), fill=(*accent, 220))
 
         d.rounded_rectangle((54, 650, 666, 728), radius=30,
-                            fill=(5, 18, 49, 246), outline=(74, 204, 255, 250), width=4)
+                            fill=(5, 18, 49, 246), outline=(*accent, 250), width=4)
         _draw_name_centered(d, (360, 690), str(username or ""), 42,
-                            (255, 225, 163, 255), 560, apply_correction=False)
+                            (*gold, 255), 560, apply_correction=False)
         _draw_centered(d, (360, 790), "☕  كوفي بوت  •  3D PORTRAIT", 26,
                        (195, 226, 255, 250), 630, force_ltr=False, apply_correction=False)
         frames.append(frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=160))
@@ -9149,14 +9158,22 @@ def render_3d_name_card(name):
                 pass
 
 
-def render_explore_premium_card(text, username, photo_url="", language="ar"):
+def render_explore_premium_card(text, username, photo_url="", language="ar", variant=0):
     """Create a second luxury Coffee Bot Explore layout with a circular portrait."""
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير متاح")
     width, height = 1080, 1500
+    variant = int(variant or 0) % 4
+    royal_palettes = (
+        ((8, 12, 22), (11, 43, 48), (255, 202, 115), (67, 195, 231)),
+        ((19, 7, 30), (73, 13, 65), (255, 145, 206), (166, 110, 255)),
+        ((4, 24, 27), (8, 77, 67), (255, 213, 112), (69, 240, 202)),
+        ((27, 13, 4), (91, 39, 8), (255, 181, 73), (94, 202, 255)),
+    )
+    palette_top, palette_bottom, gold_accent, blue_accent = royal_palettes[variant]
     image = Image.new("RGBA", (width, height), (7, 10, 18, 255))
     pix = image.load()
-    top, bottom = (8, 12, 22), (11, 43, 48)
+    top, bottom = palette_top, palette_bottom
     for y in range(height):
         t = y / max(1, height-1)
         row = tuple(int(top[i]*(1-t)+bottom[i]*t) for i in range(3))
@@ -9176,14 +9193,14 @@ def render_explore_premium_card(text, username, photo_url="", language="ar"):
     image.alpha_composite(bloom)
     draw = ImageDraw.Draw(image, "RGBA")
     draw.rounded_rectangle((22,22,width-22,height-22), radius=70,
-                           fill=(4,8,17,130), outline=(255,202,115,245), width=7)
+                           fill=(4,8,17,130), outline=(*gold_accent,245), width=7)
     draw.rounded_rectangle((39,39,width-39,height-39), radius=59,
-                           outline=(67,195,231,205), width=4)
+                           outline=(*blue_accent,205), width=4)
     draw.rounded_rectangle((54,54,width-54,height-54), radius=48,
                            outline=(255,255,255,43), width=2)
     for i in range(46):
         x=(i*191+83)%940+70; y=(i*239+51)%1360+70; r=2+(i%3)
-        draw.ellipse((x-r,y-r,x+r,y+r), fill=(255,220,153,110+(i%4)*28))
+        draw.ellipse((x-r,y-r,x+r,y+r), fill=(*gold_accent,110+(i%4)*28))
 
     # Header branding.
     header_font = None
@@ -9288,7 +9305,7 @@ def render_explore_premium_card(text, username, photo_url="", language="ar"):
     return out
 
 
-def render_explore_premium_animated_card(text, username, photo_url="", language="ar"):
+def render_explore_premium_animated_card(text, username, photo_url="", language="ar", variant=0):
     """Create a genuinely animated royal Explore card.
 
     The old version only moved a jewel and a shine over a static portrait.
@@ -9298,12 +9315,11 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
     """
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير متاح")
-    base_path = render_explore_premium_card(text, username, photo_url, language=language)
     frames = []
+    temporary = []
     try:
-        with Image.open(base_path) as source:
-            base = source.convert("RGBA")
-        w, h = base.size
+        raw_text = str(text or "")[:150]
+        w, h = 1080, 1500
         avatar = _download_profile_photo(photo_url)
         if avatar is not None:
             try:
@@ -9330,6 +9346,18 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
         )
         for i in range(frame_count):
             phase = 2 * math.pi * i / frame_count
+            # Type the submitted text progressively, then hold the complete line
+            # for the last frames so GIF clients visibly show the writing effect.
+            visible_chars = min(len(raw_text), max(0, int(len(raw_text) * (i + 1) / 10)))
+            visible_text = raw_text[:visible_chars] if raw_text else ""
+            if i >= frame_count - 6:
+                visible_text = raw_text
+            base_path = render_explore_premium_card(
+                visible_text, username, photo_url, language=language, variant=variant
+            )
+            temporary.append(base_path)
+            with Image.open(base_path) as source:
+                base = source.convert("RGBA")
             frame = base.copy()
             overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             od = ImageDraw.Draw(overlay, "RGBA")
@@ -9393,10 +9421,11 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
                        duration=135, loop=0, optimize=True, disposal=2)
         return out
     finally:
-        try:
-            base_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        for path in temporary:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def _prepare_talkin_animation_media(gif_path):
@@ -26247,6 +26276,17 @@ class TalkinBot:
                 if key and key != _norm_user(BOT_ID) and key not in merged:
                     merged[key] = dict(item, username=username)
 
+        # The native l@a/l@m/l@o responses can discover accounts that have not
+        # reached the database snapshot yet. Keep that in-memory room-settings
+        # cache as a third source so inv never falls back to online occupants.
+        cached = (getattr(self, "room_users", {}) or {}).get(room, {})
+        if isinstance(cached, dict):
+            for username, role in cached.items():
+                username = str(username or "").strip().lstrip("@")
+                key = _norm_user(username)
+                if key and key != _norm_user(BOT_ID) and key not in merged:
+                    merged[key] = {"username": username, "role": str(role or "member").strip().lower() or "member"}
+
         result = list(merged.values())
         self.log("[ROOM-LIST] merged settings roster:", room, len(result),
                  "db=", len(users or []), "persisted=", len(saved) if isinstance(saved, dict) else 0)
@@ -30098,7 +30138,10 @@ class TalkinBot:
                 self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
                 return True
             try:
-                image_path = render_user_3d_portrait_gif(photo_url, sender)
+                template_index = int(getattr(self, "_portrait_template_index", -1) or -1) + 1
+                template_index %= 5
+                self._portrait_template_index = template_index
+                image_path = render_user_3d_portrait_gif(photo_url, sender, variant=template_index)
                 media_path, media_type = _prepare_talkin_animation_media(image_path)
                 base = _public_base_url()
                 if not base:
@@ -30272,8 +30315,13 @@ class TalkinBot:
                     mode = "cycle"
                 if mode == "cycle":
                     mode = "animated" if int(time.time()) % 2 else "static"
+            explore_variant = int(getattr(self, "_explore_template_index", -1) or -1) + 1
+            explore_variant %= 4
+            self._explore_template_index = explore_variant
             if premium_template:
-                card = render_explore_premium_animated_card(text, sender, avatar_url, language=language)
+                card = render_explore_premium_animated_card(
+                    text, sender, avatar_url, language=language, variant=explore_variant
+                )
             else:
                 card = (render_explore_animated_card(text, sender, avatar_url, language=language,
                                                      secondary_text=secondary_text)
