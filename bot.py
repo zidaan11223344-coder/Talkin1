@@ -16673,6 +16673,22 @@ class TalkinBot:
                 profile_user.setdefault("user_id", profile_user.get("id") or profile_user.get("uid"))
                 if profile_user.get("username"):
                     users.append(profile_user)
+            # Some gateways return the profile as a generic ResultMessage
+            # rather than users[] or profile{}. Associate an explicit URL with
+            # the account that was requested, never with an arbitrary room user.
+            if not users:
+                pending = getattr(self, "_profile_lookup_pending", {})
+                now = time.monotonic()
+                for pending_key, pending_item in list(pending.items()) if isinstance(pending, dict) else []:
+                    if not isinstance(pending_item, dict) or float(pending_item.get("expires", 0) or 0) < now:
+                        if isinstance(pending, dict):
+                            pending.pop(pending_key, None)
+                        continue
+                    candidate_url = first_http_url(result)
+                    if candidate_url:
+                        users.append({"username": pending_item.get("username", pending_key), "photo": candidate_url})
+                        pending.pop(pending_key, None)
+                        break
             for user in users:
                 username = str(user.get("username") or "").strip().lstrip("@")
                 photo = str(user.get("photo") or "").strip()
@@ -16998,7 +17014,7 @@ class TalkinBot:
         threading.Thread(target=refresh, name="profile-roster-refresh", daemon=True).start()
         return True
 
-    def _request_native_profile_lookup(self, username):
+    def _request_native_profile_lookup(self, username, alternate=False):
         """Request a user profile like TalkinChat's get_profile IQ.
 
         The gateway may return the profile as a single ``profile`` object or
@@ -17016,18 +17032,26 @@ class TalkinBot:
             recent = getattr(self, "_profile_lookup_at", {})
             key = _norm_user(username)
             now = time.monotonic()
-            if now - float(recent.get(key, 0) or 0) < 15.0:
+            # An alternate spelling is permitted immediately after the primary
+            # request; ordinary duplicate commands remain rate-limited.
+            if not alternate and now - float(recent.get(key, 0) or 0) < 15.0:
                 return False
             recent[key] = now
             self._profile_lookup_at = recent
         try:
+            action = "get_profile" if alternate else PROFILE_LOOKUP_ACTION
+            type_name = "profile" if alternate else PROFILE_LOOKUP_TYPE
+            pending = getattr(self, "_profile_lookup_pending", None)
+            if not isinstance(pending, dict):
+                pending = self._profile_lookup_pending = {}
+            pending[key] = {"username": username, "expires": now + 20.0}
             sent = self.send_query(encode_query(
-                PROFILE_LOOKUP_ACTION,
-                type_=PROFILE_LOOKUP_TYPE,
+                action,
+                type_=type_name,
                 to=username,
                 value="none",
             ))
-            self.log("[PROFILE-PHOTO] direct get_profile request sent:", key)
+            self.log("[PROFILE-PHOTO] direct get_profile request sent:", key, "alternate=" + str(bool(alternate)))
             return sent is not False
         except Exception as exc:
             self.log("[PROFILE-PHOTO] direct get_profile request failed:", type(exc).__name__)
@@ -22076,9 +22100,17 @@ class TalkinBot:
 
         def profile_photo_worker():
             try:
-                # Always request a fresh roster response after invalidating the cache.
-                self._queue_profile_roster_refresh(room, primary)
+                # Talkin room events can expose a display name in one field
+                # and the canonical account name in another. Ask get_profile
+                # for every candidate, then accept only a photo keyed to one
+                # of those candidates.
+                for candidate in candidates:
+                    self._queue_profile_roster_refresh(room, candidate)
                 found_name, photo_url = wait_for_photo(2.5)
+                if not photo_url:
+                    for candidate in candidates:
+                        self._request_native_profile_lookup(candidate, alternate=True)
+                    found_name, photo_url = wait_for_photo(2.5)
                 if not photo_url:
                     self._request_native_profile_roster(room, legacy=True)
                     found_name, photo_url = wait_for_photo(4.0)
@@ -26065,20 +26097,51 @@ class TalkinBot:
             self._pending_room_lists[_norm_room(room)] = {
                 "room": room, "code": code, "sender": str(sender or "").strip(),
                 "request_type": request_type, "request_id": request_id,
-                "requested_at": time.time(),
+                "requested_at": time.time(), "request_mode": "app",
                 # The complete APK-compatible response is ResultMessage.users[];
                 # RoomEvent.text is only a 20-row preview.
                 "complete_users": True,
             }
             self.send_query(encode_query(
                 "room_admin", type_=request_type, room=room,
-                to=BOT_ID, value="none", id_=request_id
+                to="username", value="none", id_=request_id
             ))
+            timer = threading.Timer(10.0, self._room_list_request_timeout, args=(_norm_room(room), request_id))
+            timer.daemon = True
+            self._pending_room_lists[_norm_room(room)]["timer"] = timer
+            timer.start()
             self.send_private_text(sender, f"⏳ جارٍ جلب إعدادات أعضاء الغرفة {room}...")
             return True
         except Exception as exc:
             self._pending_room_lists.pop(_norm_room(room), None)
             self.log("[ROOM-LIST] native occupants request failed", room, repr(exc))
+            return False
+
+    def _room_list_request_timeout(self, room_key, request_id):
+        """Retry a list request with the legacy BOT_ID target once."""
+        pending = getattr(self, "_pending_room_lists", {}).get(room_key)
+        if not isinstance(pending, dict) or pending.get("request_id") != request_id:
+            return False
+        if pending.get("request_mode") != "app":
+            return False
+        pending["request_mode"] = "legacy"
+        new_id = secrets.token_urlsafe(15)[:20]
+        pending["request_id"] = new_id
+        pending["requested_at"] = time.time()
+        try:
+            self.send_query(encode_query(
+                "room_admin", type_=pending.get("request_type") or "members_list",
+                room=pending.get("room", ""), to=BOT_ID, value="none", id_=new_id
+            ))
+            timer = threading.Timer(10.0, self._room_list_request_timeout, args=(room_key, new_id))
+            timer.daemon = True
+            pending["timer"] = timer
+            timer.start()
+            self.log("[ROOM-LIST] retrying legacy target:", pending.get("room"), pending.get("request_type"))
+            return True
+        except Exception as exc:
+            self.log("[ROOM-LIST] legacy retry failed:", repr(exc))
+            self._pending_room_lists.pop(room_key, None)
             return False
 
     def _start_presence_native(self, target, sender, current_room=""):
@@ -26244,6 +26307,12 @@ class TalkinBot:
         pending = self._pending_room_lists.pop(_norm_room(source_room), None)
         if not isinstance(pending, dict):
             return False
+        timer = pending.get("timer")
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
 
         if pending.get("bot_role_check"):
             room_key = _norm_room(source_room)
@@ -26434,19 +26503,33 @@ class TalkinBot:
         ``ns`` to advance instead of silently losing the remaining rows.
         """
         rows=[]; seen=set()
+        role_labels = {
+            "owner": "أونر", "creator": "صانع الغرفة", "room_owner": "أونر",
+            "room_creator": "صانع الغرفة", "host": "مالك الغرفة",
+            "admin": "مشرف", "moderator": "مشرف", "mod": "مشرف",
+            "member": "عضو", "user": "عضو", "none": "غير محددة",
+            "outcast": "محظور", "banned": "محظور",
+        }
         for item in users or []:
-            name=str(item.get("username") if isinstance(item,dict) else item or "").strip().lstrip("@")
+            if isinstance(item, dict):
+                name = str(item.get("username") or "").strip().lstrip("@")
+                raw_role = str(item.get("role") or item.get("rank") or item.get("affiliation") or "").casefold().strip().replace(" ", "_")
+                raw_role = {"o":"owner", "a":"admin", "m":"member", "normal":"member"}.get(raw_role, raw_role)
+                suffix = f" — {role_labels.get(raw_role, raw_role)}" if raw_role else ""
+            else:
+                name = str(item or "").strip().lstrip("@")
+                suffix = ""
             key=_norm_user(name)
             if key and key not in seen and key != _norm_user(BOT_ID):
-                seen.add(key); rows.append(name)
+                seen.add(key); rows.append((name, suffix))
         if not rows:
             self.send_room_text(room, empty)
             return
-        rows.sort(key=_norm_user)
+        rows.sort(key=lambda row: _norm_user(row[0]))
         limit = max(240, int(os.getenv("WS_MAX_MESSAGE_BYTES", "1008")) - 120)
         pages=[]; current=[f"{title} ({len(rows)}):"]
-        for index, name in enumerate(rows, 1):
-            line = f"{index}. @{name}"
+        for index, (name, suffix) in enumerate(rows, 1):
+            line = f"{index}. @{name}{suffix}"
             candidate = "\n".join(current + [line])
             if len(candidate.encode("utf-8")) > limit and len(current) > 1:
                 pages.append("\n".join(current))
@@ -26610,6 +26693,15 @@ class TalkinBot:
         return True
 
     def _room_list_commands(self, room, text, sender, is_private):
+        raw_text = str(text or "").strip().casefold()
+        arabic_codes = {
+            "جلب الاعضاء": "m", "جلب الأعضاء": "m", "جلب اعضاء الغرفة": "m",
+            "جلب أعضاء الغرفة": "m", "اعضاء الغرفة": "m", "أعضاء الغرفة": "m",
+            "جلب المشرفين": "a", "جلب الاداريين": "a", "جلب الإداريين": "a",
+            "جلب الاونرات": "o", "جلب الأونرات": "o",
+        }
+        if raw_text in arabic_codes:
+            text = f"l@{arabic_codes[raw_text]}"
         match = re.fullmatch(r"l@([amob])", str(text or "").strip(), re.I)
         if match:
             if not room:
