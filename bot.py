@@ -22,6 +22,7 @@ import re
 import queue
 import mimetypes
 import unicodedata
+import urllib
 from difflib import SequenceMatcher
 import html
 import io
@@ -208,6 +209,9 @@ _MUSIC_LOOKUP_THREAD = threading.Thread
 # Optional YouTube Netscape cookies supplied as a secret value or mounted file.
 YOUTUBE_COOKIES = os.getenv("YOUTUBE_COOKIES", "").strip()
 YOUTUBE_COOKIE_FILE = os.getenv("YOUTUBE_COOKIES_FILE", "").strip() or None
+# Optional bgutil PO-token provider endpoint. The provider plugin must be installed
+# and its server reachable from this process; a PO token may reduce YouTube 403s.
+YOUTUBE_POT_BASE_URL = os.getenv("YOUTUBE_POT_BASE_URL", "").strip().rstrip("/")
 if YOUTUBE_COOKIE_FILE and not Path(YOUTUBE_COOKIE_FILE).is_file():
     YOUTUBE_COOKIE_FILE = None
 if not YOUTUBE_COOKIE_FILE and YOUTUBE_COOKIES:
@@ -1052,6 +1056,7 @@ TELEGRAM_LONG_TEXT_ENABLED = os.getenv("TELEGRAM_LONG_TEXT_ENABLED", "1").strip(
 
 # Every mutable bot record lives in its own dedicated JSON file.
 MASTERS_FILE = DATA_DIR / "masters.json"
+VIP_FULL_MASTERS_FILE = DATA_DIR / "vipmas_masters.json"
 VIP_FILE = DATA_DIR / "vip_users.json"
 VERIFIED_FILE = DATA_DIR / "verified_users.json"
 POINTS_FILE = DATA_DIR / "points.json"
@@ -1068,6 +1073,8 @@ CROP_PLOTS_FILE = DATA_DIR / "crop_plots.json"
 STOCK_MARKET_FILE = DATA_DIR / "stock_market_investments.json"
 STOCK_MARKET_HISTORY_FILE = DATA_DIR / "stock_market_history.json"
 WAGER_STATE_FILE = DATA_DIR / "wager_state.json"
+WAGER_ADMIN_RULES_FILE = DATA_DIR / "wager_admin_rules.json"
+_WAGER_ADMIN_RULES_LOCK = threading.RLock()
 DRAGON_HUNTERS_FILE = DATA_DIR / "dragon_hunters.json"
 PAYROLL_FILE = DATA_DIR / "payroll.json"
 PAYROLL_COOLDOWN_SECONDS = max(60.0, float(os.getenv("PAYROLL_COOLDOWN_SECONDS", "600") or 600))
@@ -1107,7 +1114,7 @@ NAME_IMAGE_SETTINGS_FILE = DATA_DIR / "name_image_settings.json"
 # Known legacy state files used by older releases. This migration runs once and
 # NEVER deletes the old files, so replacing bot.py cannot destroy the old data.
 _STATE_FILE_NAMES = (
-    "masters.json", "vip_users.json", "verified_users.json", "points.json",
+    "masters.json", "vipmas_masters.json", "wager_admin_rules.json", "vip_users.json", "verified_users.json", "points.json",
     "messages.json", "published_posts.json", "media_stats.json", "game_stats.json", "game_levels.json", "mining_game.json", "shop_data.json", "game_control.json", "crop_plots.json",
     "tracked_rooms.json", "blocked_rooms.json", "room_users.json", "invite_history.json", "replies.json",
     "moderation.json", "mf.json", "filter_bans.json", "bot_bans.json", "last_bot_bans.json", "money_game_win_state.json", "publish_bans.json", "mvip_masters.json", "name_image_corrections.json", "name_image_settings.json", "welcome.json", "custom_welcomes.json", "custom_games.json",
@@ -3232,6 +3239,19 @@ def _master_list():
     data=_load_local_json(MASTERS_FILE, [])
     return data if isinstance(data,list) else []
 
+def _vip_full_master_list():
+    data = _load_local_json(VIP_FULL_MASTERS_FILE, [])
+    return data if isinstance(data, list) else []
+
+def _is_vip_full_master(name):
+    key = _norm_user(name)
+    return bool(key and key in {_norm_user(x) for x in _vip_full_master_list()})
+
+def _is_bot_owner(name):
+    """Only the BOT_MASTER environment account may grant/revoke full masters."""
+    key = _norm_user(name)
+    return bool(key and key == _norm_user(BOT_MASTER))
+
 def _is_master_name(name):
     n = _norm_user(name)
     configured = {
@@ -3239,7 +3259,8 @@ def _is_master_name(name):
         _norm_user(os.getenv("MASTER_ID", "").strip()),
     }
     configured.discard("")
-    return bool(n and (n in configured or n in {_norm_user(x) for x in _master_list()}))
+    saved = {_norm_user(x) for x in _master_list()}
+    return bool(n and (n in configured or n in saved or _is_vip_full_master(name)))
 
 def _is_configured_master_account(name):
     """Return only whether *name* is the master configured by deployment vars.
@@ -3276,10 +3297,7 @@ def _is_verification_manager_command(text):
     )
 
 def _is_env_master_for_game_cooldown(name):
-    """Only accounts configured through deployment master variables bypass game cooldowns.
-
-    Deliberately excludes users merely listed in masters.json / mvip_masters.json.
-    """
+    """Full masters bypass normal player cooldowns, just like the owner."""
     key = _norm_user(name)
     if not key:
         return False
@@ -3288,12 +3306,12 @@ def _is_env_master_for_game_cooldown(name):
         for var in ("BOT_MASTER", "MASTER_USERNAME", "MASTER_ID")
     }
     configured.discard("")
-    return key in configured
+    return key in configured or _is_vip_full_master(name)
 
 def _is_primary_master(name):
-    """Only the account configured in BOT_MASTER has unlimited points."""
-    n=_norm_user(name)
-    return bool(n and n == _norm_user(BOT_MASTER))
+    """Return true for the deployment owner and explicitly appointed full masters."""
+    n = _norm_user(name)
+    return bool(n and (n == _norm_user(BOT_MASTER) or _is_vip_full_master(name)))
 def _verification_notice():
     master = BOT_MASTER or "الماستر"
     return f"🔒 حسابك ليس موثقاً.\n📩 يرجى مراسلة الماستر لتوثيق حسابك @{master}"
@@ -3305,9 +3323,9 @@ def _looks_like_bot_command(text):
         return False
     timed_game_command = _normalize_timed_treasure_command(text) in TIMED_TREASURE_GAME_ALIASES
     prefixes = (
-        "sa@", "sav@", "bom@", "work", "salary", "عمل", "راتبي", ".sa ", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@",
+        "sa@", "sav@", "bom@", "aax2@", "ax2@", "ax1@", "aax@", "ax@", "صمم صورتي", "انشر صورتي", "انشر اسمي", "اسم ", "work", "salary", "عمل", "راتبي", ".sa ", ".aa", "vi@", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@",
         ".u", "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق",
-        "mas@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
+        "mas@", "umas@", "vipmas@", "unvipmas@", "-vipmas@", "l@vipmas", "ربح@", "سحب ربح@", "-ربح@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "l@vipmas", "vipmas@", "unvipmas@", "-vipmas@", "ربح@", "سحب ربح@", "-ربح@", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "توب المراهنين", "توب رهان", "كمين", "الكمين", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
@@ -3423,7 +3441,7 @@ def _looks_like_admin_command(text):
     prefixes = (
         ".u", "vi", "vi@", "vip", "vip@", "unvip@", "uns@", "ازالة توثيق@", "إزالة توثيق@", "سحب التوثيق@", "mas@", "umas@", "إضافة ماستر@", "اضافة ماستر@", "سحب ماستر@", "إزالة ماستر@", "sb@", "ts@",
         "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق", "msb@", "-sb@",
-        "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "protection", "enable protection", "disable protection", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج", "say ", "قل ", "بوست", "انشر", "+sr@", "sr@",
+        "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "protection", "enable protection", "disable protection", "mvip@", "umvip@", "l@mvip", "l@mas", "l@vipmas", "vipmas@", "unvipmas@", "-vipmas@", "ربح@", "سحب ربح@", "-ربح@", "خروج", "say ", "قل ", "بوست", "انشر", "+sr@", "sr@",
         "swc", "mf@", "+mf@", "l@a", "l@m", "l@o", "l@b", "is@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "amf@", "l@mfb", "mr@", "دخول الكل", "حماية", "حمايه", "حماية الغرفة", "حمايه الغرفه", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "s@", "توثيق الكل", "وثق الكل", "verify", "سجل الغرفه", "سجل الغرفة",
     )
     prefixes = prefixes + ("room message@", "فحص اسم", "اصلاح اسم", "إصلاح اسم", "تعديل اسم", "تعديل الاسم", "حذف اسم", "حذفاسم", "حذف تصحيح اسم", "حذف تصحيح الاسم", "حذف تصحييح اسم", "حذف تصحييح الاسم")
@@ -4038,17 +4056,19 @@ def _game_welcome(username, room):
 
 
 def _join_welcome_message(username, room, custom_welcome_enabled=True, custom_welcome=None):
+    # All members use the same welcome flow, regardless of VIP/master role.
+    # No role-specific VIP greeting and no custom-welcome exclusion.
     _level, _label, plays = _game_level_info(username)
-    is_vip = _is_vip_user(username) and not _is_master_name(username)
     prefix = ""
-    if plays < 100 and is_vip:
-        prefix = f"👑 عضو Vip\n👤 {username}\n🏠 الغرفة: {room}"
-    elif (custom_welcome_enabled and not is_vip
-          and isinstance(custom_welcome, dict) and custom_welcome.get("message")):
-        prefix = (str(custom_welcome["message"]).replace("{username}", username).replace("{room}", room))
+    if custom_welcome_enabled and isinstance(custom_welcome, dict) and custom_welcome.get("message"):
+        prefix = (
+            str(custom_welcome["message"])
+            .replace("{username}", username)
+            .replace("{room}", room)
+        )
     level_welcome = _game_welcome(username, room)
     if level_welcome:
-        return f"{prefix}\n\n{level_welcome}" if prefix else level_welcome
+        return f"{prefix}\\n\\n{level_welcome}" if prefix else level_welcome
     return prefix or None
 
 
@@ -5661,18 +5681,18 @@ def _default_help_sections():
     return {
         1: [
             '📋 أوامر الإدارة — 1 | الحظر والطرد\n━━━━━━━━━━━━\nk@اسم — طرد عضو\nkick اسم — طرد عضو\nb@اسم — حظر عضو\nban اسم — حظر عضو\nub@اسم — فك الحظر\nu@اسم — فك الحظر\nunban اسم — فك الحظر\n.u — تراجع عن آخر إجراء للبوت',
-            '📋 أوامر الإدارة — 2 | الرتب\n━━━━━━━━━━━━\nm@اسم — منح عضوية\na@اسم — تعيين إداري\nadmin اسم — تعيين إداري\no@اسم — تعيين أونر/مالك\nowner اسم — تعيين أونر/مالك\n+صانع@اسم — إضافة صانع للغرفة\n-صانع@اسم — سحب صانع للغرفة\nصانعي — عرض صانعي الغرفة\nl@mas — عرض الماسترات\nmas@اسم — إضافة ماستر\numas@اسم — سحب ماستر',
+            '📋 أوامر الإدارة — 2 | الرتب\n━━━━━━━━━━━━\nm@اسم — منح عضوية\na@اسم — تعيين إداري\nadmin اسم — تعيين إداري\no@اسم — تعيين أونر/مالك\nowner اسم — تعيين أونر/مالك\n+صانع@اسم — إضافة صانع للغرفة\n-صانع@اسم — سحب صانع للغرفة\nصانعي — عرض صانعي الغرفة\nl@mas — عرض الماسترات\nmas@اسم — إضافة ماستر\numas@اسم — سحب ماستر\nvipmas@اسم — إضافة ماستر كامل\n-vipmas@اسم — سحب ماستر كامل\nunvipmas@اسم — سحب ماستر كامل\nl@vipmas — قائمة الماسترات الكاملة',
             '📋 أوامر الإدارة — 3 | التوثيق وVIP\n━━━━━━━━━━━━\nvi@اسم — توثيق مستخدم\nuns@اسم — سحب التوثيق\nسحب التوثيق@اسم — سحب التوثيق\nإزالة توثيق@اسم — سحب التوثيق\nتوثيق الكل — توثيق كل الأعضاء\nvi — عدد الموثقين\nvip@اسم — منح VIP\nunvip@اسم — سحب VIP\nvip — عدد أعضاء VIP\nmvip@اسم — إضافة ماستر توثيق\numvip@اسم — سحب ماستر توثيق\nl@mvip — عرض ماسترات التوثيق',
             '📋 أوامر الإدارة — 4 | التوثيق والحماية\n━━━━━━━━━━━━\nتشغيل التوثيق — تشغيل نظام التوثيق\nإيقاف التوثيق — إيقاف نظام التوثيق\nحماية@اسم_الغرفة — قائمة الحماية الخاصة بالماستر\nتشغيل/إيقاف الحماية — إعداد عام للغرفة\nحالة الحماية — عرض الحالة\nحمايه البوت — حماية داخلية للبوت\nالمحظورين — المحظورون داخل البوت',
             '📋 أوامر الإدارة — 5 | الفلتر والنشر\n━━━━━━━━━━━━\nmf@on — تشغيل فلتر الكلمات\nmf@off — إيقاف فلتر الكلمات\n+mf@كلمة — إضافة كلمة للفلتر\n-mf@كلمة — حذف كلمة من الفلتر\nl@mf — عرض كلمات الفلتر\nclear@mf — مسح كلمات الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmbp@اسم — فك منع النشر\namf@اسم — استثناء مستخدم من حظر الفلتر',
             '📋 أوامر الإدارة — 6 | أوامر النظام والتشخيص\n━━━━━━━━━━━━\nحالة البوت — حالة الاتصال\nرام / cpu — الموارد\nمالذي يؤخرك — تشخيص تأخر الرد (لماستر المتغيرات فقط)\nفحص الماس — فحص ألماسة تجريبية داخل الغرفة\nتنظيف — حذف الملفات المؤقتة\nنسخ احتياطي — إنشاء نسخة\nإعادة تشغيل البوت — إعادة تشغيل الخدمة\nتشغيل الماستر / إيقاف الماستر / حالة الماستر\nتشغيل/إيقاف الدعوات\nتشغيل/إيقاف الألعاب\nفحص صورة المليون / فحص صورة المليار — معاينة داخل الغرفة',
-            '📋 أوامر الإدارة — 7 | النقاط وسجلاتها\n━━━━━━━━━━━━\nmsb@اسم@عدد — إضافة نقاط من الماستر في الخاص\n-sb@اسم@عدد — خصم نقاط (الماستر الأساسي في الخاص)\nts@اسم@عدد — استبدال رصيد المستخدم بدل رصيده القديم\nتحويل للكل@عدد — تحويل جماعي للمستخدمين الموجودين في الغرف\nسجل التحويل — عرض سجل عمليات النقاط\nسجل تحويل@اسم — عرض التحويلات إلى مستخدم\n\nمثال التسوية:\nts@ahmd555@5000',
+            '📋 أوامر الإدارة — 7 | النقاط وسجلاتها\n━━━━━━━━━━━━\nmsb@اسم@عدد — إضافة نقاط من الماستر في الخاص\n-sb@اسم@عدد — خصم نقاط (الماستر الكامل في الخاص)\nربح@اسم — 3 انتصارات ثم خسارة في رهانات المستخدم\n-ربح@اسم — إلغاء التحكم بنتائج رهاناته\nسحب ربح@اسم — إيقاف التحكم بنتائج رهاناته\nts@اسم@عدد — استبدال رصيد المستخدم بدل رصيده القديم\nتحويل للكل@عدد — تحويل جماعي للمستخدمين الموجودين في الغرف\nسجل التحويل — عرض سجل عمليات النقاط\nسجل تحويل@اسم — عرض التحويلات إلى مستخدم\n\nمثال التسوية:\nts@ahmd555@5000',
             '📋 أوامر الإدارة — 8 | الغرف والقوائم\n━━━━━━━━━━━━\nغرفي / myrooms — عرض الغرف المتصلة\nدخول الكل / دخولكل — دخول الغرف المحفوظة\nاضف لملف الغرف — حفظ الغرف الحالية\nجلب غرف السيرفر — طلب قائمة الغرف\ninv / دعوات / invite — جلب أعضاء الغرفة\ns@اسم — البحث عن اسم في الغرف\nis@اسم — عرض وجود المستخدم ورتبته المحلية\nl@a — قائمة الإداريين\nl@m — قائمة الأعضاء\nl@o — قائمة الأونرات\nl@b — قائمة المحظورين\nl@all — عرض قوائم الغرفة بالتتابع',
             '📋 أوامر الإدارة — 9 | إعدادات وقوائم إضافية\n━━━━━━━━━━━━\namf@اسم / -amf@اسم — إضافة/سحب استثناء الفلتر\nl@amf — عرض مستثني الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmr@عدد — ضبط حد تكرار الأوامر\nsf@on / sf@off — إعداد فلتر أمان الغرفة\nl@mas — عرض الماسترات\nl@mvip — عرض ماسترات التوثيق\n📌 تستخدم ns للتنقل حتى آخر قائمة.',
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
-            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — عرض صورة حسابك الحقيقية فقط\n.صوره اسم_المستخدم أو موضوع — بحث آمن عن صورة من الإنترنت\n.صوره — صورة عشوائية: 30% قرود والباقي صورة بالغ/بالغة حسب الجنس المعروف\nشبيه@اسم / شبيهك@اسم — بحث آمن عن صورة شبيهة\n📌 SafeSearch صارم، وطلبات الصور المخلة محظورة.',
+            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\nصمم صورتي — ينشئ صورة حسابك داخل دائرة 3D متحركة ويحفظها\nانشر صورتي — ينشر آخر تصميم لصورتك في كل الغرف مع أزرار التفاعلات\nاسم احمد — ينشئ بطاقة اسم فاخرة ويحفظها\nانشر اسمي — ينشر آخر بطاقة اسم في كل الغرف مع أزرار التفاعلات\nتغيير صورتك — تغيير صورة البوت (ماستر)\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — عرض صورة حسابك الحقيقية فقط\n.صوره اسم_المستخدم أو موضوع — بحث آمن عن صورة من الإنترنت\n.صوره — صورة عشوائية: 30% قرود والباقي صورة بالغ/بالغة حسب الجنس المعروف\nشبيه@اسم / شبيهك@اسم — بحث آمن عن صورة شبيهة\n📌 SafeSearch صارم، وطلبات الصور المخلة محظورة.',
         ],
         3: [
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
@@ -5684,7 +5704,7 @@ def _default_help_sections():
         ],
         4: [
             '🎁 الهدايا — 1\n━━━━━━━━━━━━\nsa@رقم@اسم — إرسال هدية\nهدايا — عرض/فتح نظام الهدايا (حتى 30 هدية في القائمة)\ngifts / gv — قائمة الهدايا؛ اكتب ns للتالي\n\n🔒 المرسل والمستلم يجب أن يكونا موثقين/مسموحاً لهما بالنظام.\n💰 يتم خصم قيمة الهدية من رصيد النقاط.',
-            '📢 النشر — 2\n━━━━━━━━━━━━\nبوست أو انشر — تجهيز ونشر صورة\nبوست@وصف أو انشر@وصف — نشر صورة مع وصف\nax@النص — إنشاء بطاقة اكسبلور بصورة حسابك ونشرها في الغرف\nx@كود — إعادة نشر منشور اكسبلور مع اسم من أعاد نشره\n👍 lk@كود / 👎 dl@كود / ❤️ lv@كود — تفاعل؛ يصل الرد إلى الغرفة والناشر\n🚨 report@كود نص — إرسال بلاغ للماستر\n📌 الوصف يمر عبر فلتر الكلمات المسيئة، ومن يخالفه يُمنع من النشر حتى mbp@اسم\n\n📌 أرسل الصورة بعد أمر بوست أو انشر عندما يطلب البوت ذلك.\n📌 النشر متاح للحسابات المسموح لها حسب إعدادات البوت.',
+            '📢 النشر — 2\n━━━━━━━━━━━━\nبوست أو انشر — تجهيز ونشر صورة\nبوست@وصف أو انشر@وصف — نشر صورة مع وصف\nax@النص — نشر قالب اكسبلور الأساسي في الغرف النشطة\nax1@النص — نشر قالب اكسبلور الملكي المتحرك 3D في كل الغرف\naax2@النص — معاينة القالب الملكي في الغرفة الحالية فقط\nx@كود — إعادة نشر منشور اكسبلور مع اسم من أعاد نشره\n👍 lk@كود / 👎 dl@كود / ❤️ lv@كود — تفاعل؛ يصل الرد إلى الغرفة والناشر\n🚨 report@كود نص — إرسال بلاغ للماستر\n📌 الوصف يمر عبر فلتر الكلمات المسيئة، ومن يخالفه يُمنع من النشر حتى mbp@اسم\n\n📌 أرسل الصورة بعد أمر بوست أو انشر عندما يطلب البوت ذلك.\n📌 النشر متاح للحسابات المسموح لها حسب إعدادات البوت.',
         ],
         5: [
             '💰 النقاط — 1\n━━━━━━━━━━━━\nنقاطي — عرض الرصيد والمستوى وإحصاءات اللعب\npoints — عرض النقاط\nتوب — المتصدرين العام\ntop — المتصدرين العام\n\nتوب رهان — متصدروا الرهان\nتوب مضاربة — متصدروا المضاربة\nتوب حظي — متصدروا حظي\nتوب استثمار — متصدروا الاستثمار',
@@ -7273,6 +7293,35 @@ def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_
             vertical_center=center[1],
         )
 
+
+# Render all names into a transparent scratch layer, then shift by their actual
+# visible-pixel bounding box. This guarantees true horizontal and vertical
+# centering inside every name rectangle (game, gift, publish, welcome, explore).
+_draw_name_centered_raw = _draw_name_centered
+
+def _draw_name_centered(draw, center, raw_text, size, fill, max_width, *, apply_correction=True, grow_short=True, force_ltr=False, native_arabic_runs=False):
+    base = getattr(draw, "_image", None)
+    if not PIL_AVAILABLE or not isinstance(base, Image.Image):
+        return _draw_name_centered_raw(
+            draw, center, raw_text, size, fill, max_width,
+            apply_correction=apply_correction, grow_short=grow_short,
+            force_ltr=force_ltr, native_arabic_runs=native_arabic_runs,
+        )
+    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    layer_draw = ImageDraw.Draw(layer)
+    _draw_name_centered_raw(
+        layer_draw, center, raw_text, size, fill, max_width,
+        apply_correction=apply_correction, grow_short=grow_short,
+        force_ltr=force_ltr, native_arabic_runs=native_arabic_runs,
+    )
+    bbox = layer.getchannel("A").getbbox()
+    if not bbox:
+        return None
+    dx = int(round(float(center[0]) - (bbox[0] + bbox[2]) / 2.0))
+    dy = int(round(float(center[1]) - (bbox[1] + bbox[3]) / 2.0))
+    base.paste(layer, (dx, dy), layer)
+    return None
+
 def render_name_preview_card(name, *, corrected=False):
     """Create a private visual check using the same username renderer as cards."""
     if not PIL_AVAILABLE:
@@ -7414,6 +7463,80 @@ def _store_profile_photo_for_public_media(photo_url):
         image.convert("RGB").save(temporary, "JPEG", quality=91, optimize=True, progressive=False)
         os.replace(temporary, target)
         return target
+    except Exception:
+        return None
+
+
+DOWNLOAD_IMAGE_MAX_BYTES = 100 * 1024
+
+
+def _store_profile_photo_for_download(photo_url):
+    """Save a browser-download copy of a profile photo under 100 KiB."""
+    image = _download_profile_photo(photo_url)
+    if image is None:
+        return None
+    try:
+        out_dir = BASE_DIR / "generated_publish"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cache_key = hashlib.sha256(str(photo_url or "").strip().encode("utf-8")).hexdigest()[:24]
+        target = out_dir / f"download_profile_{cache_key}.jpg"
+        if target.is_file() and target.stat().st_size <= DOWNLOAD_IMAGE_MAX_BYTES:
+            return target
+        for side in (720, 600, 512, 448, 384, 320):
+            scale = min(1.0, side / max(image.width, image.height))
+            candidate = image.resize(
+                (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                Image.Resampling.LANCZOS,
+            ) if scale < 1 else image
+            for quality in (82, 72, 62, 52, 44, 36):
+                buffer = io.BytesIO()
+                candidate.save(buffer, "JPEG", quality=quality, optimize=True, progressive=True)
+                if buffer.tell() <= DOWNLOAD_IMAGE_MAX_BYTES:
+                    temporary = out_dir / f".download_profile_{uuid.uuid4().hex}.tmp.jpg"
+                    temporary.write_bytes(buffer.getvalue())
+                    os.replace(temporary, target)
+                    return target
+        return None
+    except Exception:
+        return None
+
+
+def _prepare_name_design_for_download(source_path):
+    """Create a GIF name-card download copy no larger than 100 KiB."""
+    source_path = Path(source_path)
+    if not source_path.is_file() or not PIL_AVAILABLE:
+        return None
+    try:
+        out_dir = BASE_DIR / "generated_publish"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / f"download_{source_path.stem}.gif"
+        if target.is_file() and target.stat().st_size <= DOWNLOAD_IMAGE_MAX_BYTES:
+            return target
+        with Image.open(source_path) as source:
+            total = max(1, int(getattr(source, "n_frames", 1)))
+            for side in (640, 560, 480, 400, 320):
+                scale = min(1.0, side / max(source.width, source.height))
+                for frame_count in (min(total, 8), min(total, 6), min(total, 5), min(total, 4)):
+                    frames = []
+                    indexes = [min(total - 1, round(i * (total - 1) / max(1, frame_count - 1))) for i in range(frame_count)]
+                    for index in indexes:
+                        source.seek(index)
+                        frame = source.convert("RGB")
+                        if scale < 1:
+                            frame = frame.resize(
+                                (max(1, round(frame.width * scale)), max(1, round(frame.height * scale))),
+                                Image.Resampling.LANCZOS,
+                            )
+                        frames.append(frame.quantize(colors=48, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
+                    buffer = io.BytesIO()
+                    frames[0].save(buffer, "GIF", save_all=True, append_images=frames[1:],
+                                   duration=190, loop=0, optimize=True, disposal=2)
+                    if buffer.tell() <= DOWNLOAD_IMAGE_MAX_BYTES:
+                        temporary = out_dir / f".download_name_{uuid.uuid4().hex}.tmp.gif"
+                        temporary.write_bytes(buffer.getvalue())
+                        os.replace(temporary, target)
+                        return target
+        return None
     except Exception:
         return None
 
@@ -8100,13 +8223,14 @@ def render_game_winner_card(game_key, winner_name, winner_photo_url="", language
         text_max_w,
         force_ltr=True,
     )
-    _draw_centered(
+    _draw_name_centered(
         d,
         (box_x + box_w / 2, box_y + box_h * .68),
         str(winner_name or "").lstrip("@"),
         38,
         (126, 226, 255, 255),
         text_max_w,
+        apply_correction=True,
         force_ltr=False,
     )
 
@@ -8472,14 +8596,14 @@ def _draw_explore_text_line(draw, center_x, y, text, font, fill, emoji_size):
     return True
 
 
-def render_explore_card(text, username, photo_url=""):
+def render_explore_card(text, username, photo_url="", language="ar", secondary_text=""):
     """Render a polished Explore card with a large heart portrait and glass caption."""
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow غير متاح")
     width, height = 1080, 1500
     image = Image.new("RGB", (width, height), (16, 20, 43))
     gradient = ImageDraw.Draw(image)
-    top, bottom = (17, 26, 58), (46, 27, 67)
+    top, bottom = (9, 20, 58), (82, 18, 78)
     for y in range(height):
         t = y / max(1, height - 1)
         color = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
@@ -8536,12 +8660,15 @@ def render_explore_card(text, username, photo_url=""):
     draw = ImageDraw.Draw(image, "RGBA")
 
     # Title, profile heart, and colorful unboxed username form the top stack.
-    title_font_path = ASSETS_DIR / "NotoSansArabic-SemiBold.ttf"
+    title_font_path = (ASSETS_DIR / "DejaVuSans.ttf" if str(language).casefold() == "en"
+                       else ASSETS_DIR / "NotoSansArabic-SemiBold.ttf")
+    if str(language).casefold() == "en" and not title_font_path.exists():
+        title_font_path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
     try:
         title_font = ImageFont.truetype(str(title_font_path), 30)
     except Exception:
         title_font = ImageFont.load_default()
-    draw.text((width//2, 36), "اكسبلور", font=title_font, fill=(247, 222, 190, 255), anchor="mm")
+    draw.text((width//2, 36), "Explore" if str(language).casefold() == "en" else "اكسبلور", font=title_font, fill=(247, 222, 190, 255), anchor="mm")
     _draw_explore_username(draw, (width//2, 558), username, 920)
     draw.line((385, 600, 695, 600), fill=(249, 207, 143, 180), width=2)
     draw.ellipse((width//2-4, 596, width//2+4, 604), fill=(255, 228, 180, 255))
@@ -8553,10 +8680,24 @@ def render_explore_card(text, username, photo_url=""):
     draw.rounded_rectangle((box[0]+10, box[1]+10, box[2]-10, box[3]-10),
                            radius=34, outline=(255, 255, 255, 30), width=1)
     try:
-        font_path = ASSETS_DIR / "NotoSansArabic-Regular.ttf"
-        font = ImageFont.truetype(str(font_path), 46) if font_path.exists() else ImageFont.load_default()
+        if _has_arabic(str(text or "")):
+            font_candidates = (
+                ASSETS_DIR / "NotoSansArabic-Regular.ttf",
+                Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
+            )
+        else:
+            font_candidates = (
+                Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+                ASSETS_DIR / "DejaVuSans.ttf",
+                Path("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+            )
+        font_path = next((candidate for candidate in font_candidates if candidate.exists()), None)
+        font = ImageFont.truetype(str(font_path), 46) if font_path else ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
+    # Keep the Explore text exactly as submitted: Arabic stays Arabic and
+    # English stays English. Translation is intentionally not applied here.
     raw = str(text or "").strip()[:150]
     words = raw.split() or [raw]
     lines, current = [], ""
@@ -8586,17 +8727,35 @@ def render_explore_card(text, username, photo_url=""):
         if _draw_explore_text_line(draw, width//2, first_y, line, font, (*text_color, 255), 46):
             first_y += line_height
             continue
-        shown = line if (_has_arabic(line) and PIL_AVAILABLE and features.check("raqm")) else _visual_rtl_text(line)
-        direction = {"direction": "rtl", "language": "ar"} if _has_arabic(line) and PIL_AVAILABLE and features.check("raqm") else {}
-        draw.text((width//2, first_y), shown, font=font, fill=(*text_color, 255), anchor="mt", align="center", **direction)
+        if not _has_arabic(line):
+            # English/Latin text must never be sent through the Arabic shaping
+            # fallback: some deployed builds render that fallback as squares.
+            latin_path = next((candidate for candidate in (
+                Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+                ASSETS_DIR / "DejaVuSans.ttf",
+            ) if candidate.exists()), None)
+            try:
+                latin_font = ImageFont.truetype(str(latin_path), 46) if latin_path else font
+            except Exception:
+                latin_font = font
+            draw.text((width//2, first_y), line, font=latin_font,
+                      fill=(*text_color, 255), anchor="mt", align="center")
+        else:
+            shown = line if (PIL_AVAILABLE and features.check("raqm")) else _visual_rtl_text(line)
+            direction = {"direction": "rtl", "language": "ar"} if PIL_AVAILABLE and features.check("raqm") else {}
+            draw.text((width//2, first_y), shown, font=font, fill=(*text_color, 255), anchor="mt", align="center", **direction)
         first_y += line_height
 
-    footer_font_path = ASSETS_DIR / "NotoSansArabic-SemiBold.ttf"
+    footer_font_path = (ASSETS_DIR / "DejaVuSans.ttf" if str(language).casefold() == "en"
+                        else ASSETS_DIR / "NotoSansArabic-SemiBold.ttf")
+    if str(language).casefold() == "en" and not footer_font_path.exists():
+        footer_font_path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
     try:
         footer_font = ImageFont.truetype(str(footer_font_path), 31)
     except Exception:
         footer_font = ImageFont.load_default()
-    draw.text((width//2, 1395), "كوفي بوت", font=footer_font,
+    draw.text((width//2, 1395), "Kofi Bot" if str(language).casefold() == "en" else "كوفي بوت", font=footer_font,
               fill=(245, 225, 199, 245), anchor="mm")
     draw.line((420, 1350, 660, 1350), fill=(244, 194, 120, 115), width=2)
 
@@ -8605,6 +8764,578 @@ def render_explore_card(text, username, photo_url=""):
     out = out_dir / f"explore_{uuid.uuid4().hex}.jpg"
     image.save(out, "JPEG", quality=91, optimize=True, progressive=False)
     return out
+
+
+def render_explore_animated_card(text, username, photo_url="", language="ar", secondary_text=""):
+    """Create an animated 3D-style Explore card with layered bevels.
+
+    Frames type the post text in while the metallic border, portrait hearts,
+    orbiting highlights and depth shadow move in subtle parallax. The first
+    frame remains a valid static fallback for clients without GIF playback.
+    """
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير متاح")
+    out_dir = BASE_DIR / "generated_publish"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    raw = str(text or "").strip()[:150]
+    # Render short prefixes to create a genuine typewriter effect. Rendering
+    # through the normal card keeps Arabic shaping and the Latin font fix in
+    # one code path instead of duplicating the layout engine here.
+    prefixes = [raw[:max(0, int(len(raw) * n / 8))] for n in range(1, 9)]
+    if raw and prefixes[-1] != raw:
+        prefixes[-1] = raw
+    frames = []
+    temporary = []
+    # Decode the user's original photo once for the floating mini-hearts.
+    avatar = _download_profile_photo(photo_url)
+    if avatar is not None:
+        try:
+            side = min(avatar.width, avatar.height)
+            left = (avatar.width - side) // 2
+            top = (avatar.height - side) // 2
+            avatar = avatar.crop((left, top, left + side, top + side)).convert("RGBA")
+        except Exception:
+            avatar = None
+    try:
+        for index, prefix in enumerate(prefixes or [""]):
+            jpg = render_explore_card(prefix, username, photo_url,
+                                      language=language, secondary_text=secondary_text)
+            temporary.append(jpg)
+            with Image.open(jpg) as source:
+                frame = source.convert("RGBA")
+            # Keep the Explore artwork, background and text panel fixed. Only
+            # the portrait hearts and luminous particles move between frames.
+            overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay)
+            # Beveled frame + offset extrusion create a visible 3D card edge.
+            tilt_x = int(7 * math.sin(index * math.pi / 4))
+            tilt_y = int(4 * math.cos(index * math.pi / 4))
+            od.rounded_rectangle((24+tilt_x+12, 24+tilt_y+14,
+                                  frame.width-24+tilt_x+12, frame.height-24+tilt_y+14),
+                                 radius=54, outline=(2, 5, 24, 205), width=20)
+            od.rounded_rectangle((24+tilt_x, 24+tilt_y,
+                                  frame.width-24+tilt_x, frame.height-24+tilt_y),
+                                 radius=54, outline=(60, 205, 255, 205), width=8)
+            od.rounded_rectangle((34+tilt_x, 34+tilt_y,
+                                  frame.width-34+tilt_x, frame.height-34+tilt_y),
+                                 radius=46, outline=(255, 202, 112, 150), width=3)
+            # A moving specular streak simulates light traveling across a raised edge.
+            shine_x = int(80 + (frame.width-160) * ((index % 5) / 4))
+            od.line((shine_x-100, 30+tilt_y, shine_x+100, 30+tilt_y),
+                    fill=(225, 250, 255, 210), width=5)
+            pulse = int(30 + 30 * (0.5 + 0.5 * math.sin(index * math.pi / 2)))
+            ring_color = (255, 194, 97, pulse) if index % 2 == 0 else (110, 230, 255, pulse)
+            drift = int(18 * math.sin(index * math.pi / 2))
+            od.ellipse((70 + drift, 95, 1010 + drift, 1340), outline=ring_color, width=7)
+            # Three scattered copies of the user's photo move on gentle arcs.
+            for j, (cx, cy, size) in enumerate(((150, 280, 105), (900, 420, 82), (170, 1110, 72))):
+                ox = int(42 * math.sin(index * math.pi / 2 + j * 1.7))
+                oy = int(34 * math.cos(index * math.pi / 2 + j * 1.3))
+                x, y = cx + ox - size // 2, cy + oy - size // 2
+                if avatar is not None:
+                    mini = avatar.resize((size, size), Image.Resampling.LANCZOS)
+                    mask = _explore_heart_mask(size)
+                    mini.putalpha(mask)
+                    overlay.paste(mini, (x, y), mini)
+                    od = ImageDraw.Draw(overlay)
+                    od.line((x + size//2, y + size - 5, x + size//2 + 8, y + size + 18), fill=(255, 220, 142, 120), width=3)
+                else:
+                    od = ImageDraw.Draw(overlay)
+                    od.polygon([(x+size//2, y+size), (x, y+size//3), (x+size//2, y+size//2), (x+size, y+size//3)], fill=(255, 93, 150, 180))
+            # Moving sparkles and small hearts provide a visible rhythm on GIF clients.
+            for j in range(7):
+                sx = int(90 + ((index * 97 + j * 137) % max(1, frame.width - 180)))
+                sy = int(180 + ((index * 61 + j * 181) % max(1, frame.height - 360)))
+                r = 4 + (j % 3)
+                od.ellipse((sx-r, sy-r, sx+r, sy+r), fill=(255, 241, 190, 185))
+            frames.append(Image.alpha_composite(frame, overlay).convert("P", palette=Image.Palette.ADAPTIVE))
+        out = out_dir / f"explore_{uuid.uuid4().hex}.gif"
+        frames[0].save(out, "GIF", save_all=True, append_images=frames[1:],
+                       duration=190, loop=0, optimize=True, disposal=2)
+        return out
+    finally:
+        for path in temporary:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+# ============================================================
+# Personal 3D-style image commands: animated portrait + rendered name art.
+# These are lightweight Pillow effects (not AI face reconstruction).
+# ============================================================
+
+def render_user_3d_portrait_gif(photo_url, username):
+    """Create a large 3D coffee-medallion portrait that rotates to the right as GIF."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+    avatar = _download_profile_photo(photo_url)
+    if avatar is None:
+        raise RuntimeError("تعذر تحميل صورة الحساب")
+
+    width, height = 720, 850
+    center_x, center_y = 360, 340
+    diameter = 540  # Larger portrait: 75% of the complete image width.
+    side = min(avatar.width, avatar.height)
+    avatar = avatar.crop(((avatar.width-side)//2, (avatar.height-side)//2,
+                          (avatar.width+side)//2, (avatar.height+side)//2))
+    avatar = avatar.resize((diameter, diameter), Image.Resampling.LANCZOS).convert("RGBA")
+    circle_mask = Image.new("L", (diameter, diameter), 0)
+    ImageDraw.Draw(circle_mask).ellipse((2, 2, diameter-3, diameter-3), fill=255)
+    avatar.putalpha(circle_mask)
+
+    # Deep coffee/navy background with a soft blue halo behind the medallion.
+    bg = Image.new("RGB", (width, height))
+    bg_draw = ImageDraw.Draw(bg)
+    top, bottom = (4, 9, 30), (17, 27, 72)
+    for y in range(height):
+        t = y / max(1, height-1)
+        col = tuple(int(top[i]*(1-t) + bottom[i]*t) for i in range(3))
+        bg_draw.line((0, y, width, y), fill=col)
+    glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((35, 20, 685, 670), fill=(0, 138, 255, 45))
+    glow = glow.filter(ImageFilter.GaussianBlur(62))
+    bg = Image.alpha_composite(bg.convert("RGBA"), glow)
+
+    frames = []
+    frame_count = 24
+    for frame_no in range(frame_count):
+        # Positive angular progression makes the portrait turn right/clockwise.
+        angle = 2 * math.pi * frame_no / frame_count
+        perspective = max(0.055, abs(math.cos(angle)))
+        face_w = max(28, int(diameter * perspective))
+        face = avatar.transpose(Image.Transpose.FLIP_LEFT_RIGHT) if math.cos(angle) < 0 else avatar
+        face = face.resize((face_w, diameter), Image.Resampling.LANCZOS)
+        face_mask = Image.new("L", (face_w, diameter), 0)
+        ImageDraw.Draw(face_mask).ellipse((1, 1, face_w-2, diameter-2), fill=255)
+        face.putalpha(face_mask)
+
+        frame = bg.copy()
+        d = ImageDraw.Draw(frame, "RGBA")
+        # Heavy outer bezel and two illuminated metal rims.
+        d.ellipse((center_x-310, center_y-310, center_x+310, center_y+310),
+                  fill=(1, 3, 17, 245), outline=(2, 7, 24, 255), width=20)
+        d.ellipse((center_x-298, center_y-298, center_x+298, center_y+298),
+                  outline=(15, 92, 185, 255), width=17)
+        d.ellipse((center_x-282, center_y-282, center_x+282, center_y+282),
+                  outline=(75, 220, 255, 250), width=7)
+        d.ellipse((center_x-268, center_y-268, center_x+268, center_y+268),
+                  outline=(249, 190, 91, 220), width=4)
+
+        # The photograph itself turns around its vertical axis within the large disc.
+        half_w = max(13, int((diameter/2 + 12) * perspective))
+        d.ellipse((center_x-half_w, center_y-diameter//2-12,
+                   center_x+half_w, center_y+diameter//2+12),
+                  fill=(3, 8, 28, 255), outline=(255, 203, 110, 250), width=6)
+        frame.alpha_composite(face, (center_x-face_w//2, center_y-diameter//2))
+
+        # A bright jewel travels clockwise around the medallion rim.
+        bead_x = int(center_x + 292 * math.cos(angle - math.pi/2))
+        bead_y = int(center_y + 292 * math.sin(angle - math.pi/2))
+        d.ellipse((bead_x-18, bead_y-18, bead_x+18, bead_y+18),
+                  fill=(20, 91, 168, 205), outline=(86, 225, 255, 255), width=4)
+        d.ellipse((bead_x-7, bead_y-7, bead_x+7, bead_y+7), fill=(255, 235, 178, 255))
+
+        # Moving side lights reinforce the sense of rotation and depth.
+        for j in range(6):
+            a = angle + j*math.pi/3
+            sx = int(center_x + 322*math.cos(a))
+            sy = int(center_y + 322*math.sin(a)*0.88)
+            r = 4 + (j % 2)*2
+            d.ellipse((sx-r, sy-r, sx+r, sy+r), fill=(140, 228, 255, 220))
+
+        d.rounded_rectangle((54, 650, 666, 728), radius=30,
+                            fill=(5, 18, 49, 246), outline=(74, 204, 255, 250), width=4)
+        _draw_name_centered(d, (360, 690), str(username or ""), 42,
+                            (255, 225, 163, 255), 560, apply_correction=False)
+        _draw_centered(d, (360, 790), "☕  كوفي بوت  •  3D PORTRAIT", 26,
+                       (195, 226, 255, 250), 630, force_ltr=False, apply_correction=False)
+        frames.append(frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=160))
+
+    out_dir = BASE_DIR / "generated_publish"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"portrait3d_{uuid.uuid4().hex}.gif"
+    frames[0].save(out, "GIF", save_all=True, append_images=frames[1:],
+                   duration=115, loop=0, optimize=True, disposal=2)
+    return out
+
+
+def _render_3d_name_card_frame(name, visible_name=None):
+    """Render one clean name-card frame without promotional copy."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+    display = _clean_name_for_image(str(name if visible_name is None else visible_name or "")).strip()[:48]
+    if not display:
+        raise ValueError("اكتب الاسم بعد الأمر: اسم <اسم المستخدم>")
+
+    w = h = 1080
+    image = Image.new("RGBA", (w, h), (5, 8, 18, 255))
+    px = image.load()
+    top, bottom = (7, 9, 19), (20, 42, 49)
+    for y in range(h):
+        t = y / max(1, h - 1)
+        base = tuple(int(top[i] * (1-t) + bottom[i] * t) for i in range(3))
+        for x in range(w):
+            glow1 = max(0.0, 1.0 - (((x-540)/720)**2 + ((y-420)/680)**2))
+            glow2 = max(0.0, 1.0 - (((x-950)/440)**2 + ((y-880)/520)**2))
+            px[x, y] = (min(255, int(base[0] + glow1*18 + glow2*8)),
+                        min(255, int(base[1] + glow1*22 + glow2*20)),
+                        min(255, int(base[2] + glow1*38 + glow2*22)), 255)
+
+    # Soft luminous halos behind the raised centerpiece.
+    halo = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    hd.ellipse((130, 110, 950, 930), fill=(10, 151, 214, 42))
+    hd.ellipse((250, 185, 830, 765), fill=(255, 181, 73, 25))
+    halo = halo.filter(ImageFilter.GaussianBlur(78))
+    image.alpha_composite(halo)
+    d = ImageDraw.Draw(image, "RGBA")
+
+    # Layered metallic frame, corner rivets and delicate ornaments.
+    d.rounded_rectangle((22, 22, 1058, 1058), radius=78,
+                        fill=(3, 7, 18, 245), outline=(37, 147, 184, 255), width=9)
+    d.rounded_rectangle((43, 43, 1037, 1037), radius=65,
+                        outline=(255, 207, 126, 245), width=4)
+    d.rounded_rectangle((58, 58, 1022, 1022), radius=54,
+                        outline=(255, 255, 255, 54), width=2)
+    for cx, cy in ((104,104), (976,104), (104,976), (976,976)):
+        d.ellipse((cx-14, cy-14, cx+14, cy+14), fill=(20, 35, 48, 255),
+                  outline=(255, 213, 137, 255), width=4)
+        d.ellipse((cx-4, cy-4, cx+4, cy+4), fill=(116, 219, 255, 255))
+
+    # Decorative orbital arcs and fine sparkles.
+    d.arc((178, 105, 902, 829), 198, 342, fill=(83, 212, 247, 100), width=5)
+    d.arc((205, 132, 875, 802), 18, 162, fill=(255, 203, 113, 115), width=4)
+    for i in range(58):
+        x = (i * 197 + 73) % 920 + 80
+        y = (i * 263 + 119) % 920 + 80
+        r = 2 + (i % 3)
+        d.ellipse((x-r, y-r, x+r, y+r), fill=(255, 218, 155, 100 + (i % 4)*30))
+
+    # A small coffee emblem in a raised medallion.
+    d.ellipse((445, 105, 635, 295), fill=(5, 12, 27, 245),
+              outline=(255, 208, 125, 255), width=6)
+    d.ellipse((458, 118, 622, 282), outline=(79, 199, 235, 170), width=3)
+    # cup silhouette
+    d.rounded_rectangle((493, 181, 584, 236), radius=13,
+                        fill=(255, 213, 145, 255), outline=(255, 245, 217, 255), width=3)
+    d.arc((568, 186, 614, 231), 270, 90, fill=(255, 213, 145, 255), width=9)
+    d.line((486, 244, 595, 244), fill=(255, 213, 145, 255), width=5)
+    d.arc((515, 142, 554, 185), 190, 350, fill=(210, 231, 241, 245), width=5)
+    d.arc((542, 132, 580, 180), 190, 350, fill=(210, 231, 241, 210), width=4)
+
+    d = ImageDraw.Draw(image, "RGBA")
+    d.rounded_rectangle((100, 430, 980, 720), radius=76,
+                        fill=(3, 12, 29, 232), outline=(79, 196, 227, 190), width=4)
+    d.rounded_rectangle((117, 447, 963, 703), radius=62,
+                        outline=(255, 205, 116, 130), width=3)
+    d.line((195, 475, 885, 475), fill=(255, 255, 255, 45), width=2)
+
+    # Render the submitted name into a mask, then build a stepped 3D extrusion.
+    name_mask = Image.new("L", (w, h), 0)
+    md = ImageDraw.Draw(name_mask)
+    preferred_fonts = (
+        ASSETS_DIR / "NotoKufiArabic-Black.ttf",
+        Path("/usr/share/fonts/truetype/noto/NotoKufiArabic-Black.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoKufiArabic-ExtraBold.ttf"),
+        Path("/usr/share/fonts/opentype/fonts-hosny-amiri/Amiri-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    )
+    chosen_font = next((fp for fp in preferred_fonts if fp.is_file()), None)
+    if chosen_font is not None:
+        size = 158
+        direction_args = {"direction": "rtl", "language": "ar"} if _has_arabic(display) and features.check("raqm") else {}
+        while size > 54:
+            font = ImageFont.truetype(str(chosen_font), size)
+            try:
+                bbox = md.textbbox((0, 0), display, font=font, **direction_args)
+            except Exception:
+                bbox = md.textbbox((0, 0), display, font=font)
+            if bbox[2]-bbox[0] <= 790 and bbox[3]-bbox[1] <= 190:
+                break
+            size -= 4
+        try:
+            bbox = md.textbbox((0, 0), display, font=font, **direction_args)
+            md.text(((w-(bbox[2]-bbox[0]))//2-bbox[0], 570-(bbox[1]+bbox[3])//2),
+                     display, font=font, fill=255, **direction_args)
+        except Exception:
+            _draw_name_centered(md, (540, 570), display, 132, 255, 790,
+                                apply_correction=False, grow_short=False)
+    else:
+        _draw_name_centered(md, (540, 570), display, 132, 255, 790,
+                            apply_correction=False, grow_short=False)
+
+    outline = name_mask.filter(ImageFilter.MaxFilter(19))
+    gold_edge = Image.new("RGBA", (w, h), (255, 184, 70, 255))
+    gold_edge.putalpha(outline)
+    image.alpha_composite(gold_edge)
+    for off in range(34, 0, -2):
+        extrusion = Image.new("RGBA", (w, h), (2, 5, 13, 255))
+        extrusion.putalpha(name_mask)
+        image.alpha_composite(extrusion, (off, off))
+
+    metallic = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    mg = ImageDraw.Draw(metallic)
+    stops = ((0.0,(255,250,218)), (0.22,(255,229,153)), (0.47,(255,190,74)),
+             (0.70,(206,112,24)), (0.88,(255,218,132)), (1.0,(255,247,206)))
+    for y in range(h):
+        t = y / max(1, h-1)
+        left, right = stops[0], stops[-1]
+        for j in range(len(stops)-1):
+            if stops[j][0] <= t <= stops[j+1][0]:
+                left, right = stops[j], stops[j+1]
+                break
+        q = (t-left[0]) / max(0.0001, right[0]-left[0])
+        col = tuple(int(left[1][k]*(1-q)+right[1][k]*q) for k in range(3))
+        mg.line((0, y, w, y), fill=(*col, 255))
+    metallic.putalpha(name_mask)
+    image.alpha_composite(metallic)
+    gloss = name_mask.filter(ImageFilter.GaussianBlur(1.0)).filter(ImageFilter.MaxFilter(5))
+    gloss = gloss.point(lambda v: int(v * .22))
+    gloss_layer = Image.new("RGBA", (w, h), (255, 255, 236, 0))
+    gloss_layer.putalpha(gloss)
+    image.alpha_composite(gloss_layer, (0, -5))
+
+    d = ImageDraw.Draw(image, "RGBA")
+    d.rounded_rectangle((300, 755, 780, 762), radius=4, fill=(79, 205, 236, 230))
+    d.rounded_rectangle((192, 919, 888, 988), radius=30,
+                        fill=(6, 14, 29, 235), outline=(255, 205, 117, 190), width=3)
+    _draw_centered(d, (540, 954), "كوفي بوت", 36,
+                   (255, 220, 157, 255), 650, apply_correction=False)
+
+    out_dir = BASE_DIR / "generated_publish"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"name3d_{uuid.uuid4().hex}.jpg"
+    image.convert("RGB").save(out, "JPEG", quality=94, optimize=True, progressive=False)
+    return out
+
+
+def render_3d_name_card(name):
+    """Create an animated 3D name card with a clean typewriter reveal."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير مثبت")
+    raw = _clean_name_for_image(str(name or "")).strip()[:48]
+    if not raw:
+        raise ValueError("اكتب الاسم بعد الأمر: اسم <اسم المستخدم>")
+    # Each frame reveals more of the exact submitted name.  The final frame
+    # remains visible long enough for clients that autoplay GIFs slowly.
+    prefixes = [raw[:max(1, math.ceil(len(raw) * i / 8))] for i in range(1, 9)]
+    temporary = []
+    frames = []
+    try:
+        for prefix in prefixes:
+            frame_path = _render_3d_name_card_frame(raw, visible_name=prefix)
+            temporary.append(frame_path)
+            with Image.open(frame_path) as source:
+                frames.append(source.convert("P", palette=Image.Palette.ADAPTIVE, colors=192))
+        out_dir = BASE_DIR / "generated_publish"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"name3d_{uuid.uuid4().hex}.gif"
+        frames[0].save(out, "GIF", save_all=True, append_images=frames[1:],
+                       duration=180, loop=0, optimize=True, disposal=2)
+        return out
+    finally:
+        for path in temporary:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def render_explore_premium_card(text, username, photo_url="", language="ar"):
+    """Create a second luxury Coffee Bot Explore layout with a circular portrait."""
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير متاح")
+    width, height = 1080, 1500
+    image = Image.new("RGBA", (width, height), (7, 10, 18, 255))
+    pix = image.load()
+    top, bottom = (8, 12, 22), (11, 43, 48)
+    for y in range(height):
+        t = y / max(1, height-1)
+        row = tuple(int(top[i]*(1-t)+bottom[i]*t) for i in range(3))
+        for x in range(width):
+            gold_glow = max(0.0, 1.0-(((x-540)/760)**2+((y-360)/760)**2))
+            blue_glow = max(0.0, 1.0-(((x-90)/520)**2+((y-1000)/700)**2))
+            pix[x,y] = (min(255,int(row[0]+gold_glow*18)),
+                        min(255,int(row[1]+gold_glow*13+blue_glow*15)),
+                        min(255,int(row[2]+gold_glow*7+blue_glow*26)),255)
+
+    # Bloom and the raised outer frame.
+    bloom = Image.new("RGBA", (width,height), (0,0,0,0))
+    bd = ImageDraw.Draw(bloom)
+    bd.ellipse((165, 65, 915, 815), fill=(17, 172, 211, 48))
+    bd.ellipse((255, 155, 825, 725), fill=(251, 175, 77, 28))
+    bloom = bloom.filter(ImageFilter.GaussianBlur(76))
+    image.alpha_composite(bloom)
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rounded_rectangle((22,22,width-22,height-22), radius=70,
+                           fill=(4,8,17,130), outline=(255,202,115,245), width=7)
+    draw.rounded_rectangle((39,39,width-39,height-39), radius=59,
+                           outline=(67,195,231,205), width=4)
+    draw.rounded_rectangle((54,54,width-54,height-54), radius=48,
+                           outline=(255,255,255,43), width=2)
+    for i in range(46):
+        x=(i*191+83)%940+70; y=(i*239+51)%1360+70; r=2+(i%3)
+        draw.ellipse((x-r,y-r,x+r,y+r), fill=(255,220,153,110+(i%4)*28))
+
+    # Header branding.
+    header_font = None
+    for fp in (ASSETS_DIR/"DejaVuSans-Bold.ttf", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")):
+        if fp.exists():
+            try: header_font=ImageFont.truetype(str(fp),30); break
+            except Exception: pass
+    if header_font:
+        draw.text((width//2,105), "KOFI BOT  •  LUXURY EXPLORE", font=header_font,
+                  fill=(230,218,183,255), anchor="mm")
+    _draw_centered(draw, (width//2, 184), "اكسبلور" if str(language).casefold()!="en" else "EXPLORE",
+                   54, (255,220,158,255), 760, apply_correction=False)
+    draw.line((360,225,720,225), fill=(77,207,236,190), width=3)
+    draw.ellipse((534,218,546,230), fill=(255,222,157,255))
+
+    # Circular profile portrait with stacked metallic rims.
+    cx, cy, radius = width//2, 450, 228
+    shadow = Image.new("L", (width,height), 0)
+    ImageDraw.Draw(shadow).ellipse((cx-radius-12,cy-radius+13,cx+radius+12,cy+radius+37), fill=180)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(24))
+    sh = Image.new("RGBA", (width,height), (0,0,0,0)); sh.putalpha(shadow)
+    image.alpha_composite(sh)
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.ellipse((cx-radius-22,cy-radius-22,cx+radius+22,cy+radius+22),
+                 fill=(4,9,20,255), outline=(255,208,128,255), width=13)
+    draw.ellipse((cx-radius-8,cy-radius-8,cx+radius+8,cy+radius+8),
+                 outline=(77,205,236,255), width=8)
+    draw.ellipse((cx-radius,cy-radius,cx+radius,cy+radius),
+                 outline=(255,239,205,170), width=3)
+    avatar = _download_profile_photo(photo_url)
+    if avatar is not None:
+        try:
+            side=min(avatar.width,avatar.height); left=(avatar.width-side)//2; top=(avatar.height-side)//2
+            avatar=avatar.crop((left,top,left+side,top+side)).resize((radius*2-12,radius*2-12), Image.Resampling.LANCZOS).convert("RGBA")
+        except Exception: avatar=None
+    if avatar is None:
+        avatar=Image.new("RGBA", (radius*2-12,radius*2-12), (25,48,65,255))
+        ad=ImageDraw.Draw(avatar)
+        ad.ellipse((radius*.62,radius*.35,radius*1.38,radius*1.11), fill=(220,231,234,255))
+        ad.rounded_rectangle((radius*.40,radius*1.06,radius*1.60,radius*1.90), radius=75, fill=(220,231,234,255))
+    mask=Image.new("L", avatar.size,0); ImageDraw.Draw(mask).ellipse((0,0,avatar.width-1,avatar.height-1),fill=255)
+    avatar.putalpha(mask)
+    image.alpha_composite(avatar, (cx-avatar.width//2,cy-avatar.height//2))
+
+    # Small orbit nodes and the publisher's username on a raised plaque.
+    draw=ImageDraw.Draw(image,"RGBA")
+    for angle in (-90, -10, 70, 170):
+        rad=math.radians(angle); bx=int(cx+258*math.cos(rad)); by=int(cy+258*math.sin(rad))
+        draw.ellipse((bx-13,by-13,bx+13,by+13), fill=(7,22,35,255), outline=(255,211,128,255), width=4)
+        draw.ellipse((bx-5,by-5,bx+5,by+5), fill=(80,211,240,255))
+    draw.rounded_rectangle((115,710,965,840), radius=48,
+                           fill=(3,12,28,235), outline=(255,205,116,235), width=4)
+    draw.rounded_rectangle((132,727,948,823), radius=37,
+                           outline=(73,203,232,120), width=2)
+    _draw_explore_username(draw, (width//2, 780), username, 760)
+
+    # Post panel, with legible wrapped Arabic or English content.
+    box=(74,900,1006,1325)
+    draw.rounded_rectangle(box, radius=48, fill=(3,11,25,232), outline=(255,206,119,220), width=4)
+    draw.rounded_rectangle((92,918,988,1307), radius=38, outline=(83,196,226,100), width=2)
+    label="✦ محتوى المنشور ✦" if str(language).casefold()!="en" else "✦ POST ✦"
+    _draw_centered(draw,(width//2,962),label,29,(255,219,157,255),780,apply_correction=False)
+    try:
+        if _has_arabic(str(text or "")):
+            candidates=(ASSETS_DIR/"NotoSansArabic-Regular.ttf",Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"))
+        else:
+            candidates=(Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),ASSETS_DIR/"DejaVuSans.ttf")
+        fp=next((p for p in candidates if p.exists()),None)
+        body_font=ImageFont.truetype(str(fp),43) if fp else ImageFont.load_default()
+    except Exception:
+        body_font=ImageFont.load_default()
+    raw=str(text or "").strip()[:150]
+    words=raw.split() or [raw]
+    lines=[]; current=""
+    for word in words:
+        candidate=(current+" "+word).strip()
+        try: measured=_explore_visual_text_width(draw,candidate,body_font,42)
+        except Exception: measured=draw.textlength(candidate,font=body_font)
+        if current and (measured or 0)>790:
+            lines.append(current); current=word
+        else: current=candidate
+    if current: lines.append(current)
+    if len(lines)>5:
+        lines=lines[:5]; lines[-1]=lines[-1].rstrip("…")+"…"
+    line_height=61
+    y=1015+max(0,(250-len(lines)*line_height)//2)
+    tint=(244,226,190,255)
+    for line in lines:
+        if not _draw_explore_text_line(draw,width//2,y,line,body_font,tint,42):
+            shown=line if (PIL_AVAILABLE and features.check("raqm")) else _visual_rtl_text(line)
+            draw.text((width//2,y),shown,font=body_font,fill=tint,anchor="mt",align="center")
+        y+=line_height
+
+    # Footer branding and ornamental underline.
+    draw.line((285,1390,795,1390), fill=(255,203,112,190), width=3)
+    draw.ellipse((533,1382,547,1396), fill=(82,212,240,255))
+    _draw_centered(draw,(width//2,1440),"☕  COFFEE BOT  •  لمسة فخامة في كل منشور",28,
+                   (221,232,230,245),900,apply_correction=False)
+    out_dir=BASE_DIR/"generated_publish"; out_dir.mkdir(parents=True,exist_ok=True)
+    out=out_dir/f"explore_premium_{uuid.uuid4().hex}.jpg"
+    image.convert("RGB").save(out,"JPEG",quality=92,optimize=True,progressive=False)
+    return out
+
+
+def render_explore_premium_animated_card(text, username, photo_url="", language="ar"):
+    """Animate orbital jewels and a moving metallic shine on premium Explore."""
+    base_path=render_explore_premium_card(text,username,photo_url,language=language)
+    frames=[]
+    try:
+        with Image.open(base_path) as source:
+            base=source.convert("RGBA")
+        w,h=base.size
+        for i in range(10):
+            frame=base.copy()
+            overlay=Image.new("RGBA",(w,h),(0,0,0,0)); od=ImageDraw.Draw(overlay)
+            angle=2*math.pi*i/10
+            # A luminous jewel circles the profile frame; an outer ring pulses.
+            cx,cy=540,450
+            bx=int(cx+258*math.cos(angle)); by=int(cy+258*math.sin(angle))
+            od.ellipse((bx-19,by-19,bx+19,by+19),fill=(4,19,31,230),outline=(93,224,255,255),width=5)
+            od.ellipse((bx-8,by-8,bx+8,by+8),fill=(255,221,150,255))
+            pulse=int(80+65*(.5+.5*math.sin(angle)))
+            od.ellipse((cx-252,cy-252,cx+252,cy+252),outline=(255,206,116,pulse),width=4)
+            # Specular streak moves along the top rim of the frame.
+            sx=100+int((w-200)*(i/9))
+            od.line((sx-72,45,sx+72,45),fill=(228,250,255,210),width=5)
+            # Small drifting sparkles.
+            for j in range(8):
+                x=int(90+((i*89+j*151)%(w-180)))
+                y=int(150+((i*67+j*173)%(h-300)))
+                r=3+(j%3)
+                od.ellipse((x-r,y-r,x+r,y+r),fill=(255,229,173,190))
+            frame.alpha_composite(overlay)
+            frames.append(frame.convert("P",palette=Image.Palette.ADAPTIVE))
+        out_dir=BASE_DIR/"generated_publish"; out_dir.mkdir(parents=True,exist_ok=True)
+        out=out_dir/f"explore_premium_{uuid.uuid4().hex}.gif"
+        frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=180,loop=0,optimize=True,disposal=2)
+        return out
+    finally:
+        try: base_path.unlink(missing_ok=True)
+        except Exception: pass
+
+
+def _prepare_talkin_animation_media(gif_path):
+    """Keep animation as an animated GIF sent with Talkin's image media type.
+
+    The Talkin chat client used here does not support video attachments, so
+    do not convert GIFs to MP4. Serving image/gif keeps the animation in the
+    image path and allows clients with animated-GIF support to play it.
+    """
+    source = Path(gif_path)
+    if not source.is_file():
+        raise FileNotFoundError(str(source))
+    with Image.open(source) as check:
+        if check.format != "GIF" or int(getattr(check, "n_frames", 1)) < 2:
+            raise ValueError("الملف ليس GIF متحركاً")
+    return source, "image"
+
 
 # ============================================================
 # شبيه المستخدم: بحث تلقائي عن صورة من الويب وإرسالها للغرفة.
@@ -8658,59 +9389,160 @@ def _is_monkey_picture_query(query):
     return any(term in normalized for term in ("قرد", "قرود", "شمبانزي", "monkey", "chimp"))
 
 
+def _image_search_core_query(query):
+    """Remove presentation words so encyclopedic image search sees the subject name."""
+    value = str(query or "").strip()
+    value = re.sub(
+        r"\b(?:safe\s+for\s+work|fully\s+clothed|official\s+portrait|"
+        r"red\s+carpet\s+portrait|celebrity\s+headshot|portrait|headshot|photo|image)\b",
+        " ", value, flags=re.I,
+    )
+    value = re.sub(r"\s+", " ", value).strip(" -_,")
+    return value or str(query or "").strip()
+
+
+def _search_wikipedia_portrait_images(query, limit=10):
+    """Fetch article lead-image thumbnails from Arabic/English Wikipedia APIs."""
+    core = _image_search_core_query(query)
+    if not core:
+        return []
+    headers = {
+        "User-Agent": "TalkinBot/1.0 (public image lookup; contact bot administrator)",
+        "Accept": "application/json",
+    }
+    found = []
+    for language in ("ar", "en"):
+        try:
+            response = requests.get(
+                f"https://{language}.wikipedia.org/w/api.php",
+                params={
+                    "action": "query", "generator": "search", "gsrsearch": core,
+                    "gsrlimit": max(5, min(15, int(limit) + 3)),
+                    "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 1000,
+                    "redirects": 1, "format": "json", "formatversion": 2,
+                },
+                headers=headers, timeout=(4, 9),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            pages = (payload.get("query") or {}).get("pages") or []
+            if isinstance(pages, dict):
+                pages = list(pages.values())
+            for page in pages:
+                thumb = page.get("thumbnail") if isinstance(page, dict) else None
+                image_url = str((thumb or {}).get("source") or "").strip()
+                if image_url.startswith("https://") and image_url not in found:
+                    found.append(image_url)
+        except Exception:
+            continue
+        if len(found) >= int(limit):
+            break
+    return found[:max(1, int(limit))]
+
+
+def _search_commons_image_files(query, limit=10):
+    """Search Wikimedia Commons files and resolve their actual image URLs."""
+    core = _image_search_core_query(query)
+    if not core:
+        return []
+    headers = {
+        "User-Agent": "TalkinBot/1.0 (public image lookup; contact bot administrator)",
+        "Accept": "application/json",
+    }
+    try:
+        search_response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query", "list": "search", "srsearch": core,
+                "srnamespace": 6, "srlimit": max(8, min(30, int(limit) * 2)),
+                "format": "json", "formatversion": 2,
+            },
+            headers=headers, timeout=(4, 9),
+        )
+        search_response.raise_for_status()
+        rows = (search_response.json().get("query") or {}).get("search") or []
+        pageids = [str(row.get("pageid")) for row in rows if row.get("pageid")]
+        if not pageids:
+            return []
+        info_response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query", "pageids": "|".join(pageids),
+                "prop": "imageinfo", "iiprop": "url|mime", "iiurlwidth": 1000,
+                "format": "json", "formatversion": 2,
+            },
+            headers=headers, timeout=(4, 9),
+        )
+        info_response.raise_for_status()
+        pages = (info_response.json().get("query") or {}).get("pages") or []
+        if isinstance(pages, dict):
+            pages = list(pages.values())
+        urls = []
+        allowed_mimes = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+        for page in pages:
+            info = (page.get("imageinfo") or [{}])[0] if isinstance(page, dict) else {}
+            mime = str(info.get("mime") or "").lower()
+            image_url = str(info.get("thumburl") or info.get("url") or "").strip()
+            if mime in allowed_mimes and image_url.startswith("https://") and image_url not in urls:
+                urls.append(image_url)
+        return urls[:max(1, int(limit))]
+    except Exception:
+        return []
+
+
 def _search_lookalike_images(query, exclude_urls=None, limit=12):
-    """Return strict-SafeSearch Bing images; Commons fallback is limited to animal searches."""
+    """Return image URLs from Wikipedia, Commons, then Bing as a final fallback."""
     q = str(query or "").strip()
     if not q or _is_explicit_picture_query(q):
         return []
     excluded = {str(x).strip() for x in (exclude_urls or []) if str(x).strip()}
-    urls = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 "
-                      "Chrome/120.0 Mobile Safari/537.36",
-        "Accept-Language": "ar,en;q=0.8",
-    }
-    safe_query = q if re.search(r"\bsafe for work\b", q, flags=re.I) else q + " safe for work"
+    wanted = max(1, min(30, int(limit)))
+    collected = []
+
+    # Wikipedia page thumbnails are stable direct image URLs and avoid scraping
+    # a search-results HTML page whose markup changes frequently.
     try:
-        r = requests.get(
-            "https://www.bing.com/images/search",
-            params={"q": safe_query, "form": "HDRSC2", "first": "1", "adlt": "strict"},
-            headers=headers,
-            timeout=(3, 6),
-        )
-        r.raise_for_status()
-        urls = _extract_image_urls_from_bing(r.text)
+        collected.extend(_search_wikipedia_portrait_images(q, limit=wanted))
     except Exception:
-        urls = []
-    fresh = list(dict.fromkeys(url for url in urls if url and url not in excluded))
-    if len(fresh) < min(3, max(1, int(limit))) and _is_monkey_picture_query(q):
-        # Commons is used only for animal searches: unlike Bing's `adlt=strict`,
-        # Commons does not provide a SafeSearch filter suitable for portraits.
+        pass
+
+    # Commons supplies genuine image-file URLs when the encyclopedia has no
+    # article thumbnail (common for regional celebrities and public figures).
+    if len(set(collected)) < wanted:
         try:
-            commons_query = re.sub(r"\b(?:safe for work)\b", " ", q, flags=re.I)
-            commons_query = re.sub(r"\s+", " ", commons_query).strip() or q
-            response = requests.get(
-                "https://commons.wikimedia.org/w/api.php",
-                params={
-                    "action": "query", "generator": "search", "gsrsearch": commons_query,
-                    "gsrnamespace": 6, "gsrlimit": max(8, int(limit)),
-                    "prop": "imageinfo", "iiprop": "url|mime", "iiurlwidth": 1200,
-                    "format": "json", "formatversion": 2,
-                },
-                headers={"User-Agent": "TalkinBot/1.0 (https://github.com/zidaan11223344-coder/Talkin2)", "Accept": "application/json"},
-                timeout=(3, 6),
-            )
-            response.raise_for_status()
-            for page in response.json().get("query", {}).get("pages", []):
-                image = (page.get("imageinfo") or [{}])[0]
-                image_url = image.get("thumburl") or image.get("url")
-                mime = str(image.get("mime") or "").lower()
-                if image_url and mime in {"image/jpeg", "image/png", "image/webp"} and image_url not in excluded:
-                    fresh.append(image_url)
+            collected.extend(_search_commons_image_files(q, limit=wanted))
         except Exception:
             pass
-    return fresh[:max(1, int(limit))]
 
+    # Bing remains the final fallback for broader image searches.
+    if len(set(collected)) < wanted:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Android 10; Mobile) AppleWebKit/537.36 "
+                          "Chrome/120.0 Mobile Safari/537.36",
+            "Accept-Language": "ar,en;q=0.8",
+        }
+        safe_query = q if re.search(r"\bsafe for work\b", q, flags=re.I) else q + " safe for work"
+        try:
+            response = requests.get(
+                "https://www.bing.com/images/search",
+                params={"q": safe_query, "form": "HDRSC2", "first": "1", "adlt": "strict"},
+                headers=headers, timeout=(4, 8),
+            )
+            response.raise_for_status()
+            collected.extend(_extract_image_urls_from_bing(response.text))
+        except Exception:
+            pass
+
+    result = []
+    seen = set(excluded)
+    for url in collected:
+        value = str(url or "").strip()
+        if value.startswith("https://") and len(value) <= 900 and value not in seen:
+            seen.add(value)
+            result.append(value)
+            if len(result) >= wanted:
+                break
+    return result
 
 def _search_lookalike_image(query, exclude_urls=None):
     """Return a fresh random image URL from Bing or Wikimedia Commons."""
@@ -8762,21 +9594,19 @@ def _search_monkey_image(exclude_urls=None):
 
 
 def _download_lookalike_image(image_url, target_name):
-    """Download, validate, and lightly optimize a found image."""
+    """Download and validate an image; Pillow optimization is optional."""
     if not image_url:
         return None
     LOOKALIKE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        r = requests.get(
+        response = requests.get(
             image_url,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"},
-            timeout=(3, 7),
-            stream=True,
+            timeout=(5, 15), stream=True,
         )
-        r.raise_for_status()
-        chunks = []
-        total = 0
-        for chunk in r.iter_content(64 * 1024):
+        response.raise_for_status()
+        chunks, total = [], 0
+        for chunk in response.iter_content(64 * 1024):
             if not chunk:
                 continue
             total += len(chunk)
@@ -8784,23 +9614,40 @@ def _download_lookalike_image(image_url, target_name):
                 return None
             chunks.append(chunk)
         data = b"".join(chunks)
-        if not data:
+        if len(data) < 128:
             return None
-        if not PIL_AVAILABLE:
-            return None
-        from io import BytesIO
-        img = Image.open(BytesIO(data)).convert("RGB")
-        # Keep the found image recognizable; only normalize dimensions/file size.
-        max_side = 1100
-        if max(img.size) > max_side:
-            scale = max_side / float(max(img.size))
-            img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))), Image.LANCZOS)
-        out = LOOKALIKE_DIR / f"look_{uuid.uuid4().hex}.jpg"
-        for quality in (92, 88, 84, 80, 76, 72):
-            img.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
-            if out.stat().st_size <= 220 * 1024:
-                break
-        return out if out.is_file() else None
+        if data.startswith(b"\xff\xd8\xff"):
+            ext = ".jpg"
+        elif data.startswith(b"\x89PNG\r\n\x1a\n"):
+            ext = ".png"
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
+            ext = ".gif"
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            ext = ".webp"
+        else:
+            ctype = str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+            ext = {"image/jpeg":".jpg", "image/png":".png", "image/webp":".webp", "image/gif":".gif"}.get(ctype, "")
+            if not ext:
+                return None
+        out = LOOKALIKE_DIR / f"look_{uuid.uuid4().hex}{ext}"
+        if PIL_AVAILABLE:
+            try:
+                from io import BytesIO
+                img = Image.open(BytesIO(data))
+                img.load()
+                img = img.convert("RGB")
+                if max(img.size) > 1100:
+                    scale = 1100 / float(max(img.size))
+                    img = img.resize((max(1, int(img.width*scale)), max(1, int(img.height*scale))), Image.LANCZOS)
+                out = out.with_suffix(".jpg")
+                img.save(out, "JPEG", quality=86, optimize=True, progressive=False)
+                if out.is_file() and out.stat().st_size > 128:
+                    return out
+            except Exception:
+                pass
+        # Do not fail image delivery just because Pillow is absent or a decoder rejects the file.
+        out.write_bytes(data)
+        return out if out.is_file() and out.stat().st_size > 128 else None
     except Exception:
         return None
 
@@ -9423,6 +10270,7 @@ class TalkinBot:
         # Live profile photos learned from Talkin UserItem field 3.
         # username(casefold) -> public photo URL.
         self.user_photos = {}
+        self.bot_profile_photo_url = ""
         self.last_joined_room = None
         # Members who enter AFTER the bot enters/re-enters a room.
         # This is separate from room_users/room_users.json because those are
@@ -9449,6 +10297,9 @@ class TalkinBot:
         self.reaction_targets = {}
         self.publish_pending = {}
         self._publish_media_lock = threading.Lock()
+        personal_designs = _load_local_json(DATA_DIR / "personal_designs.json", {})
+        self.personal_designs = personal_designs if isinstance(personal_designs, dict) else {}
+        self._personal_design_lock = threading.RLock()
         monitored = _load_local_json(DATA_DIR / "monitored_users.json", [])
         self.monitored_users = {
             _norm_user(item) for item in (monitored if isinstance(monitored, list) else [])
@@ -10423,7 +11274,10 @@ class TalkinBot:
             "unknown error occurred. try again!",
             "unknown error occurred. try again",
         }
-        for attempt in range(3):
+        # Talkin sometimes returns a generic transient rejection during a
+        # short authentication outage. Retry with bounded exponential backoff;
+        # never treat a rejected response as a successful login.
+        for attempt in range(5):
             self.log("[AUTH] POST", url, "attempt=", attempt + 1)
             r = self.http.post(
                 url,
@@ -10436,8 +11290,8 @@ class TalkinBot:
             message = str(self.auth.get("message") or "").strip()
             if (self.auth.get("result", "").lower() not in ("ok", "success", "true", "1")
                     and message.casefold() in transient_auth_messages
-                    and attempt < 2):
-                delay = 1.0 + attempt * 2.0
+                    and attempt < 4):
+                delay = min(2 ** attempt, 12)
                 self.log("[AUTH] temporary generic rejection; retrying in", delay, "seconds")
                 time.sleep(delay)
                 continue
@@ -11147,7 +12001,7 @@ class TalkinBot:
             return False
         try:
             title = str(title or "ملف كبير من البوت").strip()[:900]
-            parsed = urllib.parse.urlparse(media_url)
+            parsed = urlparse(media_url)
             suffix = Path(parsed.path).suffix.lower() or ".bin"
             safe_type = re.sub(r"[^a-z0-9_-]+", "", str(media_type or "file").lower()) or "file"
             filename = f"talkin_{safe_type}_{int(time.time())}{suffix}"
@@ -12543,6 +13397,9 @@ class TalkinBot:
             if re.fullmatch(r"sher@(.+)", command, re.I):
                 self.share_last_music(original_sender, command.split("@",1)[1], target_room)
                 return True
+            youtube_test = re.fullmatch(r"(?:تشغيل\s+يوتيوب\s+)?\.aa\s*(.+)", command.strip(), re.I)
+            if youtube_test:
+                return bool(self.handle_youtube_test_command(target_room, youtube_test.group(1), original_sender))
             if low.startswith(".sa "):
                 return bool(self.handle_music_command(target_room, command, original_sender, broadcast_all=True, with_reactions=True))
             if low in ("نقاطي", "points"):
@@ -12847,52 +13704,84 @@ class TalkinBot:
                 reply_context.rerouting = old_rerouting
         return sent
 
-    def send_private_media(self, username: str, media_url: str, media_type: str, duration: int = 0):
-        """Send media to a private chat using the same Query media fields as rooms.
+    def send_private_media(self, username: str, media_url: str, media_type: str,
+                           duration: int = 0, filename: str = ""):
+        """Send a real private attachment (not just a text/audio URL notice).
 
-        Private text can arrive even when the media URL is unreachable, so
-        validate the public file first.  A transient WebSocket write failure
-        is retried once; this is especially important after the preceding
-        caption packet, which can briefly congest the Talkin connection.
+        Talkin's private-chat attachment renderer expects a named ``file``
+        message. The URL, filename/body and optional audio duration must all
+        be present; an empty body can be accepted by the socket but discarded
+        by some clients as an incomplete attachment.
         """
         username = str(username or "").strip().lstrip("@")
         media_url = str(media_url or "").strip()
-        media_type = str(media_type or "").strip().lower()
-        if not username or username == BOT_ID or not media_url:
+        requested_type = str(media_type or "").strip().lower()
+        if not username or _norm_user(username) == _norm_user(BOT_ID) or not media_url:
             return False
-        if media_type not in {"audio", "image", "video", "file"}:
-            raise ValueError(f"unsupported private media type: {media_type}")
-        requested_audio = media_type == "audio"
+        if requested_type not in {"audio", "image", "video", "file"}:
+            raise ValueError(f"unsupported private media type: {requested_type}")
+
+        requested_audio = requested_type == "audio"
+        packet_type = requested_type
         if requested_audio:
             self._verify_public_media_url(media_url, "audio")
-            # This Talkin gateway renders type=audio as a text-only message.
-            # Keep the semantic audio validation, but send the MP3 as a file
-            # packet so the recipient gets the actual downloadable sound.
-            media_type = PRIVATE_AUDIO_TYPE
-        if requested_audio and media_type not in {"file", "audio"}:
-            raise ValueError(f"unsupported private audio packet type: {media_type}")
-        if requested_audio and not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
-            self.log("[MEDIA] audio URL has no audio extension; explicit audio type is used")
-        payload = encode_query(
-            "chat_message", type_=media_type, to=username, url=media_url,
-            body="",
-            length=str(max(0, int(duration or 0))) if media_type == "audio" else None
-        )
+            # Current private-chat builds use a file attachment for an actual
+            # downloadable MP3; PRIVATE_AUDIO_TYPE can override this per APK.
+            packet_type = PRIVATE_AUDIO_TYPE if PRIVATE_AUDIO_TYPE in {"file", "audio"} else "file"
+        elif requested_type in {"image", "video"}:
+            self._verify_public_media_url(media_url, requested_type)
+
+        parsed_path = urlparse(media_url).path
+        clean_name = str(filename or Path(parsed_path).name or "").strip()
+        clean_name = re.sub(r'[\\/:*?"<>|]+', "_", clean_name).strip(" .")[:120]
+        if requested_audio:
+            if not clean_name:
+                clean_name = "song.mp3"
+            elif not Path(clean_name).suffix:
+                clean_name += ".mp3"
+            if not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
+                self.log("[MEDIA] private audio uses explicit filename; URL path has no audio extension")
+
+        packet_types = [packet_type]
+        if requested_audio:
+            # The private gateway acknowledges type=audio but renders it as
+            # text-only. type=file is the native playable private attachment.
+            # Put file first so a successful transport acknowledgement cannot
+            # suppress the real MP3 packet.
+            packet_types = ["file", "audio"]
+            if packet_type not in packet_types:
+                packet_types.append(packet_type)
         last_error = None
-        for attempt in range(2):
-            try:
-                result = self.send_query(payload)
-                if result is False:
-                    raise RuntimeError("خادم Talkin رفض حزمة الوسائط الخاصة")
-                if attempt:
-                    self.log("[MEDIA] private media delivered after retry:", username, media_type)
-                return result
-            except Exception as exc:
-                last_error = exc
-                self.log("[MEDIA] private media send failed:", username, media_type, repr(exc))
+        for selected_type in packet_types:
+            payload = encode_query(
+                "chat_message", type_=selected_type, to=username, url=media_url,
+                # Match send_room_media exactly for playable audio: the
+                # route changes to `to`, while type/url/length stay identical.
+                # A filename in body makes some private clients discard audio.
+                body=(clean_name if selected_type == "file" and requested_audio else ""),
+                length=str(max(0, int(duration or 0))) if requested_audio else None,
+            )
+            if len(payload) > _ws_payload_limit():
+                raise RuntimeError(
+                    f"حزمة ملف الصوت الخاص أكبر من حد Talkin ({len(payload)} > {_ws_payload_limit()} بايت)"
+                )
+            for attempt in range(2):
+                try:
+                    result = self.send_query(payload)
+                    if result is not False:
+                        self.log(
+                            "[MEDIA] private attachment packet sent:", username,
+                            "type=", selected_type, "name=", clean_name[:80],
+                            "bytes=", len(payload),
+                        )
+                        return result
+                    last_error = RuntimeError(f"Talkin rejected private media type {selected_type}")
+                except Exception as exc:
+                    last_error = exc
+                    self.log("[MEDIA] private media send failed:", username, selected_type, repr(exc))
                 if attempt == 0:
                     time.sleep(0.8)
-        raise last_error
+        raise last_error or RuntimeError("تعذر إرسال ملف الصوت الخاص")
 
     def _find_live_room_state(self, room: str):
         """Return the canonical in-memory live-room key matching ``room``.
@@ -13265,7 +14154,7 @@ class TalkinBot:
         first_frame = threading.Event()
         setattr(self, f"_livekit_first_frame_event_{room}", first_frame)
         required_start_frames = 6
-        state = {"ok": False, "frames": 0, "error": ""}
+        state = {"ok": False, "frames": 0, "error": "", "natural_eof": False}
 
         def _run():
             proc = None
@@ -13305,6 +14194,9 @@ class TalkinBot:
                 while time.time() < deadline and not self.stop_event.is_set() and not stop_audio.is_set():
                     chunk = proc.stdout.read(bytes_per_frame)
                     if not chunk:
+                        # An empty read after successful playback is the real
+                        # end of the song, not merely a timeout.
+                        state["natural_eof"] = bool(state["ok"] and not stop_audio.is_set())
                         err = b""
                         try:
                             err = proc.stderr.read() or b""
@@ -13352,6 +14244,18 @@ class TalkinBot:
                     except Exception:
                         pass
                 setattr(self, f"_livekit_audio_proc_{room}", None)
+                # Do not leave the bot on the microphone when the source ends
+                # naturally.  The token check avoids disconnecting a newer
+                # playback if an old feeder exits late.
+                if state.get("natural_eof") and not self.stop_event.is_set():
+                    try:
+                        tokens = getattr(self, "_live_playback_tokens", {})
+                        token = tokens.get(room) if isinstance(tokens, dict) else None
+                        if token is None or tokens.get(room) == token:
+                            self.log("[LIVEKIT] natural EOF; leaving live broadcast:", room)
+                            self._stop_live_broadcast(room)
+                    except Exception as stop_exc:
+                        self.log("[LIVEKIT] EOF broadcast cleanup failed:", room, repr(stop_exc))
 
         threading.Thread(target=_run, name=f"livekit-audio-{room}", daemon=True).start()
         # Wait for the same real PCM burst threshold that signals readiness.
@@ -14992,24 +15896,46 @@ class TalkinBot:
         return True
 
     def _start_inv_roster_collection(self, room, response_room="", response_to=""):
-        """Fetch owners, admins and members separately, then invite the union.
-        The server category request itself supplies the role, so no local
-        database roster is used as the source for `inv`.
+        """Merge the complete room-membership roster with native role lists.
+        Database membership preserves offline users; owners_list independently
+        verifies the bot's current owner permission before any invite is sent.
         """
         room = str(room or "").strip()
         if not room:
             return False
         key = _norm_room(room)
+        # Seed the invitation set from the room's complete membership table.
+        # In several Talkin builds owners_list/admins_list/members_list are
+        # presence-filtered and omit offline accounts. The native owners_list
+        # request below is STILL required to authorize the bot as room owner;
+        # DB/persisted membership is used only to avoid losing offline targets.
+        seeded = {}
+        try:
+            for item in self._settings_room_users(room):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("username") or "").strip().lstrip("@")
+                key_user = _norm_user(name)
+                if not name or not key_user or key_user == _norm_user(BOT_ID):
+                    continue
+                seeded[key_user] = {
+                    "username": name,
+                    "role": str(item.get("role") or "member").strip().lower() or "member",
+                    "user_id": str(item.get("user_id") or ""),
+                }
+        except Exception as exc:
+            self.log("[INV] complete room roster seed failed:", room, repr(exc))
         state = {
             "room": room,
             "response_room": str(response_room or "").strip(),
             "response_to": str(response_to or "").strip(),
             "queue": ["o", "a", "m"],
             "current": "",
-            "users": {},
+            "users": seeded,
             "bot_is_owner": False,
             "started_at": time.time(),
         }
+        self.log("[INV] seeded complete room roster (offline-capable):", room, len(seeded))
         self._inv_roster_pending = state
         return self._request_next_inv_roster_category()
 
@@ -15311,25 +16237,38 @@ class TalkinBot:
             return ""
 
         username = field(1, "username", "user_name", "nick", "name").lstrip("@")
-        photo_value = ""
-        for photo_key in (3, "3", "photo", "photo_url", "profile_photo", "profile_photo_url",
-                          "avatar", "avatar_url", "profile_picture", "profile_picture_url",
-                          "image", "image_url", "picture"):
-            if photo_key in item and item.get(photo_key) is not None:
-                photo_value = item.get(photo_key)
+        photo_keys = (
+            3, "3", 7, "7", 8, "8", 9, "9", 10, "10", 11, "11", 12, "12",
+            "photo", "photo_url", "profile_photo", "profile_photo_url",
+            "avatar", "avatar_url", "profile_picture", "profile_picture_url",
+            "image", "image_url", "picture", "picture_url", "media",
+        )
+        photo = ""
+        for photo_key in photo_keys:
+            if photo_key not in item or item.get(photo_key) is None:
+                continue
+            photo_value = item.get(photo_key)
+            photo = _extract_media_url_universal({"photo": photo_value})
+            if not photo and isinstance(photo_value, str):
+                # decode_generic() represents nested non-UTF8 protobuf as hex.
+                hex_value = photo_value.strip()
+                if len(hex_value) >= 16 and len(hex_value) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", hex_value):
+                    try:
+                        photo = _extract_media_url_universal({"photo": bytes.fromhex(hex_value)})
+                    except Exception:
+                        photo = ""
+            if photo:
                 break
-        photo = _extract_media_url_universal({"photo": photo_value})
-        if not photo and isinstance(photo_value, (str, bytes)):
-            photo = as_text(photo_value).strip().replace("\\/", "/")
-            if photo.startswith("//"):
-                photo = "https:" + photo
-            if not photo.startswith(("http://", "https://")):
-                photo = ""
+        if not photo:
+            # Some app versions moved the avatar URL to a later UserItem field.
+            photo = _extract_media_url_universal(item)
+        if photo.startswith("//"):
+            photo = "https:" + photo
         status = field(4, "status", "signature")
         user_id = field(2, "user_id", "uid", "id")
         role = field(6, "role", "user_role")
         online = field(5, "online", "is_online", "is_present")
-        has_metadata = any(k in item or str(k) in item for k in (2, 3, 4, 5, 6))
+        has_metadata = any(k in item or str(k) in item for k in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
         explicit_profile = bool(photo or role or status or user_id or online)
         if username and (has_metadata or explicit_profile or set(item.keys()).issubset({1, "1"})):
             return [{
@@ -15484,6 +16423,12 @@ class TalkinBot:
             previous = cache.get(cache_key)
             current = (role, user_id)
             self.room_users.setdefault(room, {})[username] = role
+            if user_id:
+                profile_ids = getattr(self, "user_profile_ids", None)
+                if not isinstance(profile_ids, dict):
+                    profile_ids = self.user_profile_ids = {}
+                profile_ids[username.casefold()] = user_id
+                profile_ids[_norm_user(username)] = user_id
             if previous != current:
                 cache[cache_key] = current
                 self._stream_member_cache = cache
@@ -15511,36 +16456,199 @@ class TalkinBot:
                     self.user_profile_ids[username.casefold()] = user_id
                     self.user_profile_ids[_norm_user(username)] = user_id
                 status = str(user.get("status") or "").strip()
-                if username and _norm_user(username) == _norm_user(BOT_ID) and status:
-                    with self._profile_status_lock:
-                        self._profile_current_status = status
-                        if status == getattr(self, "_profile_status_pending", ""):
-                            self._profile_status_pending = ""
-                        if self._profile_status_timer is None and not BOT_BASE_STATUS:
-                            self._profile_base_status = status
+                if username and _norm_user(username) == _norm_user(BOT_ID):
+                    if status:
+                        with self._profile_status_lock:
+                            self._profile_current_status = status
+                            if status == getattr(self, "_profile_status_pending", ""):
+                                self._profile_status_pending = ""
+                            if self._profile_status_timer is None and not BOT_BASE_STATUS:
+                                self._profile_base_status = status
+                    # Keep the bot avatar separately: it must not be mixed
+                    # with normal members' photo cache. This also lets us
+                    # verify whether Talkin's room roster has the new avatar.
+                    if photo.startswith(("http://", "https://")):
+                        self.bot_profile_photo_url = photo
+                        self.log("[PROFILE-PHOTO] bot avatar found in native room roster:", photo[:180])
                 if (username and _norm_user(username) != _norm_user(BOT_ID)
                         and photo.startswith(("http://", "https://"))):
                     self.user_photos[username.casefold()] = photo
                     self.user_photos[_norm_user(username)] = photo
+            photo_count = sum(
+                1 for user in users
+                if str(user.get("photo") or "").startswith(("http://", "https://"))
+            )
+            if users:
+                self.log("[PROFILE-PHOTO] native roster parsed:", "users=", len(users), "photos=", photo_count)
         except Exception as exc:
             self.log("[GIFT] photo cache failed:", repr(exc))
 
-    def _request_native_profile_roster(self, room):
-        """Ask Talkin's native occupants endpoint for UserItems including avatars."""
+    def _request_native_profile_roster(self, room, legacy=False):
+        """Ask Talkin for native UserItems and profile photo URLs.
+
+        Current APK builds use ``to=username`` for occupants_list. Older
+        gateways may still require BOT_ID, so callers can request that legacy
+        shape explicitly after the primary request returns no avatar.
+        """
         room = str(room or "").strip()
         if not room:
             return False
         try:
             if not getattr(self, "ws", None):
                 return False
-            sent = self.send_query(encode_query(
-                "room_admin", type_="occupants_list", room=room,
-                to=BOT_ID, value="none",
-            ))
+            query_args = {
+                "type_": "occupants_list", "room": room,
+                "to": BOT_ID if legacy else "username", "value": "none",
+            }
+            if legacy:
+                query_args["id_"] = secrets.token_urlsafe(12)[:16]
+            sent = self.send_query(encode_query("room_admin", **query_args))
+            self.log(
+                "[PROFILE-PHOTO] native occupants request sent:",
+                room, "mode=legacy" if legacy else "mode=app",
+            )
             return sent is not False
         except Exception as exc:
-            self.log("[PROFILE-PHOTO] native roster request failed:", room, type(exc).__name__)
+            self.log("[PROFILE-PHOTO] native roster request failed:", room, type(exc).__name__, str(exc)[:160])
             return False
+
+    def _queue_bot_avatar_room_refresh(self, expected_url=""):
+        """Refresh native room rosters after a bot profile-photo change.
+
+        The profile_update request changes the account profile. Talkin room
+        clients also consume the native occupants/UserItem roster, so request
+        a fresh roster for every room the bot is currently connected to.
+        This does not leave/rejoin rooms or alter membership/permissions.
+        """
+        rooms = sorted(
+            {str(r).strip() for r in getattr(self, "connected_rooms", set()) if str(r).strip()},
+            key=str.casefold,
+        )
+        if not rooms:
+            fallback = str(getattr(self, "last_joined_room", "") or getattr(self, "room", "") or "").strip()
+            if fallback:
+                rooms = [fallback]
+        if not rooms:
+            self.log("[PROFILE-PHOTO] no connected rooms available for avatar roster refresh")
+            return False
+
+        # Keep the new value available immediately.  The native roster response
+        # may arrive late (or may omit the bot item), while the profile page is
+        # updated synchronously by profile_update.
+        expected_url = str(expected_url or "").strip()
+        if expected_url.startswith(("http://", "https://")):
+            self.bot_profile_photo_url = expected_url
+
+        def refresh_all():
+            try:
+                time.sleep(max(1.0, float(os.getenv("BOT_AVATAR_ROOM_REFRESH_DELAY", "2.5"))))
+                self.log("[PROFILE-PHOTO] starting bot avatar room refresh:", "rooms=", len(rooms))
+                for room_name in rooms:
+                    if getattr(self, "stop_event", None) is not None and self.stop_event.is_set():
+                        break
+                    # Talkin builds disagree on the `to` field for this
+                    # request.  The current APK uses `username`, while older
+                    # gateways (and the normal room refresh path) require the
+                    # bot username.  Try both so the room UserItem is rebuilt
+                    # instead of leaving the old avatar cached in the room.
+                    sent_app = self._request_native_profile_roster(room_name, legacy=False)
+                    time.sleep(max(0.15, float(os.getenv("BOT_AVATAR_ROOM_REFRESH_VARIANT_GAP", "0.25"))))
+                    sent_legacy = self._request_native_profile_roster(room_name, legacy=True)
+                    self.log(
+                        "[PROFILE-PHOTO] bot avatar roster refresh:", room_name,
+                        "app=", bool(sent_app), "legacy=", bool(sent_legacy),
+                    )
+                    time.sleep(max(0.2, float(os.getenv("BOT_AVATAR_ROOM_REFRESH_GAP", "0.7"))))
+                self.log("[PROFILE-PHOTO] room refresh requests completed; waiting for native roster response")
+
+                # A number of Talkin gateways return the room roster
+                # successfully but omit the bot's own UserItem (the log then
+                # shows fewer photos than users).  In that case the room UI
+                # keeps its old avatar cache.  A short leave/rejoin cycle is
+                # the same refresh used by the native client and makes the
+                # server send a fresh UserItem containing the new photo.
+                if os.getenv("BOT_AVATAR_FORCE_ROOM_REJOIN", "0").strip().casefold() not in {
+                    "0", "false", "no", "off"
+                }:
+                    rejoin_gap = max(1.0, float(os.getenv("BOT_AVATAR_ROOM_REJOIN_DELAY", "1.5")))
+                    time.sleep(rejoin_gap)
+                    for room_name in rooms:
+                        if getattr(self, "stop_event", None) is not None and self.stop_event.is_set():
+                            break
+                        try:
+                            self.send_query(encode_query("room_leave", room=room_name))
+                            self.connected_rooms = {
+                                saved for saved in getattr(self, "connected_rooms", set())
+                                if _norm_room(saved) != _norm_room(room_name)
+                            }
+                            time.sleep(rejoin_gap)
+                            joined = self.join_room(
+                                room_name, force=True, requested_by="bot-avatar-refresh"
+                            )
+                            self.log(
+                                "[PROFILE-PHOTO] bot avatar room rejoin:",
+                                room_name, "sent=", bool(joined),
+                            )
+                            time.sleep(rejoin_gap)
+                        except Exception as exc:
+                            self.log("[PROFILE-PHOTO] bot avatar room rejoin failed:", room_name, repr(exc))
+            except Exception as exc:
+                self.log("[PROFILE-PHOTO] bot avatar room refresh failed:", repr(exc))
+
+        threading.Thread(target=refresh_all, name="bot-avatar-room-refresh", daemon=True).start()
+        return True
+
+    def _upload_bot_profile_photo_official(self, image_path):
+        """Upload a bot avatar using Talkinchat's native profile-image flow.
+
+        The official Android client does not send the public asset URL directly
+        to ``profile_update``.  It first POSTs the image as multipart data to
+        ``https://talkinchat.com/upload`` with ``type=profile`` and then uses
+        the returned URL as the photo value.  This is important because the
+        server emits the room-avatar update as part of this upload flow.
+        """
+        image_path = Path(image_path)
+        if not image_path.is_file():
+            raise FileNotFoundError(str(image_path))
+        username = str(BOT_ID or "").strip()
+        if not username:
+            raise RuntimeError("BOT_ID غير مضبوط")
+        mime_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+        fields = {
+            "jid": username,
+            "to_user": username,
+            "is_private": "yes",
+            "type": "profile",
+            "device_id": "null",
+            # The current Android client sends its session field `s`; in the
+            # profile flow it is empty on the supported Talkinchat builds.
+            "s": os.getenv("TALKINCHAT_UPLOAD_SESSION", ""),
+        }
+        with image_path.open("rb") as image_file:
+            response = requests.post(
+                "https://talkinchat.com/upload",
+                data=fields,
+                files={"file": (image_path.name, image_file, mime_type)},
+                headers={"User-Agent": "Talkinchat/5.8.3", "Accept": "text/plain"},
+                timeout=(10, 45),
+            )
+        response.raise_for_status()
+        uploaded_url = str(response.text or "").strip().strip('"')
+        if uploaded_url.startswith("{"):
+            try:
+                payload = response.json()
+                uploaded_url = str(
+                    payload.get("url") or payload.get("photo_url")
+                    or payload.get("result") or ""
+                ).strip()
+            except Exception:
+                uploaded_url = ""
+        if not uploaded_url or uploaded_url.casefold() in {"failed", "error", "none", "null"}:
+            raise RuntimeError("رفض خادم Talkinchat رفع صورة الملف الشخصي")
+        if not uploaded_url.startswith(("http://", "https://")):
+            raise RuntimeError("استجابة رفع الصورة ليست رابطًا صالحًا")
+        self.log("[PROFILE] official avatar upload completed:", uploaded_url[:180])
+        return uploaded_url
 
     def _queue_profile_roster_refresh(self, room, username=""):
         """Refresh Talkin's native avatar roster in the background per member."""
@@ -16250,8 +17358,8 @@ class TalkinBot:
                 "outtmpl": template,
                 # Brief resolver/API hiccups (including transient DNS errors)
                 # were failing the request on its first network attempt.
-                "socket_timeout": 20, "retries": 3, "fragment_retries": 3,
-                "extractor_retries": 3, "file_access_retries": 3,
+                "socket_timeout": 25, "retries": 4, "fragment_retries": 4,
+                "extractor_retries": 4, "file_access_retries": 3,
                 "cachedir": False, "overwrites": True,
                 "continuedl": True,
                 "concurrent_fragment_downloads": 8,
@@ -16259,16 +17367,45 @@ class TalkinBot:
                 "http_chunk_size": 8 * 1024 * 1024,
                 "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"},
                 "check_formats": False,
-                "js_runtimes": {"node": {}},
+                # The previous code forced Node even when Node 22+ was not
+                # installed. Deno is preferred; Node is enabled only when its
+                # runtime version meets yt-dlp's current minimum.
                 "remote_components": {"ejs": "github"},
                 "match_filter": pre_download_filter,
             }
+            js_runtime = None
+            for runtime_name, executable, minimum in (
+                ("deno", shutil.which("deno"), (2, 3, 0)),
+                ("node", shutil.which("node"), (22, 0, 0)),
+            ):
+                if not executable:
+                    continue
+                try:
+                    runtime_probe = subprocess.run(
+                        [executable, "--version"], capture_output=True, text=True,
+                        timeout=4, check=False,
+                    )
+                    version_text = (runtime_probe.stdout or runtime_probe.stderr or "").strip()
+                    version_match = re.search(r"(\d+)\.(\d+)\.(\d+)", version_text)
+                    if runtime_probe.returncode == 0 and version_match:
+                        actual = tuple(int(part) for part in version_match.groups())
+                        if actual >= minimum:
+                            js_runtime = runtime_name
+                            break
+                except Exception:
+                    continue
+            if js_runtime:
+                opts["js_runtimes"] = {js_runtime: {}}
+            if label.startswith("youtube_"):
+                # Clients not currently requiring PO tokens are attempted first;
+                # if the optional bgutil plugin is installed, it can also issue
+                # tokens for the later clients automatically.
+                extractor_args = {"youtube": {"player_client": [label.split("_", 1)[1]]}}
+                if YOUTUBE_POT_BASE_URL:
+                    extractor_args["youtubepot-bgutilhttp"] = {"base_url": [YOUTUBE_POT_BASE_URL]}
+                opts["extractor_args"] = extractor_args
             if cookies and YOUTUBE_COOKIE_FILE:
                 opts["cookiefile"] = YOUTUBE_COOKIE_FILE
-            if label.startswith("youtube_"):
-                client = label.split("_", 1)[1]
-                if client != "native_default":
-                    opts["extractor_args"] = {"youtube": {"player_client": [client]}}
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     match_score = 0.0
@@ -16342,7 +17479,11 @@ class TalkinBot:
             yt_targets = list(dict.fromkeys("ytsearch10:" + value for value in variants if value))
 
         for target_index, yt_target in enumerate(yt_targets):
-            clients = ("android", "web_embedded", "web", "mweb", "ios", "tv_embedded", "default") if target_index == 0 else ("android", "web", "default")
+            clients = (
+                ("tv_simply", "android_vr", "web_safari", "default", "mweb", "android", "ios", "web")
+                if target_index == 0 else
+                ("tv_simply", "android_vr", "web_safari", "default", "mweb")
+            )
             for client in clients:
                 res = download_with_ydl(yt_target, f"youtube_{client}", cookies=True)
                 if res:
@@ -16450,7 +17591,15 @@ class TalkinBot:
 
         detail_items = list(dict.fromkeys(errors[:2] + errors[-8:]))
         detail = " | ".join(detail_items)
-        raise RuntimeError("تعذر تنزيل ملف صوت من المصادر المتاحة." + (f" تفاصيل: {detail[:1200]}" if detail else ""))
+        if yt_dlp is None:
+            detail += " | ثبّت yt-dlp[default] في متطلبات الاستضافة"
+        if not shutil.which("ffmpeg"):
+            detail += " | FFmpeg غير موجود؛ يلزم لتجهيز MP3"
+        if not (shutil.which("deno") or shutil.which("node")):
+            detail += " | لا يوجد Deno أو Node.js 22+ لحل تحديات YouTube الحديثة"
+        if any(token in detail.lower() for token in ("403", "requested format is not available", "po token", "sign in to confirm")):
+            detail += " | قد يلزم مزوّد YouTube PO Token (bgutil) أو Cookies صالحة بحسب حظر عنوان الاستضافة"
+        raise RuntimeError("تعذر تنزيل الأغنية من YouTube." + (f" تفاصيل: {detail[:1500]}" if detail else ""))
 
     def _music_download(self, query):
         """Return a ready MP3, reusing a recent successful download when possible.
@@ -16508,10 +17657,13 @@ class TalkinBot:
                 try:
                     if library_mp3.stat().st_size > 4096:
                         metadata = json.loads(library_meta.read_text(encoding="utf-8"))
-                        request_copy = outdir / (uuid.uuid4().hex + ".mp3")
-                        shutil.copy2(library_mp3, request_copy)
-                        self.log("[MUSIC] permanent library hit:", cache_key[:12])
-                        return metadata, request_copy
+                        cached_source = str((metadata or {}).get("source") or "").casefold()
+                        if "youtube" in cached_source:
+                            request_copy = outdir / (uuid.uuid4().hex + ".mp3")
+                            shutil.copy2(library_mp3, request_copy)
+                            self.log("[MUSIC] permanent YouTube library hit:", cache_key[:12])
+                            return metadata, request_copy
+                        self.log("[MUSIC] ignoring non-YouTube permanent cache:", cached_source or "unknown")
                 except Exception as exc:
                     self.log("[MUSIC] library read failed:", type(exc).__name__)
 
@@ -16521,12 +17673,14 @@ class TalkinBot:
                     if age <= MUSIC_FILE_CACHE_TTL and cache_mp3.stat().st_size > 4096:
                         metadata = json.loads(cache_meta.read_text(encoding="utf-8"))
                         if isinstance(metadata, dict):
-                            request_copy = outdir / (uuid.uuid4().hex + ".mp3")
-                            shutil.copy2(cache_mp3, request_copy)
-                            os.utime(cache_mp3, None)
-                            os.utime(cache_dir, None)
-                            self.log("[MUSIC] prepared-file cache hit:", cache_key[:12])
-                            return metadata, request_copy
+                            cached_source = str(metadata.get("source") or "").casefold()
+                            if "youtube" in cached_source:
+                                request_copy = outdir / (uuid.uuid4().hex + ".mp3")
+                                shutil.copy2(cache_mp3, request_copy)
+                                os.utime(cache_mp3, None)
+                                os.utime(cache_dir, None)
+                                return metadata, request_copy
+                            self.log("[MUSIC] ignoring non-YouTube cache to honor YouTube-first playback:", cached_source or "unknown")
                 except Exception as exc:
                     self.log("[MUSIC] prepared-file cache read failed:", type(exc).__name__)
 
@@ -16582,6 +17736,76 @@ class TalkinBot:
                         except Exception:
                             pass
             return info, downloaded_path
+
+    def handle_youtube_test_command(self, room, query, requester):
+        """Test YouTube search/download independently without changing .sa behavior."""
+        query = str(query or "").strip()
+        if not query:
+            self.send_room_text(room, "❌ اكتب: تشغيل يوتيوب .aa اسم الأغنية")
+            return True
+        last = getattr(self, "_youtube_test_last", {}).get(_norm_user(requester), 0.0)
+        remaining = 10.0 - (time.time() - float(last or 0.0))
+        if remaining > 0:
+            self.send_room_text(room, f"⏳ انتظر {int(remaining) + 1} ثانية قبل اختبار آخر.")
+            return True
+        if not hasattr(self, "_youtube_test_last"):
+            self._youtube_test_last = {}
+        self._youtube_test_last[_norm_user(requester)] = time.time()
+
+        def worker():
+            try:
+                if yt_dlp is None:
+                    raise RuntimeError("مكتبة yt-dlp غير مثبتة على الاستضافة")
+                public_base = _public_base_url()
+                if not public_base:
+                    raise RuntimeError("رابط الوسائط العام PUBLIC_MEDIA_URL غير مضبوط")
+                # Bypass the shared cross-source cache so this test proves a
+                # fresh YouTube resolution rather than reusing Audius/archive.
+                info, path = self._music_download_uncached(query)
+                info = dict(info or {})
+                source_url = str(info.get("source_url") or "").strip()
+                source_name = str(info.get("source") or "").casefold()
+                if "youtube" not in source_name and not re.search(r"(?:youtube\.com|youtu\.be)", source_url, re.I):
+                    raise RuntimeError("لم ينجح مصدر YouTube؛ النتيجة جاءت من مصدر احتياطي")
+                path = Path(path)
+                if not path.is_file() or path.stat().st_size <= 4096:
+                    raise RuntimeError("ملف الصوت الناتج غير مكتمل")
+                duration = int(info.get("duration") or 0)
+                media_url = public_base.rstrip("/") + "/media/" + path.name
+                self._verify_public_media_url(media_url, media_kind="audio")
+                sent = self.send_room_media(room, media_url, "audio", duration)
+                if sent is False:
+                    raise RuntimeError("Talkin رفض إرسال ملف الصوت")
+                title = str(info.get("title") or query)
+                # Keep this successful .aa track as the requester's latest song,
+                # so `مشاركة username` can send the same audio privately.
+                self.music_current[_norm_user(requester)] = {
+                    "requester": requester,
+                    "title": title,
+                    "artist": str(info.get("uploader") or info.get("channel") or "YouTube"),
+                    "url": media_url,
+                    "local_path": str(path),
+                    "query": query,
+                    "duration": duration,
+                    "source_url": source_url,
+                    "source": "YouTube",
+                    "created_at": time.time(),
+                }
+                caption = ("🎵 تم تشغيل أغنية من YouTube\n"
+                           f"👤 الطلب بواسطة: @{requester}\n"
+                           f"🎶 الأغنية: {title}\n"
+                           "▶️ اضغط زر التشغيل للاستماع مباشرة داخل الشات.\n"
+                           "🔒 رابط YouTube مخفي.\n"
+                           "📩 للمشاركة خاص: مشاركة اسم_المستخدم")
+                self.send_room_text(room, caption)
+                self.log("[MUSIC_TEST] YouTube test succeeded:", title, source_url)
+            except Exception as exc:
+                self.log("[MUSIC_TEST] YouTube test failed:", repr(exc))
+                self.send_room_text(room, "❌ فشل اختبار YouTube: " + str(exc)[:500])
+
+        self.send_room_text(room, "🔎 جاري البحث في YouTube وتجهيز الصوت للاختبار...")
+        threading.Thread(target=worker, name="youtube-music-test", daemon=True).start()
+        return True
 
     def handle_music_command(self, room, text, requester, private_to="", broadcast_all=False,
                              with_reactions=True, room_output=True, live_stream=False):
@@ -16648,37 +17872,47 @@ class TalkinBot:
                         url = str(info.get("url") or "").strip()
 
                 if live_stream:
-                    for candidate in fast_sources:
-                        candidate_url = str(candidate.get("url") or "").strip()
-                        if not candidate_url or candidate_url in attempted_urls:
-                            continue
-                        attempted_urls.add(candidate_url)
-                        set_source(candidate)
-                        live_started = bool(self._play_music_in_live_room(room, url, duration))
-                        live_status = getattr(self, "_last_live_play_status_by_room", {}).get(room, "failed")
-                        live_queued = live_status == "queued"
-                        if live_started or live_queued:
-                            self.log("[MUSIC] selected measured source:", candidate.get("source"),
-                                     "latency=", candidate.get("resolver_latency_seconds"), "room=", room)
-                            if live_queued:
-                                pending = getattr(self, "_pending_live_tracks", {}).get(room)
-                                if isinstance(pending, dict):
-                                    pending["fallback_search_query"] = search_query
-                                    pending["fallback_source_iterator"] = fast_sources
-                                    pending["attempted_source_urls"] = set(attempted_urls)
-                                    pending["requester"] = requester
-                            break
-                        self.log("[MUSIC] playback rejected source; trying next:", candidate.get("source"), room)
-
-                    if not live_started and not live_queued:
+                    # Same primary source policy as .sa and .تشغيل: YouTube first,
+                    # then SoundCloud/Archive. LiveKit receives the prepared local MP3.
+                    primary_error = None
+                    try:
                         info, path = self._music_download(search_query)
                         set_source(info, path)
                         live_started = bool(self._play_music_in_live_room(room, str(path), duration))
                         live_status = getattr(self, "_last_live_play_status_by_room", {}).get(room, "failed")
                         live_queued = live_status == "queued"
-                        if not live_started and not live_queued:
-                            raise RuntimeError("تعذر بدء تشغيل الصوت من جميع المصادر السريعة والاحتياطية")
-                        self.log("[MUSIC] selected downloaded fallback", "room=", room)
+                        if live_started or live_queued:
+                            self.log("[MUSIC] live primary pipeline source:", info.get("source"), "room=", room)
+                    except Exception as exc:
+                        primary_error = exc
+                        self.log("[MUSIC] live primary pipeline failed:", repr(exc))
+
+                    # Preserve the original direct-stream providers as the final
+                    # fallback if the prepared track cannot be fed to LiveKit.
+                    if not live_started and not live_queued:
+                        for candidate in fast_sources:
+                            candidate_url = str(candidate.get("url") or "").strip()
+                            if not candidate_url or candidate_url in attempted_urls:
+                                continue
+                            attempted_urls.add(candidate_url)
+                            set_source(candidate)
+                            live_started = bool(self._play_music_in_live_room(room, url, duration))
+                            live_status = getattr(self, "_last_live_play_status_by_room", {}).get(room, "failed")
+                            live_queued = live_status == "queued"
+                            if live_started or live_queued:
+                                self.log("[MUSIC] live direct fallback accepted:", candidate.get("source"), "room=", room)
+                                if live_queued:
+                                    pending = getattr(self, "_pending_live_tracks", {}).get(room)
+                                    if isinstance(pending, dict):
+                                        pending["fallback_search_query"] = search_query
+                                        pending["fallback_source_iterator"] = fast_sources
+                                        pending["attempted_source_urls"] = set(attempted_urls)
+                                        pending["requester"] = requester
+                                break
+                            self.log("[MUSIC] live direct fallback rejected:", candidate.get("source"), room)
+                    if not live_started and not live_queued:
+                        detail = f": {primary_error}" if primary_error else ""
+                        raise RuntimeError("تعذر بدء تشغيل الصوت في البث من جميع المصادر" + detail)
                 else:
                     if broadcast_all:
                         target_rooms = [str(item).strip() for item in (self._active_rooms() or []) if str(item).strip()]
@@ -16716,7 +17950,10 @@ class TalkinBot:
 
                 self.music_current[_norm_user(requester)] = {
                     "requester": requester, "title": title, "artist": artist,
-                    "url": url, "duration": duration, "created_at": time.time(),
+                    "url": url,
+                    "local_path": str(path) if path is not None and Path(path).is_file() else "",
+                    "query": search_query,
+                    "duration": duration, "created_at": time.time(),
                 }
                 if with_reactions:
                     music_code = uuid.uuid4().hex[:4]
@@ -16780,36 +18017,97 @@ class TalkinBot:
         return True
 
     def share_last_music(self, sender: str, target: str, room: str = ""):
-        """Share the sender's latest successfully prepared song privately."""
+        """Share the requester's last prepared track as text plus a real MP3 file."""
+        sender = str(sender or "").strip().lstrip("@")
         target = str(target or "").strip().lstrip("@")
         info = self.music_current.get(_norm_user(sender), {})
-        if not target or not info.get("url"):
+        if not isinstance(info, dict) or not target:
             self.send_room_text(room, "⚠️ لا توجد أغنية شغّلها المستخدم بعد لمشاركتها.") if room else self.send_private_text(sender, "⚠️ لا توجد أغنية شغّلتها بعد لمشاركتها.")
             return True
-        title = str(info.get("title") or "أغنية")
-        # Send the media packet first. Some Talkin gateway versions accept the
-        # caption but drop an audio packet that immediately follows it.
+
+        title = str(info.get("title") or "أغنية").strip()
+        artist = str(info.get("artist") or "").strip()
+        duration = int(info.get("duration") or 0)
+        media_url = str(info.get("url") or "").strip()
+        local_path_text = str(info.get("local_path") or "").strip()
+        local_path = Path(local_path_text).expanduser() if local_path_text else None
+        public_base = _public_base_url()
+
+        # Prefer the exact prepared MP3 played in the room; rebuild its short
+        # hosted URL rather than sharing a provider URL that may expire.
+        if local_path is not None and local_path.is_file() and local_path.stat().st_size > 4096 and public_base:
+            media_url = public_base.rstrip("/") + "/media/" + local_path.name
+
+        def verify_audio(url):
+            self._verify_public_media_url(url, "audio")
+            return True
+
         try:
-            self.send_private_media(target, str(info["url"]), "audio", int(info.get("duration") or 0))
+            if not media_url:
+                raise RuntimeError("لا يوجد رابط أو ملف صوت محفوظ للأغنية")
+            try:
+                verify_audio(media_url)
+            except Exception as first_error:
+                # If the old hosted file expired/was cleaned, recreate it from
+                # the stored search query and publish a fresh MP3.
+                recovery_query = str(info.get("query") or title).strip()
+                if not recovery_query or not public_base:
+                    raise first_error
+                fresh_info, fresh_path = self._music_download(recovery_query)
+                fresh_path = Path(fresh_path)
+                if not fresh_path.is_file() or fresh_path.stat().st_size <= 4096:
+                    raise RuntimeError("تعذر إعادة تجهيز ملف الأغنية للمشاركة")
+                media_url = public_base.rstrip("/") + "/media/" + fresh_path.name
+                verify_audio(media_url)
+                info.update({
+                    "url": media_url, "local_path": str(fresh_path),
+                    "duration": int((fresh_info or {}).get("duration") or duration),
+                    "title": str((fresh_info or {}).get("title") or title),
+                    "artist": str((fresh_info or {}).get("uploader") or artist),
+                })
+                duration = int(info.get("duration") or 0)
+                title = str(info.get("title") or title)
+                artist = str(info.get("artist") or artist)
+                self.music_current[_norm_user(sender)] = info
+
+            filename = re.sub(r'[\\/:*?"<>|]+', "_", title).strip(" ._")[:90] or "song"
+            if not Path(filename).suffix:
+                filename += ".mp3"
+
+            share_text = f"🎵 تمت مشاركة أغنية معك\n🎼 العنوان: {title}\n▶️ اضغط زر التشغيل للاستماع إليها داخل الخاص."
+            if artist:
+                share_text += f"\n🎤 الفنان: {artist}"
+            text_sent = self.send_private_text(target, share_text)
+            if text_sent is False:
+                raise RuntimeError("تعذر إرسال رسالة المشاركة النصية")
+            # Do not batch the two private messages: let the text packet leave
+            # first, then send the playable audio attachment.
+            time.sleep(0.60)
+            media_sent = self.send_private_media(
+                target, media_url, "audio", duration, filename=filename
+            )
+            if media_sent is False:
+                raise RuntimeError("خادم Talkin لم يؤكد إرسال ملف الصوت")
         except Exception as exc:
-            self.log("[MUSIC] private share audio failed:", repr(exc))
+            self.log(
+                "[MUSIC] private share failed:",
+                "sender=", _norm_user(sender), "target=", _norm_user(target),
+                "error=", repr(exc),
+            )
             reason = str(exc).strip().replace("\n", " ")[:300] or "سبب غير معروف"
-            notice = f"⚠️ تعذر إرسال ملف الأغنية إلى @{target}.\n🧾 سبب الفشل: {reason}"
+            notice = f"⚠️ تعذر إكمال مشاركة الأغنية مع @{target}.\n🧾 سبب الفشل: {reason}"
             if room:
                 self.send_room_text(room, notice)
             else:
                 self.send_private_text(sender, notice)
             return True
-        # Do not send a caption to the recipient: on this gateway the caption
-        # is often the only visible private message while the media card is
-        # hidden. The recipient must receive the audio/file packet alone.
-        # The audio packet is already sent above; avoid an unnecessary fixed
-        # delay before the confirmation so the recipient sees the song faster.
-        time.sleep(0.05)
+
+        confirmation = f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص."
         if room:
-            self.send_room_text(room, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
+            self.send_room_text(room, confirmation)
         else:
-            self.send_private_text(sender, f"✅ تمت مشاركة أغنية {title} مع @{target} في الخاص.")
+            self.send_private_text(sender, confirmation)
+        self.log("[MUSIC] private text + audio attachment sent:", _norm_user(sender), "->", _norm_user(target), "file=", filename)
         return True
 
     def send_gift_native(self, room: str, gift_id: str, target_username: str):
@@ -16885,6 +18183,8 @@ class TalkinBot:
                 raise RuntimeError(f"الرابط العام أعاد HTTP {r.status_code}")
             if media_kind=="image" and not ctype.startswith("image/"):
                 raise RuntimeError(f"نوع الصورة غير صحيح: {ctype or 'unknown'}")
+            if media_kind=="video" and not (ctype.startswith("video/") or "octet-stream" in ctype):
+                raise RuntimeError(f"نوع الفيديو غير صحيح: {ctype or 'unknown'}")
             if media_kind=="audio" and not (ctype.startswith("audio/") or "octet-stream" in ctype):
                 raise RuntimeError(f"نوع الصوت غير صحيح: {ctype or 'unknown'}")
             return True
@@ -17517,8 +18817,38 @@ class TalkinBot:
             self.log("[GAME] expired fixed game", game_name, waiting.get("user"))
 
     def _wager_result(self, first, second, game_name):
-        """Resolve a global PvP wager and publish the result only to both origin rooms."""
-        winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
+        """Resolve a global PvP wager, honoring one admin-configured 3:1 sequence."""
+        first_key = _norm_user(first.get("user"))
+        second_key = _norm_user(second.get("user"))
+        with _WAGER_ADMIN_RULES_LOCK:
+            rules = _load_local_json(WAGER_ADMIN_RULES_FILE, {})
+            if not isinstance(rules, dict): rules = {}
+            active = [
+                (first_key, first) for _ in (0,)
+                if isinstance(rules.get(first_key), dict) and rules[first_key].get("enabled")
+            ] + [
+                (second_key, second) for _ in (0,)
+                if isinstance(rules.get(second_key), dict) and rules[second_key].get("enabled")
+            ]
+            if len(active) == 1:
+                target_key, target_player = active[0]
+                rule = rules[target_key]
+                cycle = int(rule.get("cycle", 0) or 0) % 4
+                target_wins = cycle < 3
+                opponent = second if target_player is first else first
+                winner, loser = (target_player, opponent) if target_wins else (opponent, target_player)
+                rule["cycle"] = (cycle + 1) % 4
+                rule["wins"] = int(rule.get("wins", 0) or 0) + (1 if target_wins else 0)
+                rule["losses"] = int(rule.get("losses", 0) or 0) + (0 if target_wins else 1)
+                rule["last_result"] = "win" if target_wins else "loss"
+                rule["updated_at"] = int(time.time())
+                _save_local_json(WAGER_ADMIN_RULES_FILE, rules)
+                self.log("[WAGER_ADMIN_RULE]", target_key, "result=", rule["last_result"], "cycle=", rule["cycle"])
+            else:
+                # No configured target, or two managed targets playing each
+                # other: keep the normal random resolution rather than favoring
+                # one side arbitrarily.
+                winner, loser = (first, second) if secrets.randbelow(2) == 0 else (second, first)
         winner_stake = int(winner.get("stake", 0) or 0)
         loser_stake = int(loser.get("stake", 0) or 0)
 
@@ -20134,9 +21464,9 @@ class TalkinBot:
         return self._classify_picture_name(name)
 
     def _picture_search_queries_for_name(self, name, gender=None):
-        """Pick 30% playful monkey results and otherwise an adult SFW gender-matched portrait."""
+        """Pick 20% playful monkey results and otherwise an adult SFW gender-matched portrait."""
         gender = gender or self._picture_gender_hint(name)
-        if secrets.randbelow(100) < 30:
+        if secrets.randbelow(100) < 20:
             return ("قرود لطيفة", "قرود مضحكة", "monkeys safe for work", "قرود في الطبيعة")
         if gender == "male":
             return (
@@ -20157,18 +21487,21 @@ class TalkinBot:
         )
 
     def _random_internet_picture_query(self, requested, gender=None):
-        """Map common Arabic themes to safe, adult-specific web image searches."""
+        """Return 20% monkey images and otherwise adult male/female portraits.
+
+        A one-token username (or explicit @username) uses its known room/name
+        gender when available. Unknown usernames and the no-argument command
+        alternate randomly between adult men and women. Multi-word subjects
+        remain normal SafeSearch web searches.
+        """
         text = str(requested or "").strip()
         normalized = _norm_user(text)
+        category = ""
         if not text:
-            if secrets.randbelow(100) < 30:
+            if secrets.randbelow(100) < 20:
                 category = "monkey"
-            elif gender == "male":
-                category = "men"
-            elif gender == "female":
-                category = "women"
             else:
-                category = "people"
+                category = secrets.choice(("men", "women"))
         elif any(word in normalized for word in ("قرد", "قرود", "شمبانزي", "monkey", "chimp")):
             category = "monkey"
         elif any(word in normalized for word in ("شاب", "شباب", "رجل", "رجال", "وسيم", "وسيمين")):
@@ -20176,15 +21509,22 @@ class TalkinBot:
         elif any(word in normalized for word in ("بنت", "بنات", "فتاه", "فتاة", "نساء", "امراه", "مراه", "حلوه", "حلوة")):
             category = "women"
         else:
-            return f"{text} portrait safe for work", text, False
+            # A single token is treated as a Talkin username (including a
+            # name-only handle such as Ahmed); multi-word values remain topics.
+            is_username = text.startswith("@") or not re.search(r"\s", text) or gender in ("male", "female")
+            if is_username:
+                if secrets.randbelow(100) < 20:
+                    category = "monkey"
+                else:
+                    category = gender if gender in ("male", "female") else secrets.choice(("men", "women"))
+            else:
+                return f"{text} portrait safe for work", text, False
 
         if category == "monkey":
             return "monkeys wildlife", "قرود", True
-        if category == "men":
-            return "handsome adult men portraits", "شباب وسيمين بالغين", False
-        if category == "people":
-            return "fully clothed adult people portraits", "بالغون وبالغات", False
-        return "beautiful adult women portraits", "نساء بالغات", False
+        if category == "men" or category == "male":
+            return "handsome adult men portraits fully clothed", "شباب وسيمين بالغين", False
+        return "beautiful adult women portraits fully clothed", "نساء بالغات", False
 
     def _handle_internet_picture_command(self, room, body, sender):
         """Search the web for a random image; this is separate from account avatars."""
@@ -20210,8 +21550,9 @@ class TalkinBot:
 
         def worker():
             try:
+                target_gender = self._picture_gender_hint(requested) if requested else "unknown"
                 search_query, label, is_monkey = self._random_internet_picture_query(
-                    requested, self._picture_gender_hint(sender)
+                    requested, target_gender
                 )
                 recent = getattr(self, "_internet_picture_recent", {})
                 query_key = _norm_user(search_query)
@@ -20225,25 +21566,30 @@ class TalkinBot:
                     image_url = _search_monkey_image() if is_monkey else _search_lookalike_image(search_query)
                 if not image_url:
                     self.log("[RANDOM-PICTURE] no matching image for query:", search_query[:120])
+                    self.send_room_text(room, "❌ لم أجد صورة مناسبة من نتائج البحث الآن؛ جرّب بعد قليل.")
                     return
 
                 local = _download_lookalike_image(image_url, f"internet_{uuid.uuid4().hex}")
                 if not local:
                     self.log("[RANDOM-PICTURE] image download/processing returned no file")
+                    self.send_room_text(room, "❌ ظهرت صورة في البحث لكن تعذّر تنزيلها أو معالجتها؛ تأكد من تثبيت Pillow.")
                     return
                 base = _public_base_url()
                 if not base:
                     self.log("[RANDOM-PICTURE] public media URL is not configured")
+                    self.send_room_text(room, "❌ اضبط PUBLIC_BASE_URL أو PUBLIC_MEDIA_URL في متغيرات الاستضافة لعرض الصور داخل Talkin.")
                     return
                 public_url = f"{base.rstrip('/')}/lookalikes/{local.name}"
                 try:
                     self._verify_public_media_url(public_url, "image")
                 except Exception as exc:
                     self.log("[RANDOM-PICTURE] public image check failed:", type(exc).__name__)
+                    self.send_room_text(room, "❌ رابط الصور العام لا يمكن الوصول إليه من الإنترنت؛ راجع PUBLIC_BASE_URL وPORT.")
                     return
 
                 sent = self.send_room_media(room, public_url, "image") is not False
                 if not sent:
+                    self.send_room_text(room, "❌ تعذر إرسال الصورة إلى Talkin؛ راجع سجل WebSocket.")
                     return
                 history = list(recent.get(query_key, []))
                 history.append(image_url)
@@ -20252,6 +21598,10 @@ class TalkinBot:
                 self.send_room_text(room, "صورتك هي الصورة")
             except Exception as exc:
                 self.log("[RANDOM-PICTURE] search failed:", type(exc).__name__, str(exc)[:200])
+                try:
+                    self.send_room_text(room, "❌ تعذر البحث عن الصورة أو إرسالها الآن؛ راجع سجل الاستضافة لمعرفة السبب.")
+                except Exception:
+                    pass
             finally:
                 busy.discard(key)
 
@@ -20262,95 +21612,130 @@ class TalkinBot:
             self.log("[RANDOM-PICTURE] worker start failed:", type(exc).__name__)
         return True
 
-    def _handle_random_picture_command(self, room, body, sender):
-        """عرض صورة الحساب الفعلية فقط؛ البحث من الإنترنت له أمر مستقل."""
+    def _handle_random_picture_command(self, room, body, sender, sender_candidates=None):
+        """Send the actual room-command sender's Talkin profile image to the room."""
         if not room:
             return True
         text = str(body or "").strip()
-        if text.casefold() != "صورتي":
+        if text.casefold() not in {"صورتي", "صورتك"}:
             return False
-        target = str(sender or "").strip().lstrip("@")
-        if not target:
-            self.send_room_text(room, "❌ لم أتمكن من تحديد اسم الحساب.")
+
+        candidates = []
+        seen_candidates = set()
+        for candidate in [sender, *(sender_candidates or [])]:
+            name = str(candidate or "").strip().lstrip("@")
+            key_name = _norm_user(name)
+            if name and key_name and key_name not in seen_candidates:
+                seen_candidates.add(key_name)
+                candidates.append(name)
+        if not candidates:
+            self.send_room_text(room, "❌ لم أتمكن من تحديد اسم حسابك لجلب الصورة.")
             return True
+
+        primary = candidates[0]
         busy = getattr(self, "_profile_picture_busy", set())
-        key = (str(room), _norm_user(target))
+        key = (_norm_room(room), _norm_user(primary))
         if key in busy:
             return True
         busy.add(key)
         self._profile_picture_busy = busy
 
+        def cached_photo(candidate):
+            photos = getattr(self, "user_photos", {})
+            if not isinstance(photos, dict):
+                return ""
+            for cache_key in (str(candidate).casefold(), _norm_user(candidate)):
+                value = str(photos.get(cache_key) or "").strip()
+                if value.startswith(("http://", "https://", "//")):
+                    return "https:" + value if value.startswith("//") else value
+            return ""
+
+        def find_cached():
+            for candidate in candidates:
+                value = cached_photo(candidate)
+                if value:
+                    return candidate, value
+            return "", ""
+
+        def wait_for_photo(seconds):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                stop_event = getattr(self, "stop_event", None)
+                if stop_event is not None and stop_event.is_set():
+                    break
+                found_name, found_url = find_cached()
+                if found_url:
+                    return found_name, found_url
+                time.sleep(0.25)
+            return find_cached()
+
         def profile_photo_worker():
             try:
-                # Request Talkin's actual UserItem roster first. The generic
-                # room-roster helper returns from Supabase before requesting
-                # avatars from Talkin on many deployments.
-                self._queue_profile_roster_refresh(room, target)
+                # First refresh the room membership table so every username is
+                # mapped to the exact Supabase profile id. Then request Talkin's
+                # native UserItems, which carry the CDN avatar URL itself.
+                try:
+                    self.request_room_occupants(room)
+                    self.log("[PROFILE-PICTURE] room profile ids refreshed:", room)
+                except Exception as roster_exc:
+                    self.log("[PROFILE-PICTURE] DB roster refresh failed:", type(roster_exc).__name__, str(roster_exc)[:120])
 
-                def cached_photo():
-                    photos = getattr(self, "user_photos", {})
-                    if not isinstance(photos, dict):
-                        return ""
-                    for cache_key in (target.casefold(), _norm_user(target)):
-                        value = str(photos.get(cache_key) or "").strip()
-                        if value.startswith(("http://", "https://", "//")):
-                            return "https:" + value if value.startswith("//") else value
-                    return ""
-
-                deadline = time.monotonic() + 4.0
-                photo_url = cached_photo()
-                while not photo_url and time.monotonic() < deadline:
-                    stop_event = getattr(self, "stop_event", None)
-                    if stop_event is not None and stop_event.is_set():
-                        break
-                    time.sleep(0.25)
-                    photo_url = cached_photo()
-
-                # Supabase/profile lookup may involve network I/O, so it must
-                # never run on the WebSocket command-dispatch thread.
+                # Current APK request first; older Talkin gateways need BOT_ID.
+                self._queue_profile_roster_refresh(room, primary)
+                found_name, photo_url = wait_for_photo(5.0)
                 if not photo_url:
-                    photo_url = self._lookup_profile_photo(target)
+                    self._request_native_profile_roster(room, legacy=True)
+                    found_name, photo_url = wait_for_photo(4.0)
+
+                # Try all possible username fields from RoomEvent; server builds
+                # differ on whether the canonical account is in field 2/17/22.
                 if not photo_url:
-                    # Allow a late native roster result to arrive after the DB
-                    # fallback; never loop on a potentially slow DB request.
-                    deadline = time.monotonic() + 5.0
-                    while time.monotonic() < deadline:
-                        stop_event = getattr(self, "stop_event", None)
-                        if stop_event is not None and stop_event.is_set():
-                            break
-                        time.sleep(0.25)
-                        photo_url = cached_photo()
+                    for candidate in candidates:
+                        try:
+                            photo_url = self._lookup_profile_photo(candidate)
+                        except Exception as lookup_exc:
+                            self.log("[PROFILE-PICTURE] DB lookup failed:", _norm_user(candidate), type(lookup_exc).__name__)
                         if photo_url:
+                            found_name = candidate
                             break
+
                 if not photo_url:
-                    self.log("[PROFILE-PICTURE] no avatar source for user:", _norm_user(target))
+                    cached_count = len(getattr(self, "user_photos", {}) or {})
+                    self.log(
+                        "[PROFILE-PICTURE] avatar not found:",
+                        "candidates=", [_norm_user(x) for x in candidates],
+                        "cached_photos=", cached_count,
+                    )
+                    self.send_room_text(room, "❌ لم أتمكن من جلب صورة حسابك من Talkin. تأكد أن لحسابك صورة ظاهرة ثم أعد أمر «صورتي».")
                     return
 
+                # «صورتي» يجب أن يحمل صورة الحساب الأصلية مباشرة إلى الغرفة.
+                # لا ننشئ نسخة JPEG ولا نطلب PUBLIC_BASE_URL هنا؛ رابط CDN الذي
+                # أعاده Talkin هو المرفق الذي يرسله العميل مباشرة.
                 media_url = photo_url
-                hosted_photo = _store_profile_photo_for_public_media(photo_url)
-                public_base = _public_base_url()
-                if hosted_photo and public_base:
-                    hosted_url = f"{public_base.rstrip('/')}/publish/{hosted_photo.name}"
-                    try:
-                        self._verify_public_media_url(hosted_url, "image")
-                        media_url = hosted_url
-                    except Exception as host_exc:
-                        self.log("[PROFILE-PICTURE] hosted copy unavailable:", type(host_exc).__name__)
-
                 sent = False
+                send_errors = []
                 try:
-                    sent = self.send_room_media(room, media_url, "image") is not False
+                    result = self.send_room_media(room, media_url, "image")
+                    if result is not False:
+                        sent = True
+                    else:
+                        send_errors.append("send_query returned False")
                 except Exception as media_exc:
-                    self.log("[PROFILE-PICTURE] media send failed:", type(media_exc).__name__)
-                if not sent and media_url != photo_url:
-                    try:
-                        sent = self.send_room_media(room, photo_url, "image") is not False
-                    except Exception as media_exc:
-                        self.log("[PROFILE-PICTURE] source URL send failed:", type(media_exc).__name__)
-                if sent:
-                    self.send_room_text(room, "صورتك هي الصورة")
+                    send_errors.append(f"{type(media_exc).__name__}: {str(media_exc)[:100]}")
+                if not sent:
+                    self.log("[PROFILE-PICTURE] avatar send failed:", " | ".join(send_errors))
+                    self.send_room_text(room, "❌ وجدت صورة حسابك لكن Talkin لم يقبل إرسالها إلى الغرفة.")
+                    return
+
+                self.log("[PROFILE-PICTURE] avatar sent directly:", _norm_user(found_name or primary), "via=profile-url")
+                self.send_room_text(room, "صورتك هي الصورة")
             except Exception as exc:
                 self.log("[PROFILE-PICTURE] worker failed:", type(exc).__name__, str(exc)[:240])
+                try:
+                    self.send_room_text(room, "❌ تعذر جلب صورة الحساب الآن؛ راجع سجل الاستضافة [PROFILE-PICTURE].")
+                except Exception:
+                    pass
             finally:
                 busy.discard(key)
 
@@ -20502,6 +21887,9 @@ class TalkinBot:
                 # Randomize the theme so repeated commands can return different
                 # images. Keep the queries non-explicit and suitable for chat.
                 variants = self._picture_search_queries_for_name(target, self._picture_gender_hint(target))
+                # All lookalike themes are non-explicit and the search layer
+                # applies strict SafeSearch before any URL is downloaded.
+                variants = tuple(q for q in variants if not _is_explicit_picture_query(q)) or ("adult portrait safe for work",)
                 query = secrets.choice(variants)
                 image_url = (_search_monkey_image(exclude_urls=excluded)
                              if any(token in query.casefold() for token in ("قرود", "قرد", "monkey"))
@@ -21970,8 +23358,19 @@ class TalkinBot:
         return True
 
     def _celebrity_partner_game(self, room, sender, gender):
-        female = ["نانسي عجرم", "إليسا", "أصالة نصري", "أحلام الشامسي", "نجوى كرم", "شيرين عبد الوهاب", "بيونسيه", "تايلور سويفت"]
-        male = ["ماجد المهندس", "كاظم الساهر", "عمرو دياب", "محمد عبده", "تامر حسني", "عادل إمام", "توم كروز", "ليوناردو دي كابريو"]
+        """Find a real public celebrity portrait and send it to the room."""
+        female = [
+            ("نانسي عجرم", "Nancy Ajram"), ("إليسا", "Elissa Lebanese singer"),
+            ("أصالة نصري", "Assala Nasri"), ("أحلام الشامسي", "Ahlam Al Shamsi"),
+            ("نجوى كرم", "Najwa Karam"), ("شيرين عبد الوهاب", "Sherine Abdel-Wahab"),
+            ("بيونسيه", "Beyonce"), ("تايلور سويفت", "Taylor Swift"),
+        ]
+        male = [
+            ("ماجد المهندس", "Majid Al Mohandis"), ("كاظم الساهر", "Kadim Al Sahir"),
+            ("عمرو دياب", "Amr Diab"), ("محمد عبده", "Mohammed Abdu"),
+            ("تامر حسني", "Tamer Hosny"), ("عادل إمام", "Adel Emam"),
+            ("توم كروز", "Tom Cruise"), ("ليوناردو دي كابريو", "Leonardo DiCaprio"),
+        ]
         names = female if gender == "female" else male
         busy = getattr(self, "_celebrity_partner_busy", set())
         key = (_norm_user(sender), _norm_room(room))
@@ -21985,47 +23384,95 @@ class TalkinBot:
 
         def worker():
             try:
-                image_result = None
-                name = ""
-                for candidate in secrets.SystemRandom().sample(names, min(4, len(names))):
-                    image_urls = _search_lookalike_images(f"{candidate} celebrity portrait", limit=8)
-                    for image_url in image_urls[:5]:
-                        local = _download_lookalike_image(image_url, f"celebrity_{uuid.uuid4().hex}")
-                        if local:
-                            image_result, name = local, candidate
+                selected_name = ""
+                selected_url = ""
+                failures = []
+                candidates = secrets.SystemRandom().sample(names, len(names))
+                for display_name, english_name in candidates:
+                    # Search the Arabic name and the well-known Latin spelling;
+                    # Wikipedia/Wikimedia often index one but not the other.
+                    for subject in (english_name, display_name):
+                        try:
+                            image_urls = _search_lookalike_images(subject, limit=12)
+                        except Exception as exc:
+                            failures.append(f"search:{type(exc).__name__}")
+                            continue
+                        if not image_urls:
+                            failures.append(f"empty-search:{subject}")
+                            continue
+                        for image_url in image_urls:
+                            check = None
+                            try:
+                                # Some legitimate image hosts ignore Range or use
+                                # application/octet-stream; inspect bytes as well.
+                                check = requests.get(
+                                    image_url,
+                                    headers={"User-Agent": "Mozilla/5.0 TalkinBot/1.0", "Range": "bytes=0-63"},
+                                    timeout=(4, 8), stream=True,
+                                )
+                                status = int(getattr(check, "status_code", 0) or 0)
+                                content_type = str(check.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+                                sample = b""
+                                try:
+                                    sample = check.raw.read(64, decode_content=True)
+                                except Exception:
+                                    try:
+                                        sample = next(check.iter_content(64), b"")
+                                    except Exception:
+                                        pass
+                                valid_magic = (
+                                    sample.startswith(b"\xff\xd8\xff")
+                                    or sample.startswith(b"\x89PNG\r\n\x1a\n")
+                                    or sample[:6] in (b"GIF87a", b"GIF89a")
+                                    or (sample[:4] == b"RIFF" and sample[8:12] == b"WEBP")
+                                )
+                                if status not in (200, 206) or not (content_type.startswith("image/") or valid_magic):
+                                    failures.append(f"not-image:{content_type or status}")
+                                    continue
+                            except Exception as exc:
+                                failures.append(f"verify:{type(exc).__name__}")
+                                continue
+                            finally:
+                                if check is not None:
+                                    try:
+                                        check.close()
+                                    except Exception:
+                                        pass
+                            try:
+                                result = self.send_room_media(room, image_url, "image")
+                                if result is False:
+                                    failures.append("talkin-rejected-image")
+                                    continue
+                                selected_name, selected_url = display_name, image_url
+                                break
+                            except Exception as exc:
+                                failures.append(f"send:{type(exc).__name__}")
+                                self.log("[CELEBRITY_PARTNER] candidate failed:", display_name, repr(exc))
+                        if selected_url:
                             break
-                    if image_result:
+                    if selected_url:
                         break
-                if not image_result:
-                    self.send_room_text(room, "❌ تعذر العثور على صورة مناسبة الآن؛ جرّب مرة أخرى لاحقاً.")
-                    return
-                base = _public_base_url()
-                if not base:
-                    self.send_room_text(room, "❌ تعذر عرض الصورة لأن رابط الوسائط العام غير مضبوط.")
-                    return
-                image_url = f"{base}/lookalikes/{image_result.name}"
-                sent = self.send_room_media(room, image_url, "image")
-                if sent is False:
-                    self.send_room_text(room, "❌ تعذر إرسال الصورة إلى الغرفة.")
-                    return
-                label = ("your wife" if gender == "female" else "your husband") if self._effective_room_language(room) == "en" else ("زوجتك" if gender == "female" else "زوجك")
+                if not selected_url:
+                    raise RuntimeError("no usable celebrity image found; " + ",".join(failures[-12:]))
                 if self._effective_room_language(room) == "en":
-                    self.send_room_text(room, f"💞 @{sender}, {label} is the celebrity {name} ❤️")
-                    return
-                self.send_room_text(room, f"💞 @{sender}، {label} هي الشخصية المشهورة: {name} ❤️")
+                    label = "your wife" if gender == "female" else "your husband"
+                    self.send_room_text(room, f"💞 @{sender}, {label} is the celebrity {selected_name} ❤️")
+                else:
+                    label = "زوجتك" if gender == "female" else "زوجك"
+                    self.send_room_text(room, f"💞 @{sender}، {label} هي الشخصية المشهورة: {selected_name} ❤️")
+                self.log("[CELEBRITY_PARTNER] direct image delivered:", sender, selected_name, selected_url)
             except Exception as exc:
                 self.log("[CELEBRITY_PARTNER] failed:", repr(exc))
                 try:
-                    self.send_room_text(room, "❌ تعذر البحث عن صورة مناسبة حالياً.")
+                    # Keep the familiar user-facing failure message; detailed
+                    # diagnostics remain in the server log for the owner.
+                    self.send_room_text(room, "❌ تعذر العثور على صورة مناسبة الآن؛ جرّب مرة أخرى لاحقاً.")
                 except Exception:
                     pass
             finally:
                 busy.discard(key)
 
-        threading.Thread(
-            target=self._localized_room_worker(room, response_language, worker),
-            name="celebrity-partner-search", daemon=True,
-        ).start()
+        threading.Thread(target=self._localized_room_worker(room, response_language, worker), name="celebrity-partner-search", daemon=True).start()
         return True
 
     def _fun_game(self, room, sender, command):
@@ -24579,21 +26026,39 @@ class TalkinBot:
     def _settings_room_users(self, room):
         """Return the room-settings roster, including offline members."""
         room = str(room or "").strip()
+        # Do not return the database result immediately.  Some deployments
+        # populate ``room_users`` from presence events, so that result may
+        # contain online occupants only.  The persisted room-settings roster
+        # is the complementary source for members who are currently offline.
         users = []
         try:
             users = self.db.room_users(room) if getattr(self, "db", None) else []
         except Exception as exc:
             self.log("[ROOM-LIST] settings roster failed", room, repr(exc))
-        if users:
-            return [u for u in users if isinstance(u, dict) and _norm_user(u.get("username")) != _norm_user(BOT_ID)]
+        merged = {}
+        for item in users or []:
+            if not isinstance(item, dict):
+                continue
+            username = str(item.get("username") or "").strip().lstrip("@")
+            key = _norm_user(username)
+            if key and key != _norm_user(BOT_ID):
+                merged[key] = dict(item, username=username)
+
         data = _persistent_rosters().get("rooms", {})
         saved = data.get(room, {}) if isinstance(data, dict) else {}
-        out=[]
+        # Persistent entries fill gaps left by presence-only DB snapshots.
         for value in (saved.values() if isinstance(saved, dict) else []):
             if isinstance(value, dict):
-                item=dict(value)
-                if _norm_user(item.get("username")) != _norm_user(BOT_ID): out.append(item)
-        return out
+                item = dict(value)
+                username = str(item.get("username") or "").strip().lstrip("@")
+                key = _norm_user(username)
+                if key and key != _norm_user(BOT_ID) and key not in merged:
+                    merged[key] = dict(item, username=username)
+
+        result = list(merged.values())
+        self.log("[ROOM-LIST] merged settings roster:", room, len(result),
+                 "db=", len(users or []), "persisted=", len(saved) if isinstance(saved, dict) else 0)
+        return result
 
     def _send_private_list(self, sender, title, users, empty="📭 لا توجد بيانات."):
         rows=[]; seen=set()
@@ -24781,6 +26246,121 @@ class TalkinBot:
         """Giant-style persistent management commands. Returns True if consumed."""
         text=str(body or "").strip()
         low=text.casefold()
+
+        # Full-control secondary masters. The owner in BOT_MASTER alone may
+        # grant or revoke this role; it is separate from verification masters.
+        match = re.fullmatch(r"vipmas@(.+)", text, re.I)
+        if match:
+            if not is_private or not _is_bot_owner(sender):
+                self.send_private_text(sender, "🔒 إضافة ماستر كامل متاحة للمالك الأساسي في الخاص فقط.")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            if not target:
+                self.send_private_text(sender, "❌ الصيغة: vipmas@اسم المستخدم")
+                return True
+            if _norm_user(target) in {_norm_user(BOT_MASTER), _norm_user(BOT_ID)}:
+                self.send_private_text(sender, "⚠️ هذا الحساب لا يحتاج إلى إضافة ماستر كامل.")
+                return True
+            rows = _vip_full_master_list()
+            if any(_norm_user(x) == _norm_user(target) for x in rows):
+                self.send_private_text(sender, f"⚠️ @{target} لديه صلاحية الماستر الكامل بالفعل.")
+                return True
+            rows.append(target)
+            _save_local_json(VIP_FULL_MASTERS_FILE, rows)
+            self.send_private_text(sender, f"✅ تم إضافة @{target} كـماستر كامل؛ يستطيع استخدام صلاحيات الماستر الأساسي.")
+            return True
+
+        match = re.fullmatch(r"-vipmas@(.+)", text, re.I)
+        if match:
+            if not is_private or not _is_bot_owner(sender):
+                self.send_private_text(sender, "🔒 سحب الماستر الكامل متاح للمالك الأساسي في الخاص فقط.")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            if not target:
+                self.send_private_text(sender, "❌ الصيغة: -vipmas@اسم المستخدم")
+                return True
+            rows = _vip_full_master_list()
+            remaining = [x for x in rows if _norm_user(x) != _norm_user(target)]
+            if len(remaining) == len(rows):
+                self.send_private_text(sender, f"ℹ️ @{target} لا يملك صلاحية ماستر كامل.")
+                return True
+            _save_local_json(VIP_FULL_MASTERS_FILE, remaining)
+            self.send_private_text(sender, f"✅ تم سحب صلاحية الماستر الكامل من @{target}.")
+            return True
+
+        match = re.fullmatch(r"unvipmas@(.+)", text, re.I)
+        if match:
+            if not is_private or not _is_bot_owner(sender):
+                self.send_private_text(sender, "🔒 سحب الماستر الكامل متاح للمالك الأساسي في الخاص فقط.")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            rows = [x for x in _vip_full_master_list() if _norm_user(x) != _norm_user(target)]
+            _save_local_json(VIP_FULL_MASTERS_FILE, rows)
+            self.send_private_text(sender, f"✅ تم سحب صلاحية الماستر الكامل من @{target}.")
+            return True
+
+        if low == "l@vipmas":
+            if not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 القائمة مخصصة للماستر الكامل.")
+                return True
+            rows = _vip_full_master_list()
+            message = "👑 الماسترات الكاملة\n━━━━━━━━━━━━\n" + ("\n".join(f"• @{x}" for x in rows) if rows else "📭 لا يوجد ماسترات إضافيون.")
+            self.send_private_text(sender, message)
+            return True
+
+        # Managed wager sequence: 3 consecutive wins, then one loss, per
+        # target account. The rule affects only player-vs-player wager results.
+        match = re.fullmatch(r"ربح@(.+)", text, re.I)
+        if match:
+            if not is_private or not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 أمر ربح@ مخصص للماستر الكامل في الخاص فقط.")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            if not target:
+                self.send_private_text(sender, "❌ الصيغة: ربح@اسم المستخدم")
+                return True
+            with _WAGER_ADMIN_RULES_LOCK:
+                rules = _load_local_json(WAGER_ADMIN_RULES_FILE, {})
+                if not isinstance(rules, dict): rules = {}
+                rules[_norm_user(target)] = {"username": target, "enabled": True, "cycle": 0, "wins": 0, "losses": 0, "updated_at": int(time.time())}
+                _save_local_json(WAGER_ADMIN_RULES_FILE, rules)
+            self.send_private_text(sender, f"✅ تم تفعيل نمط الرهانات لـ@{target}: 3 انتصارات ثم خسارة واحدة بالتتابع.")
+            return True
+
+        match = re.fullmatch(r"-ربح@(.+)", text, re.I)
+        if match:
+            if not is_private or not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 أمر -ربح@ مخصص للماستر الكامل في الخاص فقط.")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            if not target:
+                self.send_private_text(sender, "❌ الصيغة: -ربح@اسم المستخدم")
+                return True
+            with _WAGER_ADMIN_RULES_LOCK:
+                rules = _load_local_json(WAGER_ADMIN_RULES_FILE, {})
+                if not isinstance(rules, dict): rules = {}
+                entry = rules.get(_norm_user(target))
+                if isinstance(entry, dict):
+                    entry["enabled"] = False
+                    entry["updated_at"] = int(time.time())
+                _save_local_json(WAGER_ADMIN_RULES_FILE, rules)
+            self.send_private_text(sender, f"✅ تم إلغاء نمط الربح عن @{target}.")
+            return True
+
+        match = re.fullmatch(r"سحب ربح@(.+)", text, re.I)
+        if match:
+            if not is_private or not _is_primary_master(sender):
+                self.send_private_text(sender, "🔒 أمر سحب ربح@ مخصص للماستر الكامل في الخاص فقط.")
+                return True
+            target = match.group(1).strip().lstrip("@")
+            with _WAGER_ADMIN_RULES_LOCK:
+                rules = _load_local_json(WAGER_ADMIN_RULES_FILE, {})
+                if not isinstance(rules, dict): rules = {}
+                entry = rules.get(_norm_user(target))
+                if isinstance(entry, dict): entry["enabled"] = False; entry["updated_at"] = int(time.time())
+                _save_local_json(WAGER_ADMIN_RULES_FILE, rules)
+            self.send_private_text(sender, f"✅ تم إيقاف نمط الرهانات عن @{target}.")
+            return True
 
         delete_text_commands = {
             "حذف ترحيب نص", "حذف الترحيب نص", "حذف ترحيب النص", "حذف الترحيب النص",
@@ -27258,11 +28838,66 @@ class TalkinBot:
             return ""
 
     def _find_publish_filter_hit(self, text):
-        normalized = _norm_filter_text(text)
-        if not normalized:
+        """Match explicit abusive terms as whole words/phrases, not substrings.
+
+        This prevents harmless captions such as "يلا اكتبو مليار بسرعه بتكسبو"
+        from being blocked merely because a configured word appears inside
+        another word. Arabic diacritics, tatweel, alef variants and punctuation
+        are normalized before matching.
+        """
+        def normalize(value):
+            value = unicodedata.normalize("NFKC", str(value or "")).casefold()
+            value = re.sub(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed\u0640]", "", value)
+            value = value.translate(str.maketrans({
+                "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+                "ى": "ي", "ؤ": "و", "ئ": "ي",
+            }))
+            value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
+            return " ".join(value.split())
+
+        normalized_text = normalize(text)
+        if not normalized_text:
             return None
-        return next((w for w in sorted(self.banned_words, key=lambda x: _norm_filter_text(x))
-                     if _norm_filter_text(w) and _norm_filter_text(w) in normalized), None)
+
+        # These are deliberately limited to clear profanity, direct insults,
+        # and explicit defamatory/sexual slurs. Ordinary game/chat words are
+        # not included. Existing master-managed mf@ words remain supported.
+        defaults = {
+            "شرموط", "شرموطة", "شراميط", "قحبة", "قحاب", "منيوك",
+            "كسم", "كسمك", "كس امك", "كس اختك", "كسختك", "طيزك",
+            "خول", "عاهرة", "زاني", "زانية", "ديوث",
+            "يلعن امك", "يلعن ابوك", "ابن الكلب", "يا ابن الكلب",
+            "fuck", "fucking", "motherfucker", "bitch", "whore",
+            "slut", "cunt",
+        }
+        configured = getattr(self, "banned_words", set()) or set()
+        candidates = set(defaults)
+        candidates.update(str(word) for word in configured if str(word).strip())
+        # Common game/chat vocabulary must never become a publish violation
+        # through an accidental entry in an old moderation-word file.
+        safe_terms = {
+            "يلا", "اكتبو", "اكتبوا", "مليار", "مليون", "بسرعه", "بسرعة",
+            "بتكسبو", "بتكسبوا", "تكسبو", "تكسبوا", "نقاط", "ربح", "فوز",
+        }
+        safe_terms = {normalize(word) for word in safe_terms}
+        candidates = {word for word in candidates if normalize(word) not in safe_terms}
+
+        # Match normalized tokens/phrases with word boundaries. Punctuation
+        # and repeated whitespace cannot bypass the filter, while substrings
+        # inside unrelated words do not trigger it.
+        for word in sorted(candidates, key=lambda item: len(normalize(item)), reverse=True):
+            term = normalize(word)
+            if not term:
+                continue
+            pattern = r"(?<!\w)" + r"\s+".join(re.escape(part) for part in term.split()) + r"(?!\w)"
+            # Also catch punctuation/spacing inserted between the letters of
+            # an abusive word (e.g. ك.س.م) without matching inside other words.
+            compact_term = term.replace(" ", "")
+            obfuscated_pattern = r"(?<!\w)" + r"[\W_]*".join(re.escape(ch) for ch in compact_term) + r"(?!\w)"
+            if (re.search(pattern, normalized_text, flags=re.UNICODE)
+                    or re.search(obfuscated_pattern, normalized_text, flags=re.UNICODE)):
+                return str(word)
+        return None
 
     def _handle_publish_media_legacy(self, room, sender, media_url, description=""):
         if not media_url: return False
@@ -27412,11 +29047,66 @@ class TalkinBot:
             return ""
 
     def _find_publish_filter_hit(self, text):
-        normalized = _norm_filter_text(text)
-        if not normalized:
+        """Match explicit abusive terms as whole words/phrases, not substrings.
+
+        This prevents harmless captions such as "يلا اكتبو مليار بسرعه بتكسبو"
+        from being blocked merely because a configured word appears inside
+        another word. Arabic diacritics, tatweel, alef variants and punctuation
+        are normalized before matching.
+        """
+        def normalize(value):
+            value = unicodedata.normalize("NFKC", str(value or "")).casefold()
+            value = re.sub(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed\u0640]", "", value)
+            value = value.translate(str.maketrans({
+                "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+                "ى": "ي", "ؤ": "و", "ئ": "ي",
+            }))
+            value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
+            return " ".join(value.split())
+
+        normalized_text = normalize(text)
+        if not normalized_text:
             return None
-        return next((w for w in sorted(self.banned_words, key=lambda x: _norm_filter_text(x))
-                     if _norm_filter_text(w) and _norm_filter_text(w) in normalized), None)
+
+        # These are deliberately limited to clear profanity, direct insults,
+        # and explicit defamatory/sexual slurs. Ordinary game/chat words are
+        # not included. Existing master-managed mf@ words remain supported.
+        defaults = {
+            "شرموط", "شرموطة", "شراميط", "قحبة", "قحاب", "منيوك",
+            "كسم", "كسمك", "كس امك", "كس اختك", "كسختك", "طيزك",
+            "خول", "عاهرة", "زاني", "زانية", "ديوث",
+            "يلعن امك", "يلعن ابوك", "ابن الكلب", "يا ابن الكلب",
+            "fuck", "fucking", "motherfucker", "bitch", "whore",
+            "slut", "cunt",
+        }
+        configured = getattr(self, "banned_words", set()) or set()
+        candidates = set(defaults)
+        candidates.update(str(word) for word in configured if str(word).strip())
+        # Common game/chat vocabulary must never become a publish violation
+        # through an accidental entry in an old moderation-word file.
+        safe_terms = {
+            "يلا", "اكتبو", "اكتبوا", "مليار", "مليون", "بسرعه", "بسرعة",
+            "بتكسبو", "بتكسبوا", "تكسبو", "تكسبوا", "نقاط", "ربح", "فوز",
+        }
+        safe_terms = {normalize(word) for word in safe_terms}
+        candidates = {word for word in candidates if normalize(word) not in safe_terms}
+
+        # Match normalized tokens/phrases with word boundaries. Punctuation
+        # and repeated whitespace cannot bypass the filter, while substrings
+        # inside unrelated words do not trigger it.
+        for word in sorted(candidates, key=lambda item: len(normalize(item)), reverse=True):
+            term = normalize(word)
+            if not term:
+                continue
+            pattern = r"(?<!\w)" + r"\s+".join(re.escape(part) for part in term.split()) + r"(?!\w)"
+            # Also catch punctuation/spacing inserted between the letters of
+            # an abusive word (e.g. ك.س.م) without matching inside other words.
+            compact_term = term.replace(" ", "")
+            obfuscated_pattern = r"(?<!\w)" + r"[\W_]*".join(re.escape(ch) for ch in compact_term) + r"(?!\w)"
+            if (re.search(pattern, normalized_text, flags=re.UNICODE)
+                    or re.search(obfuscated_pattern, normalized_text, flags=re.UNICODE)):
+                return str(word)
+        return None
 
     def _publish_media_worker(self, room, sender, media_url, desc, pending):
         """Run OCR, image rendering and room delivery off the receive thread."""
@@ -27896,7 +29586,10 @@ class TalkinBot:
             if time.time() - float(info.get("created_at", 0) or 0) > 86400:
                 return False
             media_url = str(info.get("media_url") or "")
-            if not media_url or self.send_room_media(room, media_url, "image") is False:
+            repost_media_type = str(info.get("media_type") or "image").strip().lower()
+            if repost_media_type not in {"image", "video"}:
+                repost_media_type = "image"
+            if not media_url or self.send_room_media(room, media_url, repost_media_type) is False:
                 self.send_room_text(room, "تعذر إعادة نشر هذا المنشور الآن.")
                 return True
             original = str(info.get("caption") or "")
@@ -27920,7 +29613,10 @@ class TalkinBot:
         if source_desc: notice += f"\n📝 المحتوى: {source_desc}"
         if extra: notice += f"\n💬 رسالة التفاعل: {extra}"
         notice += f"\n🏠 الغرفة: {room}"
-        room_ack = {"lk": "لقد اعجبت بمنشور", "dl": "لم تعجب", "lv": "احببت", "report": "تم ارسال البلاغ", "cm": "تم ارسال تعليقك"}[action]
+        english_room = self._configured_room_language(room) == "en"
+        room_ack = ({"lk": "You liked the post", "dl": "You disliked the post", "lv": "You loved the post", "report": "Report sent", "cm": "Your comment was sent"}[action]
+                    if english_room else
+                    {"lk": "لقد أعجبت بمنشور", "dl": "لم تعجب", "lv": "أحببت", "report": "تم إرسال البلاغ", "cm": "تم إرسال تعليقك"}[action])
         self.send_room_text(room, f"@{str(sender or '').lstrip('@')} {room_ack}")
         if action == "report":
             master = str(BOT_MASTER or "").strip()
@@ -27929,44 +29625,518 @@ class TalkinBot:
         if publisher:
             self.send_private_text(publisher, notice)
         return True
+    def _translate_text_external(self, text, target_language):
+        value = str(text or "").strip()
+        if not value: return ""
+        target = "en" if str(target_language).casefold() == "en" else "ar"
+        response = requests.get("https://translate.googleapis.com/translate_a/single",
+            params={"client":"gtx","sl":"auto","tl":target,"dt":"t","q":value[:1800]},
+            headers={"User-Agent":"Mozilla/5.0"}, timeout=(5, 15))
+        response.raise_for_status()
+        data = response.json(); parts = data[0] if isinstance(data, list) and data else []
+        return "".join(str(x[0]) for x in parts if isinstance(x, list) and x and x[0]).strip()
+
+    def _handle_translation_subscription(self, room, body, sender):
+        command = str(body or "").strip()
+        stop_match = re.fullmatch(
+            r"(?:إيقاف|ايقاف|وقف)\s*الترجم(?:ة|ه)(?:\s*@?([^\s@]+))?|(?:stoptranslation|stoptranslate|stop\s+translation)(?:@|\s+)?([^\s@]+)?",
+            command, re.I,
+        )
+        if stop_match:
+            target = (stop_match.group(1) or stop_match.group(2) or "").strip().lstrip("@")
+            subscriptions = getattr(self, "translation_subscriptions", {})
+            removed = 0
+            if isinstance(subscriptions, dict):
+                if target:
+                    target_key = _norm_user(target)
+                    entries = subscriptions.get(target_key, {})
+                    if isinstance(entries, dict) and _norm_user(sender) in entries:
+                        entries.pop(_norm_user(sender), None); removed += 1
+                    if isinstance(entries, dict) and not entries:
+                        subscriptions.pop(target_key, None)
+                else:
+                    requester_key = _norm_user(sender)
+                    for target_key in list(subscriptions):
+                        entries = subscriptions.get(target_key, {})
+                        if isinstance(entries, dict) and requester_key in entries:
+                            entries.pop(requester_key, None); removed += 1
+                        if isinstance(entries, dict) and not entries:
+                            subscriptions.pop(target_key, None)
+            message = "✅ تم إيقاف الترجمة." if removed else "ℹ️ لا يوجد اشتراك ترجمة لإيقافه."
+            self.send_room_text(room, message) if room else self.send_private_text(sender, message)
+            return True
+        match = re.fullmatch(r"(انجليزي|عربي)@([^\s@]+)", command, re.I)
+        if not match: return False
+        requested, target = match.group(1), match.group(2).strip().lstrip("@")
+        language = "en" if requested.casefold() == "انجليزي" else "ar"
+        subscriptions = getattr(self, "translation_subscriptions", None)
+        if not isinstance(subscriptions, dict): subscriptions = self.translation_subscriptions = {}
+        subscription_room = str(room or getattr(self, "room", "") or getattr(self, "last_joined_room", "") or "").strip()
+        subscriptions.setdefault(_norm_user(target), {})[_norm_user(sender)] = {"requester": str(sender or ""), "language": language, "room": subscription_room, "created_at": time.time()}
+        msg = (f"✅ ستصل ترجمة رسائل @{target} إلى الغرفة باللغة الإنجليزية." if language == "en" else f"✅ ستصل ترجمة رسائل @{target} إلى الغرفة باللغة العربية.")
+        self.send_private_text(sender, msg) if not room else self.send_room_text(room, msg)
+        return True
+
+    def _translate_subscribed_message(self, sender, body, room=""):
+        entries = (getattr(self, "translation_subscriptions", {}) or {}).get(_norm_user(sender), {})
+        if not isinstance(entries, dict): return
+        def worker():
+            for requester_key, item in list(entries.items()):
+                try:
+                    translated = self._translate_text_external(body, item.get("language", "en"))
+                    if translated:
+                        label = "English" if item.get("language") == "en" else "العربية"
+                        target_room = str(item.get("room") or "").strip()
+                        if target_room:
+                            self.send_room_text(target_room, f"🌐 ترجمة ({label}) من @{sender}:\n{translated}")
+                except Exception as exc:
+                    self.log("[TRANSLATE] failed:", type(exc).__name__, str(exc)[:160])
+        threading.Thread(target=worker, name="message-translation", daemon=True).start()
+
+    def _publish_personal_design(self, room, sender, design_kind, is_private=False):
+        """Broadcast the user's last generated portrait/name card with standard publish reactions."""
+        sender = str(sender or "").strip().lstrip("@")
+        key = _norm_user(sender)
+        if not key:
+            return True
+        if _is_publish_banned(sender):
+            self.send_private_text(sender, "🚫 حسابك ممنوع من النشر حالياً. راجع الماستر لفك المنع.")
+            return True
+        # Personal designs are publishable by verified and VIP users (and the
+        # master through _is_verified_user), but are not a master-only action.
+        if not _is_verified_user(sender):
+            self.send_private_text(sender, f"🔒 النشر متاح للموثقين وVIP فقط.\n{_verification_notice()}")
+            return True
+
+        designs = getattr(self, "personal_designs", {})
+        user_designs = designs.get(key) if isinstance(designs, dict) else None
+        # Keep portrait and name art independently; creating one must not overwrite the other.
+        design = user_designs.get(design_kind) if isinstance(user_designs, dict) else None
+        if not isinstance(design, dict) or str(design.get("kind") or "") != design_kind:
+            needed = "صمم صورتي" if design_kind == "portrait" else "اسم <اسم المستخدم>"
+            self.send_private_text(sender, f"ℹ️ لا يوجد تصميم محفوظ لهذا النوع. أنشئه أولاً بالأمر: {needed}")
+            return True
+
+        filename = Path(str(design.get("filename") or "")).name
+        expected_prefix = "portrait3d_" if design_kind == "portrait" else "name3d_"
+        valid_suffixes = (".gif",) if design_kind == "portrait" else (".gif", ".jpg")
+        if not filename.startswith(expected_prefix) or not filename.lower().endswith(valid_suffixes):
+            self.send_private_text(sender, "❌ ملف التصميم المحفوظ غير صالح. أعد إنشاء التصميم ثم انشره.")
+            return True
+        media_path = BASE_DIR / "generated_publish" / filename
+        if not media_path.is_file():
+            self.send_private_text(sender, "❌ ملف التصميم لم يعد موجوداً على الخادم. أعد إنشاءه بالأمر الخاص به ثم انشره.")
+            return True
+
+        display_name = str(design.get("name") or "").strip()
+        description = (f"بطاقة الاسم: {display_name}" if design_kind == "name" else "الصورة الشخصية بتصميم 3D متحرك")
+        filter_text = display_name if design_kind == "name" else ""
+        hit = self._find_publish_filter_hit(filter_text) if filter_text else None
+        if hit:
+            self.send_private_text(sender, "🚫 تم إيقاف نشر بطاقة الاسم لاحتوائها على لفظ محظور.")
+            _record_filter_ban(sender, room, "محاولة نشر بطاقة اسم مسيئة", hit)
+            _record_publish_ban(sender, room, hit)
+            return True
+
+        base = _public_base_url()
+        if not base:
+            self.send_private_text(sender, "❌ رابط الوسائط العام PUBLIC_BASE_URL غير مضبوط.")
+            return True
+        media_url = f"{base}/publish/{quote(filename)}"
+        try:
+            self._verify_public_media_url(media_url, "image")
+            # Apply the same best-effort image-text moderation used by ordinary image publishing.
+            ocr_text = self._ocr_publish_image(media_url)
+            hit = self._find_publish_filter_hit(ocr_text) if ocr_text else None
+            if hit:
+                self.send_private_text(sender, "🚫 تم إيقاف نشر التصميم بعد اكتشاف لفظ محظور داخل الصورة.")
+                _record_filter_ban(sender, room, "محاولة نشر صورة شخصية مخالفة", hit)
+                _record_publish_ban(sender, room, hit)
+                return True
+        except Exception as exc:
+            self.log("[PERSONAL-DESIGN] media verification failed:", repr(exc))
+            self.send_private_text(sender, "❌ تعذر التحقق من رابط التصميم العام. تحقق من خدمة الوسائط ثم أعد المحاولة.")
+            return True
+
+        rooms = self._active_rooms() or ([str(room)] if room else [])
+        if not rooms:
+            self.send_private_text(sender, "ℹ️ لا توجد غرف نشطة متاحة للنشر حالياً.")
+            return True
+
+        code = uuid.uuid4().hex[:4]
+        reaction_codes = {name: code for name in ("like", "love", "dislike", "comment", "report")}
+        if not hasattr(self, "reaction_targets") or not isinstance(self.reaction_targets, dict):
+            self.reaction_targets = {}
+        self.reaction_targets[code] = {
+            "publisher": sender,
+            "kind": "image",
+            "description": description,
+            "media_url": media_url,
+            "media_type": "image",
+            "created_at": time.time(),
+        }
+        title = "🖼️ صورة شخصية بتصميم 3D" if design_kind == "portrait" else "✍️ بطاقة اسم بتصميم 3D"
+        caption = (
+            f"{title}\n"
+            f"👤 {_name_for_chat_text(sender)}\n"
+            + (f"🏷️ {display_name}\n" if display_name else "")
+            + "━━━━━━━━━━━━━\n"
+            f"👍 lk@{reaction_codes['like']}   ❤️ lv@{reaction_codes['love']}   👎 dl@{reaction_codes['dislike']}\n"
+            f"💬 cm@{reaction_codes['comment']} نص\n"
+            f"🚨 report@{reaction_codes['report']} نص"
+        )
+
+        ok = 0
+        errors = []
+        delay = max(0.02, float(os.getenv("ROOM_BULK_DELAY_SECONDS", "0.08") or 0.08))
+        bulk_lock = getattr(self, "_room_bulk_lock", None)
+        if bulk_lock is None:
+            bulk_lock = threading.Lock()
+            self._room_bulk_lock = bulk_lock
+        with bulk_lock:
+            for index, target in enumerate(rooms):
+                try:
+                    result = self.send_room_media(target, media_url, "image")
+                    if result is False:
+                        errors.append((target, "رفض إرسال صورة التصميم"))
+                    else:
+                        text_result = self.send_room_text(target, caption)
+                        if text_result is False:
+                            errors.append((target, "تعذر إرسال أزرار التفاعل"))
+                        else:
+                            ok += 1
+                except Exception as exc:
+                    errors.append((target, str(exc)[:100]))
+                    self.log("[PERSONAL-DESIGN] room delivery failed:", target, repr(exc))
+                if index + 1 < len(rooms):
+                    time.sleep(delay)
+
+        if ok:
+            _record_media_publication("image", description, sender, str(room or ""))
+        confirmation = f"✅ تم نشر التصميم في {ok} غرفة من أصل {len(rooms)} غرفة."
+        if errors:
+            confirmation += f"\n⚠️ تعذر الإرسال إلى {len(errors)} غرفة."
+        self.send_private_text(sender, confirmation)
+        if errors:
+            self.log("[PERSONAL-DESIGN] room errors:", errors[:20])
+        return True
+
+    def _send_personal_download_link(self, room, sender, design_kind, is_private=False):
+        """Publish a browser-downloadable link for the user's own image."""
+        sender = str(sender or "").strip().lstrip("@")
+        key = _norm_user(sender)
+        if not key:
+            return True
+        base = _public_base_url()
+        if not base:
+            message = "❌ رابط الوسائط العام PUBLIC_BASE_URL غير مضبوط."
+            self.send_private_text(sender, message) if is_private or not room else self.send_room_text(room, message)
+            return True
+
+        filename = ""
+        if design_kind == "name":
+            designs = getattr(self, "personal_designs", {})
+            user_designs = designs.get(key) if isinstance(designs, dict) else None
+            design = user_designs.get("name") if isinstance(user_designs, dict) else None
+            filename = Path(str((design or {}).get("filename") or "")).name if isinstance(design, dict) else ""
+            if not filename.startswith("name3d_") or not filename.lower().endswith((".gif", ".jpg")):
+                message = "ℹ️ أنشئ بطاقة الاسم أولاً بالأمر: اسم <اسم المستخدم>"
+                self.send_private_text(sender, message) if is_private or not room else self.send_room_text(room, message)
+                return True
+            source_path = BASE_DIR / "generated_publish" / filename
+            media_path = _prepare_name_design_for_download(source_path)
+        else:
+            photo_url = (getattr(self, "user_photos", {}).get(key, "")
+                         or self._lookup_profile_photo(sender))
+            media_path = _store_profile_photo_for_download(photo_url) if photo_url else None
+            if media_path is None:
+                try:
+                    self._queue_profile_roster_refresh(room, sender)
+                except Exception:
+                    pass
+                message = "⏳ تعذر تحميل صورة حسابك الآن. أعد الأمر بعد لحظات."
+                self.send_private_text(sender, message) if is_private or not room else self.send_room_text(room, message)
+                return True
+            filename = media_path.name
+
+        if media_path is None or not media_path.is_file():
+            message = "❌ الصورة غير موجودة على الخادم. أعد إنشاءها ثم حاول مرة أخرى."
+            self.send_private_text(sender, message) if is_private or not room else self.send_room_text(room, message)
+            return True
+        media_url = f"{base}/publish/{quote(filename)}"
+        try:
+            self._verify_public_media_url(media_url, "image")
+        except Exception as exc:
+            self.log("[PERSONAL-DOWNLOAD] media verification failed:", repr(exc))
+            message = "❌ تعذر تجهيز رابط التحميل حالياً. حاول مرة أخرى."
+            self.send_private_text(sender, message) if is_private or not room else self.send_room_text(room, message)
+            return True
+
+        label = "بطاقة اسمك" if design_kind == "name" else "صورتك الشخصية"
+        message = (f"📥 رابط تحميل {label}:\n{media_url}\n"
+                   "🌐 افتح الرابط في المتصفح ثم اختر تنزيل/حفظ الصورة.")
+        self.send_private_text(sender, message) if is_private or not room else self.send_room_text(room, message)
+        return True
+
+    def _handle_personal_design_command(self, room, command, sender, is_private=False):
+        """Create personal 3D art, save the latest design, and publish it on request."""
+        raw = str(command or "").strip()
+        low = raw.casefold()
+
+        if low in {"حمل اسمي", "تحميل اسمي", "احفظ اسمي", "download my name"}:
+            return self._send_personal_download_link(room, sender, "name", is_private=is_private)
+        if low in {"حمل صورتي", "تحميل صورتي", "احفظ صورتي", "download my photo"}:
+            return self._send_personal_download_link(room, sender, "portrait", is_private=is_private)
+
+        if low in {"انشر صورتي", "انشر صورتى", "publish my photo"}:
+            return self._publish_personal_design(room, sender, "portrait", is_private=is_private)
+        if low in {"انشر اسمي", "انشر اسمى", "publish my name"}:
+            return self._publish_personal_design(room, sender, "name", is_private=is_private)
+
+        if low in {"صمم صورتي", "صمم صورتى", "صمم صورتي 3d", "صمم صورتي ثلاثي الابعاد"}:
+            photo_url = (getattr(self, "user_photos", {}).get(_norm_user(sender), "")
+                         or getattr(self, "user_photos", {}).get(str(sender or "").casefold(), "")
+                         or self._lookup_profile_photo(sender))
+            if not photo_url:
+                try:
+                    self._queue_profile_roster_refresh(room, sender)
+                except Exception:
+                    pass
+                notice = "⏳ لم تصل صورة حسابك بعد. حدّث صورة الحساب أو أعد الأمر بعد لحظات."
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+                return True
+            try:
+                image_path = render_user_3d_portrait_gif(photo_url, sender)
+                media_path, media_type = _prepare_talkin_animation_media(image_path)
+                base = _public_base_url()
+                if not base:
+                    raise RuntimeError("PUBLIC_BASE_URL غير مضبوط")
+                media_url = f"{base}/publish/{quote(media_path.name)}"
+                self._verify_public_media_url(media_url, "image")
+                key = _norm_user(sender)
+                with getattr(self, "_personal_design_lock", threading.RLock()):
+                    designs = getattr(self, "personal_designs", None)
+                    if not isinstance(designs, dict):
+                        designs = self.personal_designs = {}
+                    user_designs = designs.get(key)
+                    if not isinstance(user_designs, dict):
+                        user_designs = {}
+                    user_designs["portrait"] = {
+                        "kind": "portrait", "filename": media_path.name,
+                        "media_type": media_type, "name": "",
+                        "created_at": time.time(), "username": str(sender),
+                    }
+                    designs[key] = user_designs
+                    _save_local_json(DATA_DIR / "personal_designs.json", designs)
+                sent = (self.send_private_media(sender, media_url, media_type, filename=media_path.name)
+                        if is_private else self.send_room_media(room, media_url, media_type))
+                if sent is False:
+                    raise RuntimeError("رفض الاتصال إرسال الصورة")
+                notice = "✨ تم تصميم صورتك وحفظها. للمعاينة استخدمها الآن، وللنشر في كل الغرف أرسل: انشر صورتي"
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+            except Exception as exc:
+                self.log("[DESIGN] portrait failed:", repr(exc))
+                notice = "❌ تعذر تصميم الصورة. تحقق من رابط الوسائط العام وتوفر Pillow."
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+            return True
+
+        name_match = re.fullmatch(r"اسم\s+(.+)", raw, re.I | re.S)
+        if name_match:
+            name = name_match.group(1).strip()
+            if not name or len(name) > 48:
+                notice = "❌ الاسم يجب أن يكون من 1 إلى 48 حرفاً. مثال: اسم محمد"
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+                return True
+            hit = self._find_publish_filter_hit(name)
+            if hit:
+                notice = "🚫 لا يمكن تصميم اسم يحتوي على لفظ محظور."
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+                return True
+            try:
+                image_path = render_3d_name_card(name)
+                base = _public_base_url()
+                if not base:
+                    raise RuntimeError("PUBLIC_BASE_URL غير مضبوط")
+                media_url = f"{base}/publish/{quote(image_path.name)}"
+                self._verify_public_media_url(media_url, "image")
+                key = _norm_user(sender)
+                with getattr(self, "_personal_design_lock", threading.RLock()):
+                    designs = getattr(self, "personal_designs", None)
+                    if not isinstance(designs, dict):
+                        designs = self.personal_designs = {}
+                    user_designs = designs.get(key)
+                    if not isinstance(user_designs, dict):
+                        user_designs = {}
+                    user_designs["name"] = {
+                        "kind": "name", "filename": image_path.name,
+                        "media_type": "image", "name": name,
+                        "created_at": time.time(), "username": str(sender),
+                    }
+                    designs[key] = user_designs
+                    _save_local_json(DATA_DIR / "personal_designs.json", designs)
+                sent = (self.send_private_media(sender, media_url, "image", filename=image_path.name)
+                        if is_private else self.send_room_media(room, media_url, "image"))
+                if sent is False:
+                    raise RuntimeError("رفض الاتصال إرسال الصورة")
+                notice = f"✨ تم تصميم بطاقة الاسم «{name}» وحفظها. لنشرها في كل الغرف أرسل: انشر اسمي"
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+            except Exception as exc:
+                self.log("[DESIGN] name card failed:", repr(exc))
+                notice = "❌ تعذر إنشاء صورة الاسم. تحقق من Pillow ورابط الوسائط العام."
+                self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
+            return True
+
+        if low in {"تغيير صورتك", "غير صورتك", "تغيير صورة البوت", "غير صورة البوت"}:
+            if not _is_master_name(sender):
+                self.send_room_text(room, "🔒 تغيير صورة البوت مخصص للماستر.")
+                return True
+            try:
+                assets = sorted(ASSETS_DIR.glob("bot_avatar_*.jpg")) + sorted(ASSETS_DIR.glob("bot_avatar_*.png"))
+                if not assets:
+                    raise RuntimeError("لا توجد صور bot_avatar داخل assets")
+                last = str(getattr(self, "_last_bot_avatar_asset", "") or "")
+                choices = [p for p in assets if str(p) != last] or assets
+                chosen = random.choice(choices)
+                base = _public_base_url()
+                if not base:
+                    raise RuntimeError("PUBLIC_BASE_URL غير مضبوط")
+                public_photo_url = f"{base}/assets/{quote(chosen.name)}"
+                self._verify_public_media_url(public_photo_url, "image")
+                # Match the official Android client: upload the local image
+                # first, then send the URL returned by Talkinchat.  Sending
+                # our public asset URL directly updates the profile page but
+                # does not trigger the room UserItem/avatar update.
+                photo_url = self._upload_bot_profile_photo_official(chosen)
+                action = _PROFILE_ACTION_ALIASES.get(
+                    os.getenv("BOT_PROFILE_PHOTO_ACTION", "profile_update").strip(),
+                    os.getenv("BOT_PROFILE_PHOTO_ACTION", "profile_update").strip(),
+                ) or "profile_update"
+                photo_type = os.getenv("BOT_PROFILE_PHOTO_TYPE", "photo").strip() or "photo"
+                packet = encode_query(action, type_=photo_type, value=photo_url)
+                if len(packet) > _ws_payload_limit():
+                    raise RuntimeError("حزمة تحديث الصورة تجاوزت حد WebSocket")
+                sent = self.send_query(packet)
+                if sent is False:
+                    raise RuntimeError("لم يقبل اتصال WebSocket طلب تغيير الصورة")
+                self._last_bot_avatar_asset = str(chosen)
+                self.log("[PROFILE] bot photo update request sent:", chosen.name, "action=", action, "type=", photo_type)
+                # A profile_update alone can update the profile page while
+                # room occupants keep a stale/empty UserItem avatar. Refresh
+                # the native roster in every currently connected room too.
+                refresh_queued = self._queue_bot_avatar_room_refresh(photo_url)
+                self.send_private_text(
+                    sender,
+                    "📨 أُرسل طلب تغيير صورة البوت. "
+                    + ("بدأت مزامنة قوائم الأعضاء في الغرف المتصل بها البوت؛ انتظر قليلاً ثم حدّث الغرفة." if refresh_queued
+                       else "تم تغيير طلب الصورة، لكن لم أجد غرفاً متصلة لطلب مزامنة صورتها.")
+                    + " إذا بقيت الصورة فارغة، أرسل سجل [PROFILE-PHOTO] بعد التغيير حتى نعرف هل الخادم أعاد الصورة في قائمة أعضاء الغرف."
+                )
+            except Exception as exc:
+                self.log("[PROFILE] bot photo update failed:", repr(exc))
+                self.send_private_text(sender, f"❌ تعذر إرسال طلب تغيير صورة البوت: {str(exc)[:180]}")
+            return True
+        return False
+
     def _handle_explore_command(self, room, command, sender):
-        match = re.fullmatch(r"ax@(.+)", str(command or "").strip(), re.I | re.S)
+        match = re.fullmatch(r"(aax2|ax2|ax1|aax|ax)@(.+)", str(command or "").strip(), re.I | re.S)
         if not match:
             return False
-        text = match.group(1).strip()[:150]
+        command_mode = match.group(1).casefold()
+        # ax1 replaces the old aax workflow: it is now the premium template broadcast.
+        if command_mode == "aax":
+            command_mode = "ax1"
+        text = match.group(2).strip()[:150]
         if not text:
-            self.send_room_text(room, "استخدم ax@النص لنشر محتوى اكسبلور.")
+            usage = {
+                "aax2": "استخدم aax2@النص لمعاينة القالب الملكي في الغرفة الحالية.",
+                "ax2": "استخدم ax2@النص لنشر القالب الملكي الجديد في كل الغرف.",
+                "ax1": "استخدم ax1@النص لنشر قالب اكسبلور الملكي المتحرك في كل الغرف.",
+                "ax": "استخدم ax@النص لنشر اكسبلور الأساسي في كل الغرف.",
+            }
+            self.send_room_text(room, usage.get(command_mode, "استخدم ax1@النص لنشر قالب اكسبلور الملكي في كل الغرف."))
             return True
-        if self._find_publish_filter_hit(text):
-            self.send_room_text(room, "تعذر نشر النص لأنه يخالف فلتر النشر.")
+        if _is_publish_banned(sender):
+            self.send_private_text(sender, "🚫 حسابك ممنوع من النشر حالياً. راجع الماستر لفك المنع.")
+            return True
+        filter_hit = self._find_publish_filter_hit(text)
+        if filter_hit:
+            self.send_room_text(room, "🚫 توقف النشر: النص يحتوي إساءة أو لفظاً محظوراً.")
+            self.send_private_text(sender, "🚫 تم إيقاف النشر بسبب استخدام لفظ مسيء أو قذف. لن تتمكن من النشر حتى يفك الماستر المنع.")
+            _record_filter_ban(sender, room, "محاولة نشر إساءة في اكسبلور", filter_hit)
+            _record_publish_ban(sender, room, filter_hit)
             return True
         try:
             key = _norm_user(sender)
             avatar_url = getattr(self, "user_photos", {}).get(key, "") or self._lookup_profile_photo(sender)
-            card = render_explore_card(text, sender, avatar_url)
+            english = self._configured_room_language(room) == "en"
+            language = "en" if english else "ar"
+            secondary_text = ""
+            premium_template = command_mode in {"aax2", "ax1", "ax2"}
+            if premium_template:
+                mode = "animated"
+            else:
+                mode = os.getenv("EXPLORE_TEMPLATE_MODE", "cycle").strip().casefold()
+                if mode not in {"static", "animated", "cycle"}:
+                    mode = "cycle"
+                if mode == "cycle":
+                    mode = "animated" if int(time.time()) % 2 else "static"
+            if premium_template:
+                card = render_explore_premium_animated_card(text, sender, avatar_url, language=language)
+            else:
+                card = (render_explore_animated_card(text, sender, avatar_url, language=language,
+                                                     secondary_text=secondary_text)
+                        if mode == "animated" else
+                        render_explore_card(text, sender, avatar_url, language=language,
+                                            secondary_text=secondary_text))
+            media_type = "image"
+            if mode == "animated":
+                card, media_type = _prepare_talkin_animation_media(card)
+                self.log("[EXPLORE] animated media:", card.name, "type=", media_type)
             base = _public_base_url()
             if not base:
                 raise RuntimeError("رابط الوسائط العام غير مضبوط")
-            media_url = f"{base}/publish/{card.name}"
+            media_url = f"{base}/publish/{quote(card.name)}"
             self._verify_public_media_url(media_url, "image")
             code = uuid.uuid4().hex[:4]
-            # The text already appears inside the Explore image; keep this
-            # accompanying room message focused on the author and reactions.
-            caption = (f"✨ اكسبلور\n👤 @{str(sender or '').lstrip('@')}\n━━━━━━━━━━━━\n"
-                       f"👍 lk@{code}   ❤️ lv@{code}   👎 dl@{code}\n💬 cm@{code} msg   🚨 report@{code} msg\n🔁 x@{code} — إعادة نشر")
+            if english:
+                prefix = ("🧪 Luxury 3D Explore preview" if command_mode == "aax2"
+                          else ("☕ Royal 3D Explore" if command_mode in {"ax1", "ax2"} else "✨ Explore"))
+                caption = (f"{prefix}\n👤 Publisher: @{str(sender or '').lstrip('@')}\n"
+                           f"📝 Explore text: {text}\n🏠 Room: {room}\n━━━━━━━━━━━━\n"
+                           f"👍 lk@{code}\n❤️ lv@{code}\n👎 dl@{code}\n"
+                           f"💬 cm@{code} msg\n🚨 report@{code} msg\n🔁 x@{code} — Repost")
+            else:
+                prefix = ("🧪 معاينة القالب الملكي 3D" if command_mode == "aax2"
+                          else ("☕ اكسبلور كوفي الملكي 3D" if command_mode in {"ax1", "ax2"} else "✨ اكسبلور"))
+                caption = (f"{prefix}\n👤 الناشر: @{str(sender or '').lstrip('@')}\n"
+                           f"📝 نص الاكسبلور: {text}\n🏠 الغرفة: {room}\n━━━━━━━━━━━━\n"
+                           f"👍 lk@{code}\n❤️ lv@{code}\n👎 dl@{code}\n"
+                           f"💬 cm@{code} نص\n🚨 report@{code} نص\n🔁 x@{code} — إعادة نشر")
             self.reaction_targets[code] = {"publisher": str(sender), "kind": "explore", "description": text,
-                                            "media_url": media_url, "caption": caption, "created_at": time.time()}
-            rooms = self._active_rooms() or ([str(room)] if room else [])
+                                            "media_url": media_url, "media_type": media_type,
+                                            "caption": caption, "created_at": time.time()}
+            # Only aax2 remains a local preview. ax1 is the new all-room command.
+            if command_mode == "aax2":
+                rooms = [str(room)] if room else ([str(getattr(self, "room", ""))] if getattr(self, "room", "") else [])
+            else:
+                rooms = self._active_rooms() or ([str(room)] if room else [])
             delivered = 0
             for target in rooms:
-                if self.send_room_media(target, media_url, "image") is not False:
+                if self.send_room_media(target, media_url, media_type) is not False:
                     self.send_room_text(target, caption)
                     delivered += 1
-            self.send_private_text(sender, f"✅ تم نشر اكسبلور في {delivered} غرفة.")
+            confirmation = (f"✅ تمت معاينة القالب الملكي في الغرفة الحالية." if command_mode == "aax2"
+                            else (f"✅ تم نشر قالب اكسبلور الملكي المتحرك في {delivered} غرفة." if command_mode in {"ax1", "ax2"}
+                                  else f"✅ تم نشر اكسبلور في {delivered} غرفة."))
+            self.send_private_text(sender, confirmation)
         except Exception as exc:
             self.log("[EXPLORE] publish failed:", repr(exc))
-            self.send_private_text(sender, "تعذر تجهيز منشور اكسبلور؛ تحقق من إعداد رابط الوسائط العام.")
+            notice = ("تعذر تجهيز القالب الملكي GIF. تحقق من رابط الوسائط العام وخدمة عرض GIF في الاستضافة."
+                      if command_mode in {"aax2", "ax1", "ax2"}
+                      else "تعذر تجهيز منشور اكسبلور؛ تحقق من إعداد رابط الوسائط العام.")
+            self.send_private_text(sender, notice)
         return True
+
     def handle_room_event(self, result):
         event = (result.get("room_event") or {}) if isinstance(result, dict) else {}
         event_type = str(event.get(1, ""))
@@ -28059,6 +30229,9 @@ class TalkinBot:
         # Consume that native response before ordinary room-command handling.
         if self._complete_pending_room_list_text(room, body):
             return
+        if event_type == "text" and body:
+            if self._handle_translation_subscription(room, body, frm): return
+            self._translate_subscribed_message(frm, body, room)
         if event_type == "text" and self._handle_telegram_log_command(body, frm):
             return
         # NS is a navigation command. Every newly received NS must be accepted
@@ -28717,10 +30890,18 @@ class TalkinBot:
             return
         if self._handle_top_wagerers(room, body):
             return
-        profile_sender = username or frm or str(event.get(17, "") or "").strip()
+        profile_sender = frm or username or str(event.get(17, "") or "").strip()
+        profile_sender_candidates = [
+            frm, event_user_22, event_user_17, username,
+            str(event.get("username", "") or ""),
+        ]
+        if self._handle_personal_design_command(room, body, profile_sender):
+            return
         if self._handle_internet_picture_command(room, body, profile_sender):
             return
-        if self._handle_random_picture_command(room, body, profile_sender):
+        if self._handle_random_picture_command(
+            room, body, profile_sender, sender_candidates=profile_sender_candidates
+        ):
             return
 
         # شبيه: متاح كأمر غرفة مستقل ولا يحتاج توثيقاً.
@@ -28827,13 +31008,13 @@ class TalkinBot:
             else:
                 self.request_live_room(room)
             return
-        m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)\s+@?([^\s@]+)", body.strip(), re.I)
+        m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)(?:\s+|@)(?!اسم(?:\s|$))@?([^\s@]+)", body.strip(), re.I)
         if m_share_ar:
             self.share_last_music(frm, m_share_ar.group(1), room)
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
-        m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
+        m_share = re.fullmatch(r"(?:sher|share)@(.+)", body.strip(), re.I)
         if m_share:
             self.share_last_music(frm, m_share.group(1), room)
             if not getattr(self, "_replaying_bot_action", False):
@@ -28859,6 +31040,15 @@ class TalkinBot:
                     with_reactions=False,
                     room_output=True,
                     live_stream=is_room_broadcast):
+                if not getattr(self, "_replaying_bot_action", False):
+                    self._remember_bot_action(room, body, frm, is_private=False)
+                return
+        youtube_test = re.fullmatch(r"\.aa\s*(.+)", body.strip(), re.I)
+        if youtube_test:
+            if not is_verified:
+                self.send_room_text(room, f"🔒 @{frm} غير موثّق لاختبار تشغيل الأغاني.\n{_verification_notice()}")
+                return
+            if self.handle_youtube_test_command(room, youtube_test.group(1), frm):
                 if not getattr(self, "_replaying_bot_action", False):
                     self._remember_bot_action(room, body, frm, is_private=False)
                 return
@@ -29375,6 +31565,12 @@ class TalkinBot:
                         self.master_last_seen = time.time()
                     if body and self._handle_master_process_command(frm, body, is_private=True):
                         return
+                    private_design_sender = (
+                        _verified_identity_candidate(private_username, frm) or private_username or frm
+                    )
+                    if body and self._handle_personal_design_command(
+                            self.room, body, private_design_sender, is_private=True):
+                        return
                     # The standalone master account is a four-option support
                     # service, not a second games/music/invitations bot. Route
                     # every external private message through that menu before
@@ -29436,6 +31632,8 @@ class TalkinBot:
                     if named_points:
                         self.send_private_text(frm, _named_points_text(named_points.group(1)))
                         return
+                    if body and self._handle_translation_subscription("", body, frm):
+                        return
                     if body:
                         # A pending multi-room join language choice has priority
                         # over game commands; otherwise "1" starts Ludo and the
@@ -29445,11 +31643,11 @@ class TalkinBot:
                             return
                         if self._handle_management_command(self.room, body, frm, is_private=True):
                             return
-                    m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)\s+@?([^\s@]+)", body.strip(), re.I)
+                    m_share_ar = re.fullmatch(r"(?:مشاركه|مشاركة)(?:\s+|@)(?!اسم(?:\s|$))@?([^\s@]+)", body.strip(), re.I)
                     if m_share_ar:
                         self.share_last_music(frm, m_share_ar.group(1))
                         return
-                    m_share = re.fullmatch(r"sher@(.+)", body.strip(), re.I)
+                    m_share = re.fullmatch(r"(?:sher|share)@(.+)", body.strip(), re.I)
                     if m_share:
                         self.share_last_music(frm, m_share.group(1))
                         return
@@ -29466,6 +31664,13 @@ class TalkinBot:
                                 with_reactions=False,
                                 room_output=not is_room_broadcast,
                                 live_stream=is_room_broadcast):
+                            return
+                    youtube_test = re.fullmatch(r"\.aa\s*(.+)", body.strip(), re.I)
+                    if youtube_test:
+                        if not private_is_verified:
+                            self.send_private_text(frm, f"🔒 @{frm} غير موثّق لاختبار تشغيل الأغاني.\n{_verification_notice()}")
+                            return
+                        if self.handle_youtube_test_command(self.room, youtube_test.group(1), frm):
                             return
                     if body.strip().lower().startswith(".sa "):
                         if self.handle_music_command(self.room, body, frm, broadcast_all=True, with_reactions=True):
@@ -29885,6 +32090,30 @@ class TalkinBot:
         self._start_cpu_guard()
         self._cleanup_thread = start_runtime_cleanup(self.stop_event, self)
         self.asset_server = start_asset_server()
+        try:
+            ytdlp_version = getattr(getattr(yt_dlp, "version", None), "__version__", "installed") if yt_dlp else "MISSING"
+            js_runtime_status = []
+            for runtime_name in ("deno", "node"):
+                runtime_path = shutil.which(runtime_name)
+                if runtime_path:
+                    try:
+                        probe = subprocess.run([runtime_path, "--version"], capture_output=True, text=True, timeout=3, check=False)
+                        js_runtime_status.append(f"{runtime_name}={((probe.stdout or probe.stderr).strip() or 'unknown')}")
+                    except Exception:
+                        js_runtime_status.append(f"{runtime_name}=unavailable")
+            self.log(
+                "[MEDIA_DIAGNOSTICS]",
+                f"yt_dlp={ytdlp_version}",
+                f"ffmpeg={'yes' if shutil.which('ffmpeg') else 'NO'}",
+                f"Pillow={'yes' if PIL_AVAILABLE else 'NO'}",
+                f"JS={','.join(js_runtime_status) if js_runtime_status else 'NO Deno/Node'}",
+                f"public_base={'set' if _public_base_url() else 'MISSING'}",
+                f"asset_server={'started' if self.asset_server else 'FAILED/DISABLED'}",
+                f"port={ASSET_HTTP_PORT}",
+                f"pot_provider={'set:'+YOUTUBE_POT_BASE_URL if YOUTUBE_POT_BASE_URL else 'localhost:4416/default-if-plugin-installed'}",
+            )
+        except Exception as diagnostic_exc:
+            self.log("[MEDIA_DIAGNOSTICS] failed:", type(diagnostic_exc).__name__)
         while not self.stop_event.is_set():
             try:
                 self.run_once()
