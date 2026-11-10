@@ -15743,8 +15743,10 @@ class TalkinBot:
             role = role.replace(" ", "_")
             return {"o": "owner", "a": "admin", "m": "member", "roomowner": "room_owner", "roomcreator": "room_creator"}.get(role, role)
         live = getattr(self, "room_users", {}).get(room, {}) or {}
+        bot_keys = {_norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID), _norm_user(getattr(self, "bot_id", ""))}
+        bot_keys.discard("")
         for username, value in live.items():
-            if _norm_user(username) == _norm_user(BOT_ID):
+            if _norm_user(username) in bot_keys:
                 role = str(value or "").casefold().strip().replace(" ", "_")
                 return {"o": "owner", "a": "admin", "m": "member", "roomowner": "room_owner", "roomcreator": "room_creator"}.get(role, role)
         return ""
@@ -21978,8 +21980,12 @@ class TalkinBot:
         # «صورتي» تعني تحديثاً صريحاً: احذف رابط الصورة السابق لهذه الحسابات
         # حتى يعيد Talkin إرسال UserItem الأحدث في كل تنفيذ للأمر.
         photos = getattr(self, "user_photos", {})
+        previous_photos = {}
         if isinstance(photos, dict):
             for candidate in candidates:
+                previous = photos.get(_norm_user(candidate)) or photos.get(str(candidate).casefold())
+                if str(previous or "").startswith(("http://", "https://", "//")):
+                    previous_photos[_norm_user(candidate)] = str(previous)
                 photos.pop(str(candidate).casefold(), None)
                 photos.pop(_norm_user(candidate), None)
 
@@ -22033,6 +22039,16 @@ class TalkinBot:
                             found_name = candidate
                             break
 
+                if not photo_url:
+                    # A few room gateways do not return UserItems for a
+                    # refresh request. Do not turn that transport miss into a
+                    # user-facing failure when a known avatar is available.
+                    for candidate in candidates:
+                        fallback = previous_photos.get(_norm_user(candidate), "")
+                        if fallback:
+                            found_name, photo_url = candidate, fallback
+                            self.log("[PROFILE-PICTURE] refresh missed; using last known avatar:", _norm_user(candidate))
+                            break
                 if not photo_url:
                     cached_count = len(getattr(self, "user_photos", {}) or {})
                     self.log(
@@ -26179,10 +26195,13 @@ class TalkinBot:
             if not isinstance(state, dict) or state.get("request_id") != pending.get("request_id"):
                 return False
             users = self._extract_room_list_users(result)
-            bot_key = _norm_user(BOT_ID)
-            bot_user = next((u for u in users if _norm_user(u.get("username")) == bot_key), None)
+            bot_keys = {_norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID), _norm_user(getattr(self, "bot_id", ""))}
+            bot_keys.discard("")
+            bot_user = next((u for u in users if _norm_user(u.get("username")) in bot_keys), None)
             if bot_user:
-                reported_role = str(bot_user.get("role") or "").casefold().strip().replace(" ", "_")
+                reported_role = str(
+                    bot_user.get("role") or bot_user.get("rank") or bot_user.get("user_role") or bot_user.get("permission") or ""
+                ).casefold().strip().replace(" ", "_")
                 if reported_role not in {"none", "unknown"}:
                     return self._finish_bot_room_role_check(room_key, reported_role)
             if pending.get("request_mode") == "app":
@@ -30809,8 +30828,17 @@ class TalkinBot:
                 getattr(self, "_room_entry_users", {}).pop(entry_room, None)
 
         elif event_type == "user_left" and username:
-            if _norm_user(username) == _norm_user(BOT_ID):
+            if _norm_user(username) in {_norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID)}:
                 self._handle_unconfirmed_bot_user_left(room)
+                reason_raw = str(event.get("reason", "") or event.get(31, "") or event.get("status", ""))
+                self._send_master_room_departure_notice(
+                    room, "user_left", reason=reason_raw,
+                    actor=str(event.get(22, "") or event.get("actor", "") or ""),
+                )
+                reason = reason_raw.casefold()
+                if any(token in reason for token in ("kick", "remove", "ban", "طرد", "إزالة", "حظر")):
+                    self.log(f"[KICK_DETECTED] explicit user_left reason for {room}; rejoining automatically...")
+                    self._schedule_auto_rejoin(room)
             else:
                 self.room_users.get(room, {}).pop(username, None)
                 departed = getattr(self, "_last_departed_user_by_room", None)
@@ -30836,6 +30864,20 @@ class TalkinBot:
             field_candidates = [value for value in (event_user_17, event_user_22) if value]
             candidates = list(dict.fromkeys(explicit_candidates + field_candidates))
             changed_user = explicit_candidates[0] if explicit_candidates else event_user_17
+            bot_keys = {_norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID), _norm_user(getattr(self, "bot_id", ""))}
+            bot_keys.discard("")
+            pending_target_is_nonbot = False
+            if changed_role in ("kicked", "outcast"):
+                for pending_action in getattr(self, "pending_admin_actions", {}).values():
+                    target_key = _norm_user(pending_action.get("target"))
+                    if (str(pending_action.get("role", "")).casefold() == changed_role
+                            and target_key and target_key not in bot_keys
+                            and any(_norm_user(candidate) == target_key for candidate in candidates)):
+                        pending_target_is_nonbot = True
+                        break
+                bot_candidate = next((candidate for candidate in candidates if _norm_user(candidate) in bot_keys), "")
+                if bot_candidate and not pending_target_is_nonbot:
+                    changed_user = bot_candidate
             # A pending action is authoritative when the native packet carries
             # both actor and target but their field positions vary by server.
             if changed_role:
@@ -30884,11 +30926,6 @@ class TalkinBot:
                             if _norm_room(connected).casefold() != _norm_room(room).casefold()
                         }
                         intentional = _norm_room(room) in getattr(self, "_intentional_leaves", set())
-                        if was_in_room and not intentional:
-                            self._send_master_room_departure_notice(
-                                room, "role_changed", reason=changed_role,
-                                actor=str(event.get(22, "") or event.get("actor", "") or ""),
-                            )
                         if changed_role == "kicked" and was_in_room and not intentional:
                             self.log(f"[KICK_DETECTED] Bot was kicked from {room}; rejoining automatically...")
                             self._schedule_auto_rejoin(room)
