@@ -5691,7 +5691,7 @@ def _default_help_sections():
             '📋 أوامر الإدارة — 9 | إعدادات وقوائم إضافية\n━━━━━━━━━━━━\namf@اسم / -amf@اسم — إضافة/سحب استثناء الفلتر\nl@amf — عرض مستثني الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmr@عدد — ضبط حد تكرار الأوامر\nsf@on / sf@off — إعداد فلتر أمان الغرفة\nl@mas — عرض الماسترات\nl@mvip — عرض ماسترات التوثيق\n📌 تستخدم ns للتنقل حتى آخر قائمة.',
         ],
         2: [
-            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
+            '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\nمشاركة صورتي@اسم — إرسال الصورة الشخصية كملف خاص\nمشاركة اسمي@اسم — إرسال بطاقة الاسم كملف خاص\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
             '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\nصمم صورتي — ينشئ صورة حسابك داخل دائرة 3D متحركة ويحفظها\nانشر صورتي — ينشر آخر تصميم لصورتك في كل الغرف مع أزرار التفاعلات\nاسم احمد — ينشئ بطاقة اسم فاخرة ويحفظها\nانشر اسمي — ينشر آخر بطاقة اسم في كل الغرف مع أزرار التفاعلات\nتغيير صورتك — تغيير صورة البوت (ماستر)\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — عرض صورة حسابك الحقيقية فقط\n.صوره اسم_المستخدم أو موضوع — بحث آمن عن صورة من الإنترنت\n.صوره — صورة عشوائية: 30% قرود والباقي صورة بالغ/بالغة حسب الجنس المعروف\nشبيه@اسم / شبيهك@اسم — بحث آمن عن صورة شبيهة\n📌 SafeSearch صارم، وطلبات الصور المخلة محظورة.',
         ],
         3: [
@@ -18108,6 +18108,47 @@ class TalkinBot:
         else:
             self.send_private_text(sender, confirmation)
         self.log("[MUSIC] private text + audio attachment sent:", _norm_user(sender), "->", _norm_user(target), "file=", filename)
+        return True
+
+    def share_personal_design_private(self, sender: str, target: str, design_kind: str, room: str = ""):
+        """Send the sender's saved portrait/name design as a native private image."""
+        sender = str(sender or "").strip().lstrip("@")
+        target = str(target or "").strip().lstrip("@")
+        design_kind = "portrait" if str(design_kind or "").casefold() == "portrait" else "name"
+        designs = getattr(self, "personal_designs", {})
+        user_designs = designs.get(_norm_user(sender)) if isinstance(designs, dict) else None
+        design = user_designs.get(design_kind) if isinstance(user_designs, dict) else None
+        filename = Path(str((design or {}).get("filename") or "")).name if isinstance(design, dict) else ""
+        expected_prefix = "portrait3d_" if design_kind == "portrait" else "name3d_"
+        valid_suffixes = (".gif", ".jpg", ".jpeg", ".png")
+        media_path = BASE_DIR / "generated_publish" / filename
+        if not target or not filename.startswith(expected_prefix) or not filename.lower().endswith(valid_suffixes) or not media_path.is_file():
+            notice = "⚠️ لا توجد صورة شخصية محفوظة للمشاركة؛ استخدم صمم صورتي أولاً." if design_kind == "portrait" else "⚠️ لا توجد بطاقة اسم محفوظة للمشاركة؛ استخدم اسم <اسم المستخدم> أولاً."
+            self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
+            return True
+        base = _public_base_url()
+        if not base:
+            notice = "❌ رابط الوسائط العام غير مضبوط، ولا يمكن إرسال الصورة الخاصة."
+            self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
+            return True
+        media_url = f"{base}/publish/{quote(filename)}"
+        try:
+            self._verify_public_media_url(media_url, "image")
+            label = "الصورة الشخصية" if design_kind == "portrait" else "بطاقة الاسم"
+            text_sent = self.send_private_text(target, f"🖼️ تمت مشاركة {label} معك من @{sender}.")
+            if text_sent is False:
+                raise RuntimeError("تعذر إرسال رسالة المشاركة النصية")
+            time.sleep(0.60)
+            media_sent = self.send_private_media(target, media_url, "image", filename=filename)
+            if media_sent is False:
+                raise RuntimeError("خادم Talkin لم يؤكد إرسال الصورة الخاصة")
+        except Exception as exc:
+            self.log("[PERSONAL-MEDIA] private share failed:", repr(exc))
+            notice = f"⚠️ تعذر مشاركة {label} مع @{target}. سبب الفشل: {str(exc)[:220]}"
+            self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
+            return True
+        notice = f"✅ تمت مشاركة {label} مع @{target} في الخاص."
+        self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
         return True
 
     def send_gift_native(self, room: str, gift_id: str, target_username: str):
@@ -31013,6 +31054,20 @@ class TalkinBot:
             self.share_last_music(frm, m_share_ar.group(1), room)
             if not getattr(self, "_replaying_bot_action", False):
                 self._remember_bot_action(room, body, frm, is_private=False)
+            return
+        m_share_photo = re.fullmatch(
+            r"(?:مشاركه|مشاركة)\s+(?:صورتي|صورتى|الصورة|الصوره|صورة)@?([^\s@]+)",
+            body.strip(), re.I,
+        )
+        if m_share_photo:
+            self.share_personal_design_private(frm, m_share_photo.group(1), "portrait", room)
+            return
+        m_share_name = re.fullmatch(
+            r"(?:مشاركه|مشاركة)\s+(?:اسمي|اسمى|الاسم)@?([^\s@]+)",
+            body.strip(), re.I,
+        )
+        if m_share_name:
+            self.share_personal_design_private(frm, m_share_name.group(1), "name", room)
             return
         m_share = re.fullmatch(r"(?:sher|share)@(.+)", body.strip(), re.I)
         if m_share:
