@@ -16673,22 +16673,10 @@ class TalkinBot:
                 profile_user.setdefault("user_id", profile_user.get("id") or profile_user.get("uid"))
                 if profile_user.get("username"):
                     users.append(profile_user)
-            # Some gateways return the profile as a generic ResultMessage
-            # rather than users[] or profile{}. Associate an explicit URL with
-            # the account that was requested, never with an arbitrary room user.
-            if not users:
-                pending = getattr(self, "_profile_lookup_pending", {})
-                now = time.monotonic()
-                for pending_key, pending_item in list(pending.items()) if isinstance(pending, dict) else []:
-                    if not isinstance(pending_item, dict) or float(pending_item.get("expires", 0) or 0) < now:
-                        if isinstance(pending, dict):
-                            pending.pop(pending_key, None)
-                        continue
-                    candidate_url = first_http_url(result)
-                    if candidate_url:
-                        users.append({"username": pending_item.get("username", pending_key), "photo": candidate_url})
-                        pending.pop(pending_key, None)
-                        break
+            # Do not associate a bare URL from a generic ResultMessage with
+            # the requester. Some gateways include a room/bot avatar in an
+            # otherwise unrelated result; without a matching username or ID it
+            # is impossible to prove that the URL belongs to this account.
             for user in users:
                 username = str(user.get("username") or "").strip().lstrip("@")
                 photo = str(user.get("photo") or "").strip()
@@ -17061,7 +17049,10 @@ class TalkinBot:
         """Resolve a photo by cached Talkin user id first, then by username."""
         raw_username = str(username or "").strip().lstrip("@")
         normalized = raw_username.casefold()
-        if not normalized:
+        if not normalized or normalized in {
+            _norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID),
+            _norm_user(getattr(self, "bot_id", "")),
+        }:
             return ""
         photos = getattr(self, "user_photos", {})
         for cache_key in (normalized, _norm_user(raw_username)):
@@ -22040,10 +22031,16 @@ class TalkinBot:
 
         candidates = []
         seen_candidates = set()
+        bot_names = {
+            _norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID),
+            _norm_user(getattr(self, "bot_id", "")),
+        }
+        bot_names.discard("")
         for candidate in [sender, *(sender_candidates or [])]:
             name = str(candidate or "").strip().lstrip("@")
             key_name = _norm_user(name)
-            if name and key_name and key_name not in seen_candidates:
+            if (name and key_name and key_name not in bot_names
+                    and key_name not in seen_candidates):
                 seen_candidates.add(key_name)
                 candidates.append(name)
         if not candidates:
