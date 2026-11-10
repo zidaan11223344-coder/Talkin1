@@ -5338,6 +5338,14 @@ def _load_moderation_config():
     words = [str(w).strip() for w in words if _valid_filter_word(w)]
     raw_enabled = mf_data.get("enabled", moderation_data.get("enabled", AUTO_BAN_WORDS))
     enabled = bool(raw_enabled) if isinstance(raw_enabled, (bool, int)) else AUTO_BAN_WORDS
+    # A legacy room-protection record is not proof of an explicit current
+    # session enablement; keep the global filter off until a manager enables it.
+    rooms = moderation_data.get("rooms")
+    if isinstance(rooms, dict) and rooms and not any(
+        isinstance(cfg, dict) and (cfg.get("authorized") or cfg.get("authorized_by") or cfg.get("authorization"))
+        for cfg in rooms.values()
+    ):
+        enabled = False
 
     # Ensure the dedicated file exists immediately so filter data is visibly
     # stored separately from the main moderation settings.
@@ -5475,13 +5483,13 @@ def _room_protection_cfg(room):
     data=_room_protection_data(); rooms=data.get("rooms",{}) if isinstance(data.get("rooms"),dict) else {}
     cfg=rooms.get(_norm_room(room),{})
     if not isinstance(cfg,dict): cfg={}
-    return {"swear":bool(cfg.get("swear",False)),"flood":bool(cfg.get("flood",False)),"joinleave":bool(cfg.get("joinleave",False)),"no_photo":bool(cfg.get("no_photo",False)),"repeat_limit":max(2,min(50,int(cfg.get("repeat_limit",3) or 3)))}
-
+    authorized = bool(cfg.get("authorized") or cfg.get("authorized_by") or cfg.get("authorization"))
+    return {"swear":authorized and bool(cfg.get("swear",False)),"flood":authorized and bool(cfg.get("flood",False)),"joinleave":authorized and bool(cfg.get("joinleave",False)),"no_photo":authorized and bool(cfg.get("no_photo",False)),"repeat_limit":max(2,min(50,int(cfg.get("repeat_limit",3) or 3)))}
 def _save_room_protection(room, **changes):
     data=_room_protection_data(); rooms=data.get("rooms",{}) if isinstance(data.get("rooms"),dict) else {}
     cfg=_room_protection_cfg(room); cfg.update(changes); cfg["repeat_limit"]=max(2,min(50,int(cfg.get("repeat_limit",3) or 3)))
+    cfg["authorized"] = True
     rooms[_norm_room(room)]=cfg; data["rooms"]=rooms; _save_local_json(PROTECTION_FILE,data); return cfg
-
 def _save_moderation_config(enabled, words):
     clean = []
     seen = set()
@@ -5507,8 +5515,9 @@ def _room_moderation_config(room):
     cfg = rooms.get(_norm_room(room), {})
     if not isinstance(cfg, dict):
         cfg = {}
+    authorized = bool(cfg.get("authorized") or cfg.get("authorized_by") or cfg.get("authorization"))
     return {
-        "enabled": bool(cfg.get("enabled", False)),
+        "enabled": authorized and bool(cfg.get("enabled", False)),
         "repeat_limit": max(2, int(cfg.get("repeat_limit", 11) or 11)),
         "words": [str(w).strip() for w in cfg.get("words", []) if str(w).strip()],
     }
@@ -5520,6 +5529,7 @@ def _save_room_moderation(room, **changes):
     cfg = _room_moderation_config(room)
     cfg.update(changes)
     cfg["repeat_limit"] = max(2, int(cfg.get("repeat_limit", 3) or 3))
+    cfg["authorized"] = True
     rooms[key] = cfg
     data["rooms"] = rooms
     # Keep the legacy global filter fields intact for backward compatibility.
@@ -5540,19 +5550,47 @@ def _bot_blocked_users():
     return set(_bot_protection_data().get("bot_blocked_users", []))
 
 def _bot_protection_enabled():
-    return bool(_bot_protection_data().get("bot_protection_enabled", True))
+    data = _bot_protection_data()
+    return bool(data.get("bot_protection_authorized") and data.get("bot_protection_enabled", False))
 
 def _save_bot_protection_enabled(enabled):
     data = _bot_protection_data()
     data["bot_protection_enabled"] = bool(enabled)
+    data["bot_protection_authorized"] = True
     _save_local_json(MODERATION_FILE, data)
     return bool(enabled)
+
+def _reset_protections_on_startup():
+    """Protection switches are session-scoped and never revive after restart."""
+    data = _room_protection_data()
+    rooms = data.get("rooms", {}) if isinstance(data.get("rooms"), dict) else {}
+    for cfg in rooms.values():
+        if isinstance(cfg, dict):
+            for key in ("swear", "flood", "joinleave", "no_photo"):
+                cfg[key] = False
+            cfg["authorized"] = False
+    data["rooms"] = rooms
+    _save_local_json(PROTECTION_FILE, data)
+    moderation = _room_moderation_data()
+    mrooms = moderation.get("rooms", {}) if isinstance(moderation.get("rooms"), dict) else {}
+    for cfg in mrooms.values():
+        if isinstance(cfg, dict):
+            cfg["enabled"] = False
+            cfg["authorized"] = False
+    moderation["rooms"] = mrooms
+    moderation["bot_protection_enabled"] = False
+    moderation["bot_protection_authorized"] = False
+    _save_local_json(MODERATION_FILE, moderation)
 
 def _save_bot_blocked_users(users):
     data = _bot_protection_data()
     data["bot_blocked_users"] = sorted({_norm_user(x) for x in users if _norm_user(x)})
     _save_local_json(MODERATION_FILE, data)
     return set(data["bot_blocked_users"])
+
+def _room_protection_manager(bot, room, sender):
+    """Only the primary/full master or an explicit room creator may toggle protection."""
+    return bool(room and (_is_primary_master(sender) or _is_room_creator(room, sender)))
 
 def _room_manager(bot, room, sender):
     if _is_master_name(sender):
@@ -5737,7 +5775,7 @@ def _default_help_sections():
         ],
         2: [
             '🎵 الموسيقى — 1\n━━━━━━━━━━━━\n.sa اسم الأغنية — تشغيل أغنية\nsher@اسم — مشاركة آخر أغنية مع مستخدم\nمشاركة صورتي@اسم — إرسال الصورة الشخصية كملف خاص\nمشاركة اسمي@اسم — إرسال بطاقة الاسم كملف خاص\n\nمثال: .sa يا ليل\nsher@ahmd555\n\n🔒 تشغيل الأغاني للحسابات الموثقة.',
-            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\nصمم صورتي — ينشئ صورة حسابك داخل دائرة 3D متحركة ويحفظها\nانشر صورتي — ينشر آخر تصميم لصورتك في كل الغرف مع أزرار التفاعلات\nاسم احمد — ينشئ بطاقة اسم فاخرة ويحفظها\nانشر اسمي — ينشر آخر بطاقة اسم في كل الغرف مع أزرار التفاعلات\nتغيير صورتك — تغيير صورة البوت (ماستر)\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — عرض صورة حسابك الحقيقية فقط\n.صوره اسم_المستخدم أو موضوع — بحث آمن عن صورة من الإنترنت\n.صوره — صورة عشوائية: 30% قرود والباقي صورة بالغ/بالغة حسب الجنس المعروف\nشبيه@اسم / شبيهك@اسم — بحث آمن عن صورة شبيهة\n📌 SafeSearch صارم، وطلبات الصور المخلة محظورة.',
+            '❤️ التفاعلات والصور والشبيه — 2\n━━━━━━━━━━━━\nصمم صورتي — ينشئ صورة حسابك داخل دائرة 3D متحركة ويحفظها\nانشر صورتي — ينشر آخر تصميم لصورتك في كل الغرف مع أزرار التفاعلات\nاسم احمد — ينشئ بطاقة اسم فاخرة ويحفظها\nانشر اسمي — ينشر آخر بطاقة اسم في كل الغرف مع أزرار التفاعلات\nتغيير صورتك — تغيير صورة البوت (ماستر)\n👍 lk@كود — إعجاب\n❤️ lv@كود — حب\n👎 dl@كود — عدم إعجاب\n💬 cm@كود نص — تعليق\n🚨 report@كود نص — إبلاغ\n\nصورتي — إرسال صورة حسابك الحقيقية مباشرة داخل الغرفة\n.صوره اسم_المستخدم أو موضوع — بحث آمن عن صورة من الإنترنت\n.صوره — صورة عشوائية: 30% قرود والباقي صورة بالغ/بالغة حسب الجنس المعروف\nشبيه@اسم / شبيهك@اسم — بحث آمن عن صورة شبيهة\n📌 SafeSearch صارم، وطلبات الصور المخلة محظورة.',
         ],
         3: [
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
@@ -10544,6 +10582,7 @@ class TalkinBot:
         self._reconnect_delay_max = max(30.0, float(os.getenv("RECONNECT_MAX_SECONDS", "120")))
         self._heartbeat_stop = None
         self._heartbeat_thread = None
+        _reset_protections_on_startup()
         self.moderation_enabled, moderation_words = _load_moderation_config()
         self.banned_words = set(moderation_words)
         self.bot_blocked_users = _bot_blocked_users()
@@ -21931,18 +21970,11 @@ class TalkinBot:
 
         def profile_photo_worker():
             try:
-                # First refresh the room membership table so every username is
-                # mapped to the exact Supabase profile id. Then request Talkin's
-                # native UserItems, which carry the CDN avatar URL itself.
-                try:
-                    self.request_room_occupants(room)
-                    self.log("[PROFILE-PICTURE] room profile ids refreshed:", room)
-                except Exception as roster_exc:
-                    self.log("[PROFILE-PICTURE] DB roster refresh failed:", type(roster_exc).__name__, str(roster_exc)[:120])
-
-                # Current APK request first; older Talkin gateways need BOT_ID.
-                self._queue_profile_roster_refresh(room, primary)
-                found_name, photo_url = wait_for_photo(5.0)
+                # Common path: send the cached CDN avatar without any roster/DB wait.
+                found_name, photo_url = find_cached()
+                if not photo_url:
+                    self._queue_profile_roster_refresh(room, primary)
+                    found_name, photo_url = wait_for_photo(2.5)
                 if not photo_url:
                     self._request_native_profile_roster(room, legacy=True)
                     found_name, photo_url = wait_for_photo(4.0)
@@ -25094,7 +25126,7 @@ class TalkinBot:
                 ],
                 2: [
                     "🎵 Music\n━━━━━━━━━━━━\n.sa song name / play song name — play music\nstop music / stop — stop the current song\nsher@name — share the current song",
-                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nصورتي — your account avatar only\n.صوره <username/topic> — strict-SafeSearch internet image\n.صوره — random image: 30% monkeys; otherwise adult portrait matching known gender\nشبيه@name / شبيهك@name — safe lookalike-style image\nExplicit/obscene image searches are blocked.",
+                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nصورتي — send your account avatar directly to the room\n.صوره <username/topic> — strict-SafeSearch internet image\n.صوره — random image: 30% monkeys; otherwise adult portrait matching known gender\nشبيه@name / شبيهك@name — safe lookalike-style image\nExplicit/obscene image searches are blocked.",
                 ],
                 3: [
                     "🎮 Games — solo games\n━━━━━━━━━━━━\nrock / paper / scissors — play against the bot\ninvestment, luck, coin@heads/tails, wheel\nbox@1-3, cup@1-3, monster, volcano, bird, star\ntable, uno\nType ns for the next games list.",
@@ -25522,7 +25554,9 @@ class TalkinBot:
                 and not join_all_command
                 and not repeat_last_command
                 and not pending_named_target
-                and not ((security_command or is_game_cmd or is_creator_cmd or is_sf_cmd or pending_protection_choice) and room and _room_manager(self, room, sender))):
+                and not ((is_game_cmd or is_creator_cmd or is_sf_cmd) and room and _room_manager(self, room, sender))
+                and not (security_command and _room_protection_manager(self, room, sender))
+                and not (pending_protection_choice and _room_protection_manager(self, room, sender))):
             return False
         # A private command can be replayed by the Talkin transport with a new
         # frame/uid. Do not answer the same account-list request twice in a row.
@@ -27285,8 +27319,7 @@ class TalkinBot:
         # restricted to the configured primary master.
         protection_match = re.fullmatch(r"(?:حماية|حمايه|حماية الغرفة|حمايه الغرفه|protection|room protection)(?:@([^@]+)|\s+(.+))?", text, re.I)
         if protection_match:
-            room_manager = bool(room and (_is_master_name(sender) or _is_primary_master(sender)
-                                          or _room_manager(self, room, sender)))
+            room_manager = _room_protection_manager(self, room, sender)
             if not ((_is_primary_master(sender) and is_private) or room_manager):
                 if room and not is_private:
                     self.send_room_text(room, "🚫 قائمة الحماية لصانع الغرفة أو الماستر فقط.")
@@ -27327,8 +27360,7 @@ class TalkinBot:
             pending_protection = self._pending_protection_number = {}
         st=pending_protection.get(protection_key,{})
         if st.get("awaiting_number") and re.fullmatch(r"\d+",low):
-            room_manager = bool(room and (_is_master_name(sender) or _is_primary_master(sender)
-                                          or _room_manager(self, room, sender)))
+            room_manager = _room_protection_manager(self, room, sender)
             if not ((is_private and _is_primary_master(sender)) or (not is_private and room_manager)):
                 return True
             try:
@@ -27347,8 +27379,7 @@ class TalkinBot:
 
         if protection_key in pending_protection and low.isdigit():
             st=pending_protection.get(protection_key,{})
-            room_manager = bool(room and (_is_master_name(sender) or _is_primary_master(sender)
-                                          or _room_manager(self, room, sender)))
+            room_manager = _room_protection_manager(self, room, sender)
             if not ((is_private and _is_primary_master(sender)) or (not is_private and room_manager)):
                 if is_private and _is_primary_master(sender):
                     self.send_private_text(sender, "🔒 أرسل رقم الخيار من خاص البوت أو داخل الغرفة بصفتك صانعاً.")
@@ -27403,16 +27434,14 @@ class TalkinBot:
             return True
 
         if low in ("تشغيل الحماية", "تشغيل الحمايه", "الحماية تشغيل", "الحمايه تشغيل", "enable protection", "enable room protection"):
-            if not room or not (_is_master_name(sender) or _is_primary_master(sender)
-                                or _room_manager(self, room, sender)):
+            if not _room_protection_manager(self, room, sender):
                 return True
             cfg = _save_room_moderation(room, enabled=True)
             _save_room_protection(room, swear=True, flood=True)
             self.send_room_text(room, f"🛡️ حماية الغرفة شغالة. حد التكرار: {cfg['repeat_limit']} رسائل.")
             return True
         if low in ("إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "الحماية إيقاف", "الحمايه ايقاف", "disable protection", "disable room protection"):
-            if not room or not (_is_master_name(sender) or _is_primary_master(sender)
-                                or _room_manager(self, room, sender)):
+            if not _room_protection_manager(self, room, sender):
                 return True
             _save_room_moderation(room, enabled=False)
             _save_room_protection(room, swear=False, flood=False)
@@ -27420,8 +27449,7 @@ class TalkinBot:
             return True
         m_repeat = re.fullmatch(r"mr@(\d+)", text, re.I)
         if m_repeat:
-            if not room or not (_is_master_name(sender) or _is_primary_master(sender)
-                                or _room_manager(self, room, sender)):
+            if not _room_protection_manager(self, room, sender):
                 return True
             limit = max(2, min(50, int(m_repeat.group(1))))
             _save_room_moderation(room, repeat_limit=limit)
@@ -30398,12 +30426,12 @@ class TalkinBot:
                 if mode not in {"static", "animated", "cycle"}:
                     mode = "cycle"
                 if mode == "cycle":
-                    mode = "animated" if int(time.time()) % 2 else "static"
+                    mode = "static"
             explore_variant = int(getattr(self, "_explore_template_index", -1) or -1) + 1
             explore_variant %= 4
             self._explore_template_index = explore_variant
             if premium_template:
-                card = render_explore_premium_animated_card(
+                card = render_explore_premium_card(
                     text, sender, avatar_url, language=language, variant=explore_variant
                 )
             else:
@@ -30413,7 +30441,7 @@ class TalkinBot:
                         render_explore_card(text, sender, avatar_url, language=language,
                                             secondary_text=secondary_text))
             media_type = "image"
-            if mode == "animated":
+            if mode == "animated" and not premium_template:
                 card, media_type = _prepare_talkin_animation_media(card)
                 self.log("[EXPLORE] animated media:", card.name, "type=", media_type)
             base = _public_base_url()
