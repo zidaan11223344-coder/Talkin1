@@ -13742,45 +13742,37 @@ class TalkinBot:
             if not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
                 self.log("[MEDIA] private audio uses explicit filename; URL path has no audio extension")
 
-        packet_types = [packet_type]
-        if requested_audio:
-            # The private gateway acknowledges type=audio but renders it as
-            # text-only. type=file is the native playable private attachment.
-            # Put file first so a successful transport acknowledgement cannot
-            # suppress the real MP3 packet.
-            packet_types = ["file", "audio"]
-            if packet_type not in packet_types:
-                packet_types.append(packet_type)
-        last_error = None
-        for selected_type in packet_types:
-            payload = encode_query(
-                "chat_message", type_=selected_type, to=username, url=media_url,
-                # Match send_room_media exactly for playable audio: the
-                # route changes to `to`, while type/url/length stay identical.
-                # A filename in body makes some private clients discard audio.
-                body=(clean_name if selected_type == "file" and requested_audio else ""),
-                length=str(max(0, int(duration or 0))) if requested_audio else None,
+        # Talkinchat's private gateway expects one native file packet. Sending
+        # a second type=audio packet can be rendered as text-only and can make
+        # some clients discard the preceding attachment. Keep body empty, as
+        # the Android client does; the filename is carried by the URL suffix.
+        selected_type = packet_type
+        payload = encode_query(
+            "chat_message", type_=selected_type, to=username, url=media_url,
+            body="",
+            length=str(max(0, int(duration or 0))) if selected_type == "audio" else None,
+        )
+        if len(payload) > _ws_payload_limit():
+            raise RuntimeError(
+                f"حزمة ملف الصوت الخاص أكبر من حد Talkin ({len(payload)} > {_ws_payload_limit()} بايت)"
             )
-            if len(payload) > _ws_payload_limit():
-                raise RuntimeError(
-                    f"حزمة ملف الصوت الخاص أكبر من حد Talkin ({len(payload)} > {_ws_payload_limit()} بايت)"
-                )
-            for attempt in range(2):
-                try:
-                    result = self.send_query(payload)
-                    if result is not False:
-                        self.log(
-                            "[MEDIA] private attachment packet sent:", username,
-                            "type=", selected_type, "name=", clean_name[:80],
-                            "bytes=", len(payload),
-                        )
-                        return result
-                    last_error = RuntimeError(f"Talkin rejected private media type {selected_type}")
-                except Exception as exc:
-                    last_error = exc
-                    self.log("[MEDIA] private media send failed:", username, selected_type, repr(exc))
-                if attempt == 0:
-                    time.sleep(0.8)
+        last_error = None
+        for attempt in range(2):
+            try:
+                result = self.send_query(payload)
+                if result is not False:
+                    self.log(
+                        "[MEDIA] private attachment packet sent:", username,
+                        "type=", selected_type, "name=", clean_name[:80],
+                        "bytes=", len(payload),
+                    )
+                    return result
+                last_error = RuntimeError(f"Talkin rejected private media type {selected_type}")
+            except Exception as exc:
+                last_error = exc
+                self.log("[MEDIA] private media send failed:", username, selected_type, repr(exc))
+            if attempt == 0:
+                time.sleep(0.8)
         raise last_error or RuntimeError("تعذر إرسال ملف الصوت الخاص")
 
     def _find_live_room_state(self, room: str):
