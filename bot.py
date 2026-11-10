@@ -30990,8 +30990,24 @@ class TalkinBot:
                     actor=str(event.get(22, "") or event.get("actor", "") or ""),
                 )
                 reason = reason_raw.casefold()
-                if any(token in reason for token in ("kick", "remove", "ban", "طرد", "إزالة", "حظر")):
-                    self.log(f"[KICK_DETECTED] explicit user_left reason for {room}; rejoining automatically...")
+                explicit_removal = any(token in reason for token in ("kick", "remove", "ban", "طرد", "إزالة", "حظر"))
+                bot_is_target = _norm_user(event_user_17) in {
+                    _norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID)
+                }
+                actor = str(event.get(22, "") or event.get("actor", "") or "").strip()
+                actor_is_other_account = bool(actor) and _norm_user(actor) not in {
+                    _norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID)
+                }
+                intentional = _norm_room(room) in getattr(self, "_intentional_leaves", set())
+                # When the packet identifies the bot as the removed account,
+                # the executor is irrelevant: admin, owner, master, or any
+                # other room manager must all lead to automatic rejoin. The
+                # actor-only packet (field 22 == bot, with another target or
+                # no target) remains ignored to avoid rejoining after a ban
+                # issued by the bot against someone else.
+                if (not intentional and (explicit_removal or
+                        (bot_is_target and actor_is_other_account))):
+                    self.log(f"[KICK_DETECTED] bot left as removed target from {room}; rejoining automatically...")
                     self._schedule_auto_rejoin(room)
             else:
                 self.room_users.get(room, {}).pop(username, None)
@@ -31093,8 +31109,8 @@ class TalkinBot:
                             if _norm_room(connected).casefold() != _norm_room(room).casefold()
                         }
                         intentional = _norm_room(room) in getattr(self, "_intentional_leaves", set())
-                        if changed_role == "kicked" and was_in_room and not intentional:
-                            self.log(f"[KICK_DETECTED] Bot was kicked from {room}; rejoining automatically...")
+                        if changed_role in ("kicked", "outcast") and was_in_room and not intentional:
+                            self.log(f"[KICK_DETECTED] Bot was removed from {room}; rejoining automatically...")
                             self._schedule_auto_rejoin(room)
                         elif intentional:
                             self.log(f"[ROLE_CHANGED] Ignoring rejoin for intentionally left room {room}.")
