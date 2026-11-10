@@ -16732,36 +16732,73 @@ class TalkinBot:
         }
         if not fields["jid"]:
             raise RuntimeError("BOT_ID غير مضبوط")
-        mime_type = mimetypes.guess_type(media_path.name)[0] or (
-            "audio/mpeg" if media_type == "audio" else "image/jpeg"
-        )
-        with media_path.open("rb") as media_file:
-            response = requests.post(
-                "https://talkinchat.com/upload",
-                data=fields,
-                files={"file": (media_path.name, media_file, mime_type)},
-                headers={"User-Agent": "Talkinchat/5.8.3", "Accept": "text/plain"},
-                timeout=(10, 90),
+        def post_upload(path, strict=False):
+            mime_type = "audio/mpeg" if media_type == "audio" else (
+                mimetypes.guess_type(path.name)[0] or "image/jpeg"
             )
-        response.raise_for_status()
-        uploaded_url = str(response.text or "").strip().strip('"')
-        if uploaded_url.startswith("{"):
-            try:
-                payload = response.json()
-                uploaded_url = str(
-                    payload.get("url") or payload.get("media_url")
-                    or payload.get("file_url") or payload.get("result") or ""
-                ).strip()
-            except Exception:
-                uploaded_url = ""
-        if not uploaded_url or uploaded_url.casefold() in {"failed", "error", "none", "null"}:
-            raise RuntimeError("رفض خادم Talkinchat رفع ملف الخاص")
-        if uploaded_url.startswith("/"):
-            uploaded_url = "https://talkinchat.com" + uploaded_url
-        if not uploaded_url.startswith(("http://", "https://")):
-            raise RuntimeError("استجابة رفع ملف الخاص ليست رابطاً صالحاً")
-        self.log("[MEDIA] official private upload completed:", media_type, target, uploaded_url[:180])
-        return uploaded_url
+            with path.open("rb") as media_file:
+                response = requests.post(
+                    "https://talkinchat.com/upload",
+                    data=fields,
+                    files={"file": (path.name, media_file, mime_type)},
+                    headers={"User-Agent": "Talkinchat/5.8.3", "Accept": "text/plain"},
+                    timeout=(10, 90),
+                )
+            response.raise_for_status()
+            raw_response = str(response.text or "").strip().strip('"')
+            uploaded_url = raw_response
+            if uploaded_url.startswith("{"):
+                try:
+                    payload = response.json()
+                    uploaded_url = str(
+                        payload.get("url") or payload.get("media_url")
+                        or payload.get("file_url") or payload.get("result") or ""
+                    ).strip()
+                except Exception:
+                    uploaded_url = ""
+            if not uploaded_url or uploaded_url.casefold() in {"failed", "error", "none", "null"}:
+                self.log("[MEDIA] Talkin upload rejected:", media_type,
+                         "status=", response.status_code, "body=", repr(raw_response[:300]))
+                if strict:
+                    raise RuntimeError("رفض خادم Talkinchat رفع ملف الخاص")
+                return ""
+            if uploaded_url.startswith("/"):
+                uploaded_url = "https://talkinchat.com" + uploaded_url
+            if not uploaded_url.startswith(("http://", "https://")):
+                if strict:
+                    raise RuntimeError("استجابة رفع ملف الخاص ليست رابطاً صالحاً")
+                return ""
+            return uploaded_url
+
+        normalized_path = None
+        try:
+            upload_path = media_path
+            if media_type == "audio" and shutil.which("ffmpeg"):
+                normalized_path = BASE_DIR / "generated_music" / f"coffee_{uuid.uuid4().hex}.mp3"
+                proc = subprocess.run(
+                    [shutil.which("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error",
+                     "-i", str(media_path), "-vn", "-ac", "2", "-ar", "44100",
+                     "-codec:a", "libmp3lame", "-b:a", "128k", "-map_metadata", "-1",
+                     str(normalized_path)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=90,
+                )
+                if proc.returncode == 0 and normalized_path.is_file() and normalized_path.stat().st_size > 4096:
+                    upload_path = normalized_path
+                else:
+                    normalized_path = None
+            uploaded_url = post_upload(upload_path)
+            if not uploaded_url and upload_path != media_path:
+                uploaded_url = post_upload(media_path, strict=True)
+            if not uploaded_url:
+                raise RuntimeError("رفض خادم Talkinchat رفع ملف الخاص")
+            self.log("[MEDIA] official private upload completed:", media_type, target, uploaded_url[:180])
+            return uploaded_url
+        finally:
+            if normalized_path is not None:
+                try:
+                    normalized_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def _queue_profile_roster_refresh(self, room, username=""):
         """Refresh Talkin's native avatar roster in the background per member."""
@@ -18172,6 +18209,8 @@ class TalkinBot:
                 fresh_path = Path(fresh_path)
                 if not fresh_path.is_file() or fresh_path.stat().st_size <= 4096:
                     raise RuntimeError("تعذر إعادة تجهيز ملف الأغنية للمشاركة")
+                local_path = fresh_path
+                native_local = True
                 media_url = public_base.rstrip("/") + "/media/" + fresh_path.name
                 verify_audio(media_url)
                 info.update({
