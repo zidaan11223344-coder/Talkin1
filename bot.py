@@ -21975,6 +21975,13 @@ class TalkinBot:
             return True
         busy.add(key)
         self._profile_picture_busy = busy
+        # «صورتي» تعني تحديثاً صريحاً: احذف رابط الصورة السابق لهذه الحسابات
+        # حتى يعيد Talkin إرسال UserItem الأحدث في كل تنفيذ للأمر.
+        photos = getattr(self, "user_photos", {})
+        if isinstance(photos, dict):
+            for candidate in candidates:
+                photos.pop(str(candidate).casefold(), None)
+                photos.pop(_norm_user(candidate), None)
 
         def cached_photo(candidate):
             photos = getattr(self, "user_photos", {})
@@ -22007,11 +22014,9 @@ class TalkinBot:
 
         def profile_photo_worker():
             try:
-                # Common path: send the cached CDN avatar without any roster/DB wait.
-                found_name, photo_url = find_cached()
-                if not photo_url:
-                    self._queue_profile_roster_refresh(room, primary)
-                    found_name, photo_url = wait_for_photo(2.5)
+                # Always request a fresh roster response after invalidating the cache.
+                self._queue_profile_roster_refresh(room, primary)
+                found_name, photo_url = wait_for_photo(2.5)
                 if not photo_url:
                     self._request_native_profile_roster(room, legacy=True)
                     found_name, photo_url = wait_for_photo(4.0)
