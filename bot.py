@@ -9289,42 +9289,114 @@ def render_explore_premium_card(text, username, photo_url="", language="ar"):
 
 
 def render_explore_premium_animated_card(text, username, photo_url="", language="ar"):
-    """Animate orbital jewels and a moving metallic shine on premium Explore."""
-    base_path=render_explore_premium_card(text,username,photo_url,language=language)
-    frames=[]
+    """Create a genuinely animated royal Explore card.
+
+    The old version only moved a jewel and a shine over a static portrait.
+    This version redraws the user's portrait in every frame: the large portrait
+    gently turns and floats inside the royal medallion, while small copies of
+    the same photo travel from the corners and scatter across the full card.
+    """
+    if not PIL_AVAILABLE:
+        raise RuntimeError("Pillow غير متاح")
+    base_path = render_explore_premium_card(text, username, photo_url, language=language)
+    frames = []
     try:
         with Image.open(base_path) as source:
-            base=source.convert("RGBA")
-        w,h=base.size
-        for i in range(10):
-            frame=base.copy()
-            overlay=Image.new("RGBA",(w,h),(0,0,0,0)); od=ImageDraw.Draw(overlay)
-            angle=2*math.pi*i/10
-            # A luminous jewel circles the profile frame; an outer ring pulses.
-            cx,cy=540,450
-            bx=int(cx+258*math.cos(angle)); by=int(cy+258*math.sin(angle))
-            od.ellipse((bx-19,by-19,bx+19,by+19),fill=(4,19,31,230),outline=(93,224,255,255),width=5)
-            od.ellipse((bx-8,by-8,bx+8,by+8),fill=(255,221,150,255))
-            pulse=int(80+65*(.5+.5*math.sin(angle)))
-            od.ellipse((cx-252,cy-252,cx+252,cy+252),outline=(255,206,116,pulse),width=4)
-            # Specular streak moves along the top rim of the frame.
-            sx=100+int((w-200)*(i/9))
-            od.line((sx-72,45,sx+72,45),fill=(228,250,255,210),width=5)
-            # Small drifting sparkles.
-            for j in range(8):
-                x=int(90+((i*89+j*151)%(w-180)))
-                y=int(150+((i*67+j*173)%(h-300)))
-                r=3+(j%3)
-                od.ellipse((x-r,y-r,x+r,y+r),fill=(255,229,173,190))
+            base = source.convert("RGBA")
+        w, h = base.size
+        avatar = _download_profile_photo(photo_url)
+        if avatar is not None:
+            try:
+                side = min(avatar.width, avatar.height)
+                left = (avatar.width - side) // 2
+                top = (avatar.height - side) // 2
+                avatar = avatar.crop((left, top, left + side, top + side)).convert("RGBA")
+            except Exception:
+                avatar = None
+        if avatar is None:
+            avatar = Image.new("RGBA", (512, 512), (25, 48, 65, 255))
+            ad = ImageDraw.Draw(avatar)
+            ad.ellipse((170, 90, 342, 270), fill=(220, 231, 234, 255))
+            ad.rounded_rectangle((105, 255, 407, 500), radius=70, fill=(220, 231, 234, 255))
+
+        frame_count = 18
+        main_cx, main_cy, main_d = 540, 450, 440
+        # Fixed paths keep the scatter intentional and ensure the whole card is used.
+        scatter = (
+            (-40, 120, 72, 0.0), (1080, 180, 58, 1.3), (80, 430, 64, 2.0),
+            (1010, 570, 78, 2.8), (-10, 820, 56, 3.5), (1090, 910, 66, 4.2),
+            (95, 1240, 74, 5.0), (985, 1300, 60, 5.8), (290, 870, 52, 0.8),
+            (805, 820, 50, 3.1), (300, 1420, 58, 4.7), (780, 1425, 64, 1.8),
+        )
+        for i in range(frame_count):
+            phase = 2 * math.pi * i / frame_count
+            frame = base.copy()
+            overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay, "RGBA")
+
+            # Small user-photo copies enter from the corners and drift over the card.
+            for j, (sx, sy, size, offset) in enumerate(scatter):
+                drift_x = int(34 * math.sin(phase * 1.35 + offset))
+                drift_y = int(28 * math.cos(phase * 1.15 + offset * 1.7))
+                x = int(sx + drift_x - size / 2)
+                y = int(sy + drift_y - size / 2)
+                mini = avatar.resize((size, size), Image.Resampling.LANCZOS)
+                if (i + j) % 2:
+                    mini = mini.rotate(5 * math.sin(phase + offset), resample=Image.Resampling.BICUBIC, expand=True)
+                    mini = mini.resize((size, size), Image.Resampling.LANCZOS)
+                mini_mask = Image.new("L", (size, size), 0)
+                ImageDraw.Draw(mini_mask).ellipse((2, 2, size - 3, size - 3), fill=205)
+                mini.putalpha(mini_mask)
+                # Gold/blue halo makes the repeated portraits visible on dark panels.
+                od.ellipse((x - 7, y - 7, x + size + 7, y + size + 7),
+                           fill=(8, 20, 38, 110), outline=(255, 205, 117, 170), width=3)
+                overlay.alpha_composite(mini, (x, y))
+
+            # Floating main portrait: horizontal perspective plus a small clockwise tilt.
+            perspective = max(0.68, 0.92 + 0.18 * math.cos(phase))
+            main_w = int(main_d * perspective)
+            main = avatar.resize((main_w, main_d), Image.Resampling.LANCZOS)
+            main = main.rotate(3.5 * math.sin(phase), resample=Image.Resampling.BICUBIC, expand=True)
+            main_mask = Image.new("L", main.size, 0)
+            ImageDraw.Draw(main_mask).ellipse((4, 4, main.width - 5, main.height - 5), fill=255)
+            main.putalpha(main_mask)
+            float_x = int(main_cx - main.width / 2 + 13 * math.sin(phase))
+            float_y = int(main_cy - main.height / 2 + 10 * math.cos(phase * 1.2))
+            # Animated glow and metallic rings sit behind the moving portrait.
+            pulse = int(105 + 65 * (0.5 + 0.5 * math.sin(phase)))
+            od.ellipse((float_x - 19, float_y - 19, float_x + main.width + 19, float_y + main.height + 19),
+                       fill=(3, 9, 22, 235), outline=(255, 207, 124, pulse), width=12)
+            od.ellipse((float_x - 8, float_y - 8, float_x + main.width + 8, float_y + main.height + 8),
+                       outline=(74, 215, 244, 220), width=6)
+            overlay.alpha_composite(main, (float_x, float_y))
+
+            # Orbit jewel and moving shine visibly confirm that this is an animation.
+            bx = int(main_cx + 270 * math.cos(phase))
+            by = int(main_cy + 270 * math.sin(phase))
+            od.ellipse((bx - 20, by - 20, bx + 20, by + 20), fill=(4, 19, 31, 235),
+                       outline=(93, 224, 255, 255), width=5)
+            od.ellipse((bx - 8, by - 8, bx + 8, by + 8), fill=(255, 221, 150, 255))
+            shine_x = 80 + int((w - 160) * (i / max(1, frame_count - 1)))
+            od.line((shine_x - 110, 42, shine_x + 110, 42), fill=(228, 250, 255, 225), width=6)
+            for j in range(12):
+                px = int(70 + ((i * 83 + j * 149) % (w - 140)))
+                py = int(85 + ((i * 57 + j * 173) % (h - 170)))
+                r = 3 + (j % 3)
+                od.ellipse((px - r, py - r, px + r, py + r), fill=(255, 229, 173, 205))
             frame.alpha_composite(overlay)
-            frames.append(frame.convert("P",palette=Image.Palette.ADAPTIVE))
-        out_dir=BASE_DIR/"generated_publish"; out_dir.mkdir(parents=True,exist_ok=True)
-        out=out_dir/f"explore_premium_{uuid.uuid4().hex}.gif"
-        frames[0].save(out,"GIF",save_all=True,append_images=frames[1:],duration=180,loop=0,optimize=True,disposal=2)
+            frames.append(frame.convert("P", palette=Image.Palette.ADAPTIVE, colors=192))
+
+        out_dir = BASE_DIR / "generated_publish"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"explore_premium_{uuid.uuid4().hex}.gif"
+        frames[0].save(out, "GIF", save_all=True, append_images=frames[1:],
+                       duration=135, loop=0, optimize=True, disposal=2)
         return out
     finally:
-        try: base_path.unlink(missing_ok=True)
-        except Exception: pass
+        try:
+            base_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _prepare_talkin_animation_media(gif_path):
