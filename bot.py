@@ -30745,6 +30745,15 @@ class TalkinBot:
         to = str(event.get(3, ""))
         body = str(event.get(6, ""))
         room = str(event.get(13) or self.room or "").strip()
+        # Talkin gateways do not all use the same event spelling for a
+        # moderation removal. Convert the explicit variants to the canonical
+        # role_changed/kicked path; user_left alone remains intentionally
+        # ambiguous and does not trigger a rejoin.
+        event_type_alias = event_type.casefold().strip()
+        if event_type_alias in {"user_kicked", "member_kicked", "room_kicked", "kicked", "removed", "member_removed"}:
+            event_type = "role_changed"
+            event = dict(event)
+            event.setdefault(31, "kicked")
         # Receiving an actual room text event proves this session can see that
         # room, even if the server omitted/reordered the explicit join ack.
         if room and event_type == "text":
@@ -31004,6 +31013,11 @@ class TalkinBot:
             changed_role = str(
                 event.get(31, "") or event.get("role", "") or event.get("value", "")
             ).strip().lower()
+            changed_role = {
+                "kick": "kicked", "remove": "kicked", "removed": "kicked",
+                "evicted": "kicked", "ejected": "kicked", "forced_out": "kicked",
+                "ban": "outcast", "banned": "outcast", "blocked": "outcast",
+            }.get(changed_role, changed_role)
             explicit_candidates = [
                 str(event.get(name, "") or "").strip()
                 for name in ("target", "to", "username", "user")
@@ -31012,6 +31026,9 @@ class TalkinBot:
             field_candidates = [value for value in (event_user_17, event_user_22) if value]
             candidates = list(dict.fromkeys(explicit_candidates + field_candidates))
             changed_user = explicit_candidates[0] if explicit_candidates else event_user_17
+            if not changed_user and event.get("affected_user"):
+                changed_user = str(event.get("affected_user") or "").strip()
+                candidates.append(changed_user)
             bot_keys = {_norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID), _norm_user(getattr(self, "bot_id", ""))}
             bot_keys.discard("")
             pending_target_is_nonbot = False
@@ -31023,8 +31040,13 @@ class TalkinBot:
                             and any(_norm_user(candidate) == target_key for candidate in candidates)):
                         pending_target_is_nonbot = True
                         break
+                # For outcast/ban packets field 22 is commonly the admin
+                # who issued the ban, not the affected account. Only infer
+                # the bot target from that ambiguous field for a kick event;
+                # a real bot ban must carry an explicit target or pending
+                # moderation action.
                 bot_candidate = next((candidate for candidate in candidates if _norm_user(candidate) in bot_keys), "")
-                if bot_candidate and not pending_target_is_nonbot:
+                if bot_candidate and not pending_target_is_nonbot and changed_role == "kicked":
                     changed_user = bot_candidate
             # A pending action is authoritative when the native packet carries
             # both actor and target but their field positions vary by server.
