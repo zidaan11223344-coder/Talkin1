@@ -3333,7 +3333,7 @@ def _looks_like_bot_command(text):
         ".u", "b@", "bl@", "k@", "u@", "ub@", "m@", "member ", "a@", "o@", "ban ", "kick ", "unban ", "admin ", "owner ", "ادمن", "طرد", "حظر", "اونر", "أونر", "عضو", "ماستر", "ماستر توثيق",
         "mas@", "umas@", "vipmas@", "unvipmas@", "-vipmas@", "l@vipmas", "ربح@", "سحب ربح@", "-ربح@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "l@vipmas", "vipmas@", "unvipmas@", "-vipmas@", "ربح@", "سحب ربح@", "-ربح@", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "توب المراهنين", "توب رهان", "كمين", "الكمين", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
-        "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
+        "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "سدد سلفتي", "سدد سلفه", "سدد@", "نسبة مزاد", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
         "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
         ".دخول غرفي", "دخول غرفي", "دخولغرفي", "my rooms", "start verification", "stop verification", "تشغيل التوثيق", "إيقاف التوثيق", "ايقاف التوثيق",
     )
@@ -4489,6 +4489,45 @@ def _request_points_loan(username):
         return _mutate_points_state(update)
     except Exception as exc:
         print(f"[LOAN] issue failed: {exc}", flush=True)
+        return {"ok": False, "error": "persistence_failed"}
+
+
+def _repay_points_loan(username):
+    """Repay the full outstanding loan from the user's current balance once."""
+    display_name = str(username or "").strip().lstrip("@")
+    if not _norm_user(display_name):
+        return {"ok": False, "error": "invalid_user"}
+
+    def update(accounts, history):
+        resolved = _resolve_points_account(accounts, display_name)
+        if not resolved:
+            return {"ok": False, "error": "account_not_found"}, False
+        key, saved = resolved
+        item = dict(saved)
+        balance = _points_balance(item)
+        debt = max(0, int(item.get("loan_debt", 0) or 0))
+        if debt <= 0:
+            return {"ok": False, "error": "no_loan", "balance": balance, "loan_debt": 0}, False
+        if balance < debt:
+            return {"ok": False, "error": "insufficient", "balance": balance, "loan_debt": debt}, False
+        item["points"] = balance - debt
+        item["loan_debt"] = 0
+        item["loan_repay_carry"] = 0
+        accounts[key] = item
+        history.append({
+            "id": f"loan-repaid:{uuid.uuid4().hex}", "timestamp": int(time.time()),
+            "sender": item.get("username") or display_name, "sender_key": key,
+            "recipient": "loan_service", "recipient_key": "loan_service",
+            "amount": debt, "reason": "full points loan repayment",
+            "balance_after": item["points"],
+        })
+        del history[:-_POINT_TRANSFER_HISTORY_LIMIT]
+        return {"ok": True, "paid": debt, "balance": item["points"], "loan_debt": 0}, True
+
+    try:
+        return _mutate_points_state(update)
+    except Exception as exc:
+        print(f"[LOAN] repayment failed: {exc}", flush=True)
         return {"ok": False, "error": "persistence_failed"}
 
 
@@ -5692,7 +5731,7 @@ def _default_help_sections():
             '📋 أوامر الإدارة — 4 | التوثيق والحماية\n━━━━━━━━━━━━\nتشغيل التوثيق — تشغيل نظام التوثيق\nإيقاف التوثيق — إيقاف نظام التوثيق\nحماية@اسم_الغرفة — قائمة الحماية الخاصة بالماستر\nتشغيل/إيقاف الحماية — إعداد عام للغرفة\nحالة الحماية — عرض الحالة\nحمايه البوت — حماية داخلية للبوت\nالمحظورين — المحظورون داخل البوت',
             '📋 أوامر الإدارة — 5 | الفلتر والنشر\n━━━━━━━━━━━━\nmf@on — تشغيل فلتر الكلمات\nmf@off — إيقاف فلتر الكلمات\n+mf@كلمة — إضافة كلمة للفلتر\n-mf@كلمة — حذف كلمة من الفلتر\nl@mf — عرض كلمات الفلتر\nclear@mf — مسح كلمات الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmbp@اسم — فك منع النشر\namf@اسم — استثناء مستخدم من حظر الفلتر',
             '📋 أوامر الإدارة — 6 | أوامر النظام والتشخيص\n━━━━━━━━━━━━\nحالة البوت — حالة الاتصال\nرام / cpu — الموارد\nمالذي يؤخرك — تشخيص تأخر الرد (لماستر المتغيرات فقط)\nفحص الماس — فحص ألماسة تجريبية داخل الغرفة\nتنظيف — حذف الملفات المؤقتة\nنسخ احتياطي — إنشاء نسخة\nإعادة تشغيل البوت — إعادة تشغيل الخدمة\nتشغيل الماستر / إيقاف الماستر / حالة الماستر\nتشغيل/إيقاف الدعوات\nتشغيل/إيقاف الألعاب\nفحص صورة المليون / فحص صورة المليار — معاينة داخل الغرفة',
-            '📋 أوامر الإدارة — 7 | النقاط وسجلاتها\n━━━━━━━━━━━━\nmsb@اسم@عدد — إضافة نقاط من الماستر في الخاص\n-sb@اسم@عدد — خصم نقاط (الماستر الكامل في الخاص)\nربح@اسم — 3 انتصارات ثم خسارة في رهانات المستخدم\n-ربح@اسم — إلغاء التحكم بنتائج رهاناته\nسحب ربح@اسم — إيقاف التحكم بنتائج رهاناته\nts@اسم@عدد — استبدال رصيد المستخدم بدل رصيده القديم\nتحويل للكل@عدد — تحويل جماعي للمستخدمين الموجودين في الغرف\nسجل التحويل — عرض سجل عمليات النقاط\nسجل تحويل@اسم — عرض التحويلات إلى مستخدم\n\nمثال التسوية:\nts@ahmd555@5000',
+            '📋 أوامر الإدارة — 7 | النقاط وسجلاتها\n━━━━━━━━━━━━\nmsb@اسم@عدد — إضافة نقاط من الماستر في الخاص\n-sb@اسم@عدد — خصم نقاط (الماستر الكامل في الخاص)\nربح@اسم — 3 انتصارات ثم خسارة في رهانات المستخدم\n-ربح@اسم — إلغاء التحكم بنتائج رهاناته\nسحب ربح@اسم — إيقاف التحكم بنتائج رهاناته\nts@اسم@عدد — استبدال رصيد المستخدم بدل رصيده القديم\nتحويل للكل@عدد — تحويل جماعي للمستخدمين الموجودين في الغرف\nسجل التحويل — عرض سجل عمليات النقاط\nسدد@اسم — سداد سلفة مستخدم بالكامل من رصيده\nنسبة مزاد 4 — ضبط ربح/خسارة استرداد المزاد إلى 4% (لماستر)\nسجل تحويل@اسم — عرض التحويلات إلى مستخدم\n\nمثال التسوية:\nts@ahmd555@5000',
             '📋 أوامر الإدارة — 8 | الغرف والقوائم\n━━━━━━━━━━━━\nغرفي / myrooms — عرض الغرف المتصلة\nدخول الكل / دخولكل — دخول الغرف المحفوظة\nاضف لملف الغرف — حفظ الغرف الحالية\nجلب غرف السيرفر — طلب قائمة الغرف\ninv / دعوات / invite — جلب أعضاء الغرفة\ns@اسم — البحث عن اسم في الغرف\nis@اسم — عرض وجود المستخدم ورتبته المحلية\nl@a — قائمة الإداريين\nl@m — قائمة الأعضاء\nl@o — قائمة الأونرات\nl@b — قائمة المحظورين\nl@all — عرض قوائم الغرفة بالتتابع',
             '📋 أوامر الإدارة — 9 | إعدادات وقوائم إضافية\n━━━━━━━━━━━━\namf@اسم / -amf@اسم — إضافة/سحب استثناء الفلتر\nl@amf — عرض مستثني الفلتر\nl@mfb — عرض المحظورين بسبب الفلتر\nl@mbp — عرض الممنوعين من النشر\nmr@عدد — ضبط حد تكرار الأوامر\nsf@on / sf@off — إعداد فلتر أمان الغرفة\nl@mas — عرض الماسترات\nl@mvip — عرض ماسترات التوثيق\n📌 تستخدم ns للتنقل حتى آخر قائمة.',
         ],
@@ -5704,8 +5743,8 @@ def _default_help_sections():
             '🎮 A3 — الألعاب — 1: ضد البوت\n━━━━━━━━━━━━\n1. حجر/ورق/مقص — rock/paper/scissors\n2. استثمار — investment\n3. حظ — luck/chance\n4. عملة@وجه/كتابة — coin@heads/tails\n5. عجلة — wheel/roulette\n6. صندوق@1..3 — box/chest\n7. كوب@1..3 — cup\n8. وحش — monster\n9. بركان — volcano\n10. طائر — bird\n11. نجم — star\n12. طاولة — table\n13. اونو — uno\n📌 اكتب ns للقائمة التالية',
             '🎮 A3 — الألعاب — 2: الرهان والحظ\n━━━━━━━━━━━━\n14. رهان@مبلغ — bet/wager\n15. مضاربة@مبلغ — duel\n16. حظي@مبلغ — my luck\n17. استثمار@مبلغ — investment\n18. حظ@مبلغ — luck@amount\n44. كمين — تحدي لاعبَين؛ من يتفادى الفخ يفوز بمليار نقطة.\nتوب المراهنين / توب رهان — ترتيب أعلى 10 حسب إجمالي الرهانات المسجلة.\n📌 الحد الأدنى لجميع الرهانات المدفوعة 100k نقطة؛ اكتب 100k أو أكثر. «حظ» بلا مبلغ يبقى مجانيًا.',
             '🎮 A3 — الألعاب — 3: البنك والجوائز\n━━━━━━━━━━━━\n19. بنك مليون — bank million\n20. مليار — billion\n21. زرع@رمز — farm/crop@item\n22. فيس@اسم — face@name\n📌 زرع أو farm يعرض المحاصيل؛ 30 محصولاً كحد أقصى في كل قائمة، ثم ns للتالي. الأسماء العربية والإنجليزية مقبولة.',
-            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ: 1% ربح، 1% خسارة، و98% دون ربح أو خسارة.',
-            '🎮 A3 — ألعاب إضافية\n━━━━━━━━━━━━\n30. زواج / marriage\n31. تحدي / challenge\n32. لغز / riddle\n33. مزاج / mood\n34. حصانه / horse\n35. تسليه / entertainment\n36. بورصة / stock — استثمار تلقائي بالذهب بعد التحذير؛ بورصتي لسجلك\n37. اسرق@اسم / steal\n38. شبيه@اسم / lookalike\n39. Shot / شوت — صيد عادي؛ التنين بعد الإعلان\n40. صيد مزه / صيد مز — اختيار عضو عشوائي وصورة عامة\n41. طليقي — اختيار طليق عشوائي\n42. خلع — حكم مزاح ورد النفقات\n43. طلاق — حكم مزاح بالثلاث\n📌 ns للقائمة التالية.',
+            '🎮 A3 — الألعاب — 4: ألعاب الغرف\n━━━━━━━━━━━━\n23. ثعبان — snake/snakes and ladders\n24. لودو — ludo\n25. سنارة — fishing/fishing rod/snare\n26. برق — lightning\n27. ياقوت — ruby\n28. صدام — crash\n29. كاشف — detector/guess who\n\n🔨 المزاد العالمي: الماستر في الخاص يرسل شغل لعبة مزاد / أوقف لعبة مزاد.\nافتح مزاد — يختار البوت سلعة نادرة ويرسل صورتها (≤50 KB).\nمزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح، وعند 5 يبدأ تلقائياً.\nبعد البدء: المزايدة بالدور لمدة 60 ثانية، ولكل لاعب 10 ثوانٍ قبل التمرير التلقائي. عند دورك اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي، وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 نقطة على الأقل، أو اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الدور بصمت.\nأثناء الجولة، مزايده تعني أن المزاد شغال؛ انتظر انتهاءه. فاتح الجولة أو الماستر يستطيع إقفاله بأمر «اقفل المزاد». بعد الإغلاق: «زايد/مزايده» يرد بأن المزاد مغلق وانتظر جولة أخرى.\nsv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ بنسبة الربح/الخسارة المضبوطة.',
+            '🎮 A3 — ألعاب إضافية\n━━━━━━━━━━━━\nسدد سلفتي — خصم السلفة كاملة من رصيدك إذا كان كافياً.\n30. زواج / marriage\n31. تحدي / challenge\n32. لغز / riddle\n33. مزاج / mood\n34. حصانه / horse\n35. تسليه / entertainment\n36. بورصة / stock — استثمار تلقائي بالذهب بعد التحذير؛ بورصتي لسجلك\n37. اسرق@اسم / steal\n38. شبيه@اسم / lookalike\n39. Shot / شوت — صيد عادي؛ التنين بعد الإعلان\n40. صيد مزه / صيد مز — اختيار عضو عشوائي وصورة عامة\n41. طليقي — اختيار طليق عشوائي\n42. خلع — حكم مزاح ورد النفقات\n43. طلاق — حكم مزاح بالثلاث\n📌 ns للقائمة التالية.',
             '🏏 A3 — الألعاب — 6: الكركيت\n━━━━━━━━━━━━\nللماستر في الخاص: تشغيل لعبة الكركيت / start cricket game لتفعيل الملفات؛ الإيقاف .cr 0 / stop cricket game.\nللموثقين داخل الغرفة: أرسل .cr 1 لفتح الإعداد، ثم أرسل رقمًا من 1 إلى 4 (مثل .cr 4) وبعدها يرسل كل لاعب Join. عند بدء المباراة يعلن البوت أسماء الفريقين والغرفتين في جميع غرفه، ثم تنضم الغرفة الثانية بـ Join.\nبعد اكتمال الفريقين: 1 هجوم أو 2 دفاع. كل لاعب 6 كرات؛ أرسل 0–6. bot أو cricket 1..4 مباراة فردية. الجائزة 200,000 نقطة، مع صور الكرات والبطّة والهتريك.',
         ],
         4: [
@@ -13112,10 +13151,10 @@ class TalkinBot:
             "مزايده — تسجيل؛ عند 3 مشاركين يبدأه الفاتح, وعند 5 يبدأ تلقائياً.":
                 "Join auction — register; at 3 players the host may start, or it starts automatically at 5.",
             "بعد البدء: المزايدة بالTurn: لمدة 60 seconds. عند your turn اكتب «زايد <المبلغ>»؛ أول مزايدة لا تقل عن السعر الابتدائي, وكل مزايدة لاحقة أعلى من السعر الحالي بـ10,000,000 points على الأقل, or اكتب «تمرير». يتجاهل البوت أوامر المزايدة خارج الTurn: بصمت.":
-                "After bidding starts, turns last 60 seconds overall, with each turn advancing automatically after 7 seconds without a bid. On your turn, enter “bid <amount>” or “pass”. The first bid must meet the starting price, and each later bid must exceed the current high bid by at least 10,000,000 points. Amounts accept shorthand such as 10m (10 million), 10b or 1b (billions), or combined forms like 10m10b. Out-of-turn bid commands are ignored silently.",
+                "After bidding starts, turns last 60 seconds overall, with each turn advancing automatically after 10 seconds without a bid. On your turn, enter “bid <amount>” or “pass”. The first bid must meet the starting price, and each later bid must exceed the current high bid by at least 10,000,000 points. Amounts accept shorthand such as 10m (10 million), 10b or 1b (billions), or combined forms like 10m10b. Out-of-turn bid commands are ignored silently.",
             "أثناء الجولة, مزايده تعني أن المزاد شغال؛ wait انتهاءه. فاتح الجولة or الماستر يستطيع إقفاله بأمر «اقفل المزاد»." :
                 "While a round is running, registration is closed; wait until it ends. The host or master may end it with “close auction”.",
-            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ: 1% ربح، 1% خسارة، و98% دون ربح أو خسارة.":
+            "sv — عرض مقتنيات المزاد؛ red auction <الرمز> — الاسترداد بالحظ بنسبة الربح/الخسارة المضبوطة.":
                 "sv — view auction collectibles; redeem: 1% chance of profit, 1% chance of loss, and 98% no change.",
         }
         for old, new in auction_help_fixes.items():
@@ -13130,7 +13169,7 @@ class TalkinBot:
             value = value.replace(old, new)
         value = value.replace(
             "بعد البدء: المزايدة بالدور لمدة 60 ثانية.",
-            "بعد البدء: تستمر المزايدة 60 ثانية، ولكل لاعب 7 ثوانٍ لإرسال المبلغ قبل انتقال الدور تلقائيًا.",
+            "بعد البدء: تستمر المزايدة 60 ثانية، ولكل لاعب 10 ثوانٍ لإرسال المبلغ قبل انتقال الدور تلقائيًا.",
         )
         value = value.replace(
             "الاسترداد بالحظ: 1% ربح، 1% خسارة، و98% دون ربح أو خسارة.",
@@ -20132,8 +20171,8 @@ class TalkinBot:
         if result.get("status") == "passed":
             next_turn = result.get("next_turn_username") or ""
             self._auction_broadcast(
-                f"⏱️ انتهت مهلة 7 ثوانٍ دون مزايدة من @{timed_out_username}؛ تم تمرير دوره تلقائيًا. الدور التالي على @{next_turn}.",
-                f"⏱️ @{timed_out_username} did not bid within 7 seconds; the turn was passed automatically. Next turn: @{next_turn}.",
+                f"⏱️ انتهت مهلة 10 ثوانٍ دون مزايدة من @{timed_out_username}؛ تم تمرير دوره تلقائيًا. الدور التالي على @{next_turn}.",
+                f"⏱️ @{timed_out_username} did not bid within 10 seconds; the turn was passed automatically. Next turn: @{next_turn}.",
                 rooms=rooms,
             )
             self._schedule_auction_timeout(result.get("auction"))
@@ -20327,8 +20366,8 @@ class TalkinBot:
             item_en = f"{item['icon']} {item['name_en']}"
             starting_price = _fmt_points(item.get("starting_price", 100_000_000))
             self._auction_broadcast(
-                f"🔨 بدأ التسجيل في المزاد العالمي!\n🎁 السلعة المختارة: {item_ar}\n💰 السعر الابتدائي: {starting_price} نقطة.\n👥 الحد الأقصى 5 مشاركين؛ اكتب «مزايده» للتسجيل. عند اكتمال 3 يستطيع فاتح الجولة كتابة «ابدا المزاد»، أو يبدأ تلقائياً عند 5. بعد البدء تكون المزايدة بالدور لمدة 60 ثانية؛ لكل لاعب 7 ثوانٍ لإرسال المبلغ قبل انتقال الدور تلقائيًا. اكتب الرقم فقط مثل 110m أو 10b أو 120000000؛ أو «تمرير».",
-                f"🔨 Registration is open for the world auction!\n🎁 Selected item: {item_en}\n💰 Starting price: {starting_price} points.\n👥 Up to 5 players; type “join auction” to register. The host may start with 3, or it starts automatically at 5. After registration, bidding runs in turns for 60 seconds, with 7 seconds per turn before it advances automatically. Send only the number, such as 110m or 10b, or type “pass”.",
+                f"🔨 بدأ التسجيل في المزاد العالمي!\n🎁 السلعة المختارة: {item_ar}\n💰 السعر الابتدائي: {starting_price} نقطة.\n👥 الحد الأقصى 5 مشاركين؛ اكتب «مزايده» للتسجيل. عند اكتمال 3 يستطيع فاتح الجولة كتابة «ابدا المزاد»، أو يبدأ تلقائياً عند 5. بعد البدء تكون المزايدة بالدور لمدة 60 ثانية؛ لكل لاعب 10 ثوانٍ لإرسال المبلغ قبل انتقال الدور تلقائيًا. اكتب الرقم فقط مثل 110m أو 10b أو 120000000؛ أو «تمرير».",
+                f"🔨 Registration is open for the world auction!\n🎁 Selected item: {item_en}\n💰 Starting price: {starting_price} points.\n👥 Up to 5 players; type “join auction” to register. The host may start with 3, or it starts automatically at 5. After registration, bidding runs in turns for 60 seconds, with 10 seconds per turn before it advances automatically. Send only the number, such as 110m or 10b, or type “pass”.",
                 room,
             )
             if not self._auction_send_item_image(item, room):
@@ -20357,7 +20396,7 @@ class TalkinBot:
                 item = result["auction"].get("item") or {}
                 starting_price = _fmt_points(item.get("starting_price", 100_000_000))
                 first_turn = result["auction"].get("turn_username") or ""
-                self._auction_broadcast(f"🔔 اكتمل العدد وبدأت المزايدة لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. لكل لاعب 7 ثوانٍ للمزايدة أو التمرير، ثم ينتقل الدور تلقائيًا.", f"🔔 Player limit reached; 60-second bidding has started. Starting price: {starting_price} points. First turn: @{first_turn}. Each player has 7 seconds to bid or pass before the turn advances automatically.", rooms=self._auction_participant_rooms(result.get("auction")))
+                self._auction_broadcast(f"🔔 اكتمل العدد وبدأت المزايدة لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. لكل لاعب 10 ثوانٍ للمزايدة أو التمرير، ثم ينتقل الدور تلقائيًا.", f"🔔 Player limit reached; 60-second bidding has started. Starting price: {starting_price} points. First turn: @{first_turn}. Each player has 10 seconds to bid or pass before the turn advances automatically.", rooms=self._auction_participant_rooms(result.get("auction")))
             return True
 
         if action == "start":
@@ -20376,7 +20415,7 @@ class TalkinBot:
             item = result["auction"].get("item") or {}
             starting_price = _fmt_points(item.get("starting_price", 100_000_000))
             first_turn = result["auction"].get("turn_username") or ""
-            self._auction_broadcast(f"🔔 أغلق فاتح الجولة التسجيل؛ بدأت المزايدة لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. لكل لاعب 7 ثوانٍ للمزايدة أو التمرير، ثم ينتقل الدور تلقائيًا.", f"🔔 The host closed registration; 60-second bidding starts now. Starting price: {starting_price} points. First turn: @{first_turn}. Each player has 7 seconds to bid or pass before the turn advances automatically.", rooms=self._auction_participant_rooms(result.get("auction")))
+            self._auction_broadcast(f"🔔 أغلق فاتح الجولة التسجيل؛ بدأت المزايدة لمدة 60 ثانية. السعر الابتدائي {starting_price} نقطة؛ أول دور على @{first_turn}. لكل لاعب 10 ثوانٍ للمزايدة أو التمرير، ثم ينتقل الدور تلقائيًا.", f"🔔 The host closed registration; 60-second bidding starts now. Starting price: {starting_price} points. First turn: @{first_turn}. Each player has 10 seconds to bid or pass before the turn advances automatically.", rooms=self._auction_participant_rooms(result.get("auction")))
             return True
 
         if action == "bid":
@@ -24690,6 +24729,40 @@ class TalkinBot:
                 self.send_private_text(sender_name, f"❌ تعذر إنشاء/إرسال صورة الفحص: {exc}")
             return True
 
+        # Master-only loan and auction settings are handled before the normal
+        # game gate so an admin command is not blocked by room game settings.
+        master_repay = re.fullmatch(r"سدد\s*@?(.+)", raw.strip(), re.I | re.S)
+        if master_repay and _norm_user(master_repay.group(1)) not in {"سلفتي", "سلفه", "السلفه", "السلفتي"}:
+            if not _is_master_name(sender_name):
+                self.send_private_text(sender_name, "🔒 أمر سداد سلفة مستخدم مخصص للماستر.")
+                return True
+            target = master_repay.group(1).strip().lstrip("@").strip()
+            result = _repay_points_loan(target)
+            if result.get("ok"):
+                self.send_private_text(sender_name, f"✅ تم سداد سلفة @{target}: {_fmt_points(result['paid'])} نقطة. الرصيد المتبقي: {_fmt_points(result['balance'])}.")
+            elif result.get("error") == "insufficient":
+                self.send_private_text(sender_name, f"❌ لا يمكن سداد سلفة @{target}. الرصيد {_fmt_points(result.get('balance', 0))} أقل من السلفة المتبقية {_fmt_points(result.get('loan_debt', 0))}.")
+            elif result.get("error") == "no_loan":
+                self.send_private_text(sender_name, f"ℹ️ لا توجد سلفة قائمة على @{target}.")
+            else:
+                self.send_private_text(sender_name, f"❌ تعذر سداد سلفة @{target}.")
+            return True
+
+        rate_match = re.fullmatch(r"نسب(?:ه|ة)\s+مزاد\s+([0-9]+(?:[.,][0-9]+)?)", raw.strip(), re.I)
+        if rate_match:
+            if not _is_master_name(sender_name):
+                self.send_private_text(sender_name, "🔒 تغيير نسبة المزاد مخصص للماستر.")
+                return True
+            try:
+                rate = float(rate_match.group(1).replace(",", "."))
+                from auction_game import set_redemption_rate_percent
+                applied = set_redemption_rate_percent(rate)
+                self.send_private_text(sender_name, f"✅ تم ضبط نسبة المزاد إلى {applied:g}% للربح والخسارة.")
+            except Exception as exc:
+                self.log("[AUCTION] rate update failed:", repr(exc))
+                self.send_private_text(sender_name, "❌ النسبة غير صالحة. استخدم مثالاً: نسبة مزاد 4")
+            return True
+
         # All games are available to verified accounts (including VIP).
         # The master remains allowed automatically by _is_verified_user().
         # This check is intentionally inside the game handler so game commands
@@ -24701,6 +24774,17 @@ class TalkinBot:
             self.game_help(room, sender_name); return True
         if not _games_enabled_for_room(room):
             self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
+            return True
+        if game_low in {"سدد سلفتي", "سدد سلفه", "سدد السلفه", "سدد السلفتي", "repay loan", "repay my loan"}:
+            result = _repay_points_loan(sender_name)
+            if result.get("ok"):
+                self.send_room_text(room, f"✅ تم سداد سلفتك بالكامل: {_fmt_points(result['paid'])} نقطة. رصيدك الآن: {_fmt_points(result['balance'])}.")
+            elif result.get("error") == "insufficient":
+                self.send_room_text(room, f"❌ لا يمكن سداد السلفة كاملة. رصيدك {_fmt_points(result.get('balance', 0))} والسلفة المتبقية {_fmt_points(result.get('loan_debt', 0))}.")
+            elif result.get("error") == "no_loan":
+                self.send_room_text(room, "ℹ️ لا توجد سلفة قائمة عليك.")
+            else:
+                self.send_room_text(room, "❌ تعذر سداد السلفة؛ لم يتغير رصيدك.")
             return True
         if game_low in ("سلفني", "loan"):
             result = _request_points_loan(sender_name)

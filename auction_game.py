@@ -7,6 +7,8 @@ journal. Point changes are delegated through an idempotent callback.
 from __future__ import annotations
 
 import copy
+import json
+import os
 import random
 import re
 import threading
@@ -20,7 +22,7 @@ BID_INCREMENT = 10_000_000
 MAX_PARTICIPANTS = 5
 MIN_PARTICIPANTS_TO_START_EARLY = 3
 BIDDING_DURATION_SECONDS = 60
-TURN_TIMEOUT_SECONDS = 7
+TURN_TIMEOUT_SECONDS = 10
 REDEMPTION_PROFIT_BASIS_POINTS = 75
 REDEMPTION_LOSS_BASIS_POINTS = 125
 REDEMPTION_BASIS_POINTS = 10_000
@@ -39,6 +41,27 @@ AUCTION_ITEMS = (
     {"key": "amber_orb", "name_ar": "كرة العنبر الإمبراطورية", "name_en": "Imperial Sunfire Amber Orb", "icon": "🟠", "image": "auction_sunfire_amber_orb.jpg", "starting_price": 1_000_000_000},
 )
 _ITEM_BY_KEY = {item["key"]: item for item in AUCTION_ITEMS}
+_REDEMPTION_RATE_FILE = Path(os.getenv("AUCTION_REDEMPTION_RATE_FILE", str(Path(__file__).with_name("auction_redemption_rate.json"))))
+
+
+def get_redemption_rate_percent() -> float:
+    """Return the configured symmetric auction profit/loss percentage."""
+    try:
+        payload = json.loads(_REDEMPTION_RATE_FILE.read_text(encoding="utf-8"))
+        value = float(payload.get("percent", 0.75)) if isinstance(payload, dict) else 0.75
+    except Exception:
+        value = 0.75
+    return max(0.01, min(50.0, value))
+
+
+def set_redemption_rate_percent(value: float) -> float:
+    """Persist a symmetric +X%/-X% auction redemption adjustment."""
+    value = max(0.01, min(50.0, float(value)))
+    _REDEMPTION_RATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _REDEMPTION_RATE_FILE.write_text(
+        json.dumps({"percent": value}, ensure_ascii=False), encoding="utf-8"
+    )
+    return value
 
 
 def normalize_command(value: str) -> str:
@@ -680,7 +703,8 @@ class AuctionGame:
                 except (TypeError, ValueError):
                     cost_basis = max(0, int(match.get("redemption_value", 0) or 0))
                 authentic = random.random() < 0.5
-                adjustment = REDEMPTION_PROFIT_BASIS_POINTS if authentic else -REDEMPTION_LOSS_BASIS_POINTS
+                rate_basis_points = int(round(get_redemption_rate_percent() * 100))
+                adjustment = rate_basis_points if authentic else -rate_basis_points
                 redemption_value = (cost_basis * (REDEMPTION_BASIS_POINTS + adjustment)) // REDEMPTION_BASIS_POINTS
                 match["status"] = "redeeming"
                 match["redemption_transaction_id"] = f"auction-redemption:{match.get('id')}"
@@ -695,7 +719,7 @@ class AuctionGame:
             str(username or record.get("username") or "").strip().lstrip("@"),
             int(record.get("redemption_value", 0) or 0),
             str(record.get("redemption_transaction_id") or f"auction-redemption:{record.get('id')}"),
-            "world auction collectible redemption with random authenticity and +0.75%/-1.25% adjustment",
+            "world auction collectible redemption with random authenticity and +النسبة المضبوطة للربح/الخسارة adjustment",
         )
         if not isinstance(result, dict) or not result.get("ok"):
             return {"ok": False, "error": (result.get("error") if isinstance(result, dict) else "persistence_failed"), "pending": True, "item": record}
