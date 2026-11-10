@@ -1409,6 +1409,12 @@ def encode_query(action: str, *, type_: str = None, length: str = None,
     return bytes(out)
 
 
+def _talkin_message_uid():
+    """Generate the same 20-letter message UID shape as Talkinchat Android."""
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHJKLMNOPQRSTUVWXYZ"
+    return "".join(secrets.choice(alphabet) for _ in range(20))
+
+
 def _ws_payload_limit():
     """Return the configured WebSocket payload limit, capped at 1008 bytes."""
     try:
@@ -13705,31 +13711,26 @@ class TalkinBot:
         return sent
 
     def send_private_media(self, username: str, media_url: str, media_type: str,
-                           duration: int = 0, filename: str = ""):
-        """Send a real private attachment (not just a text/audio URL notice).
-
-        Talkin's private-chat attachment renderer expects a named ``file``
-        message. The URL, filename/body and optional audio duration must all
-        be present; an empty body can be accepted by the socket but discarded
-        by some clients as an incomplete attachment.
-        """
+                           duration: int = 0, filename: str = "", local_path=None):
+        """Upload then send a native Talkinchat private audio/image attachment."""
         username = str(username or "").strip().lstrip("@")
         media_url = str(media_url or "").strip()
         requested_type = str(media_type or "").strip().lower()
+        uploaded_official = bool(local_path)
+        if local_path:
+            media_url = self._upload_private_media_official(local_path, username, requested_type)
         if not username or _norm_user(username) == _norm_user(BOT_ID) or not media_url:
             return False
         if requested_type not in {"audio", "image", "video", "file"}:
             raise ValueError(f"unsupported private media type: {requested_type}")
 
         requested_audio = requested_type == "audio"
-        packet_type = requested_type
         if requested_audio:
-            self._verify_public_media_url(media_url, "audio")
-            # Current private-chat builds use a file attachment for an actual
-            # downloadable MP3; PRIVATE_AUDIO_TYPE can override this per APK.
-            packet_type = PRIVATE_AUDIO_TYPE if PRIVATE_AUDIO_TYPE in {"file", "audio"} else "file"
+            if not uploaded_official:
+                self._verify_public_media_url(media_url, "audio")
         elif requested_type in {"image", "video"}:
-            self._verify_public_media_url(media_url, requested_type)
+            if not uploaded_official:
+                self._verify_public_media_url(media_url, requested_type)
 
         parsed_path = urlparse(media_url).path
         clean_name = str(filename or Path(parsed_path).name or "").strip()
@@ -13742,13 +13743,13 @@ class TalkinBot:
             if not media_url.lower().split("?", 1)[0].endswith((".mp3", ".m4a", ".ogg", ".wav", ".webm")):
                 self.log("[MEDIA] private audio uses explicit filename; URL path has no audio extension")
 
-        # Talkinchat's private gateway expects one native file packet. Sending
-        # a second type=audio packet can be rendered as text-only and can make
-        # some clients discard the preceding attachment. Keep body empty, as
-        # the Android client does; the filename is carried by the URL suffix.
-        selected_type = packet_type
+        # The official Android client uploads first, then sends one
+        # chat_message with type=audio/image and the returned URL.  Do not
+        # substitute type=file: that path is acknowledged but rendered as
+        # text-only by the current private gateway.
+        selected_type = requested_type
         payload = encode_query(
-            "chat_message", type_=selected_type, to=username, url=media_url,
+            "chat_message", type_=selected_type, to=username, uid=_talkin_message_uid(), url=media_url,
             body="",
             length=str(max(0, int(duration or 0))) if selected_type == "audio" else None,
         )
@@ -16642,6 +16643,54 @@ class TalkinBot:
         self.log("[PROFILE] official avatar upload completed:", uploaded_url[:180])
         return uploaded_url
 
+    def _upload_private_media_official(self, media_path, target, media_type):
+        """Upload a private audio/image using Talkinchat's Android flow."""
+        media_path = Path(media_path)
+        target = str(target or "").strip().lstrip("@")
+        media_type = str(media_type or "").strip().lower()
+        if not media_path.is_file() or media_type not in {"audio", "image"} or not target:
+            raise ValueError("بيانات رفع الوسائط الخاصة غير صالحة")
+        fields = {
+            "jid": str(BOT_ID or "").strip(),
+            "to_user": target,
+            "is_private": "yes",
+            "type": media_type,
+            "device_id": "null",
+            "s": os.getenv("TALKINCHAT_UPLOAD_SESSION", ""),
+        }
+        if not fields["jid"]:
+            raise RuntimeError("BOT_ID غير مضبوط")
+        mime_type = mimetypes.guess_type(media_path.name)[0] or (
+            "audio/mpeg" if media_type == "audio" else "image/jpeg"
+        )
+        with media_path.open("rb") as media_file:
+            response = requests.post(
+                "https://talkinchat.com/upload",
+                data=fields,
+                files={"file": (media_path.name, media_file, mime_type)},
+                headers={"User-Agent": "Talkinchat/5.8.3", "Accept": "text/plain"},
+                timeout=(10, 90),
+            )
+        response.raise_for_status()
+        uploaded_url = str(response.text or "").strip().strip('"')
+        if uploaded_url.startswith("{"):
+            try:
+                payload = response.json()
+                uploaded_url = str(
+                    payload.get("url") or payload.get("media_url")
+                    or payload.get("file_url") or payload.get("result") or ""
+                ).strip()
+            except Exception:
+                uploaded_url = ""
+        if not uploaded_url or uploaded_url.casefold() in {"failed", "error", "none", "null"}:
+            raise RuntimeError("رفض خادم Talkinchat رفع ملف الخاص")
+        if uploaded_url.startswith("/"):
+            uploaded_url = "https://talkinchat.com" + uploaded_url
+        if not uploaded_url.startswith(("http://", "https://")):
+            raise RuntimeError("استجابة رفع ملف الخاص ليست رابطاً صالحاً")
+        self.log("[MEDIA] official private upload completed:", media_type, target, uploaded_url[:180])
+        return uploaded_url
+
     def _queue_profile_roster_refresh(self, room, username=""):
         """Refresh Talkin's native avatar roster in the background per member."""
         room = str(room or "").strip()
@@ -18024,10 +18073,11 @@ class TalkinBot:
         local_path_text = str(info.get("local_path") or "").strip()
         local_path = Path(local_path_text).expanduser() if local_path_text else None
         public_base = _public_base_url()
+        native_local = bool(local_path is not None and local_path.is_file() and local_path.stat().st_size > 4096)
 
         # Prefer the exact prepared MP3 played in the room; rebuild its short
         # hosted URL rather than sharing a provider URL that may expire.
-        if local_path is not None and local_path.is_file() and local_path.stat().st_size > 4096 and public_base:
+        if native_local and public_base:
             media_url = public_base.rstrip("/") + "/media/" + local_path.name
 
         def verify_audio(url):
@@ -18038,7 +18088,8 @@ class TalkinBot:
             if not media_url:
                 raise RuntimeError("لا يوجد رابط أو ملف صوت محفوظ للأغنية")
             try:
-                verify_audio(media_url)
+                if not native_local:
+                    verify_audio(media_url)
             except Exception as first_error:
                 # If the old hosted file expired/was cleaned, recreate it from
                 # the stored search query and publish a fresh MP3.
@@ -18076,7 +18127,8 @@ class TalkinBot:
             # first, then send the playable audio attachment.
             time.sleep(0.60)
             media_sent = self.send_private_media(
-                target, media_url, "audio", duration, filename=filename
+                target, media_url, "audio", duration, filename=filename,
+                local_path=local_path if native_local else None,
             )
             if media_sent is False:
                 raise RuntimeError("خادم Talkin لم يؤكد إرسال ملف الصوت")
@@ -18118,20 +18170,16 @@ class TalkinBot:
             notice = "⚠️ لا توجد صورة شخصية محفوظة للمشاركة؛ استخدم صمم صورتي أولاً." if design_kind == "portrait" else "⚠️ لا توجد بطاقة اسم محفوظة للمشاركة؛ استخدم اسم <اسم المستخدم> أولاً."
             self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
             return True
-        base = _public_base_url()
-        if not base:
-            notice = "❌ رابط الوسائط العام غير مضبوط، ولا يمكن إرسال الصورة الخاصة."
-            self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
-            return True
-        media_url = f"{base}/publish/{quote(filename)}"
+        media_url = ""
         try:
-            self._verify_public_media_url(media_url, "image")
             label = "الصورة الشخصية" if design_kind == "portrait" else "بطاقة الاسم"
             text_sent = self.send_private_text(target, f"🖼️ تمت مشاركة {label} معك من @{sender}.")
             if text_sent is False:
                 raise RuntimeError("تعذر إرسال رسالة المشاركة النصية")
             time.sleep(0.60)
-            media_sent = self.send_private_media(target, media_url, "image", filename=filename)
+            media_sent = self.send_private_media(
+                target, media_url, "image", filename=filename, local_path=media_path
+            )
             if media_sent is False:
                 raise RuntimeError("خادم Talkin لم يؤكد إرسال الصورة الخاصة")
         except Exception as exc:
