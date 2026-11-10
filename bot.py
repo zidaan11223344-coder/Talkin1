@@ -878,6 +878,11 @@ PROFILE_STATUS_ACTION = PROFILE_STATUS_ACTIONS[0] if PROFILE_STATUS_ACTIONS else
 # The Talkin server does not echo profile_update on every build. Verification
 # is opt-in; transport exceptions are still reported immediately.
 PROFILE_STATUS_VERIFY = os.getenv("PROFILE_STATUS_VERIFY", "0") == "1"
+# The Android client asks the server for a profile independently of room
+# occupants: IQ action=get_profile, profile.username=<account>. The WebSocket
+# gateway exposes the same operation as a profile query.
+PROFILE_LOOKUP_ACTION = os.getenv("PROFILE_LOOKUP_ACTION", "profile").strip() or "profile"
+PROFILE_LOOKUP_TYPE = os.getenv("PROFILE_LOOKUP_TYPE", "get_profile").strip() or "get_profile"
 MASTER_DISPLAY_NAME = os.getenv(
     "MASTER_DISPLAY_NAME", "ۦاݪــۛـسـ𓆩♛𓆪ـۧۦـ۫فـيــ۫ـۧر𝁤𝆬𝃛"
 ).strip()
@@ -16477,7 +16482,9 @@ class TalkinBot:
             photo = "https:" + photo
         status = field(4, "status", "signature")
         user_id = field(2, "user_id", "uid", "id")
-        role = field(6, "role", "user_role")
+        role = field(6, "role", "user_role", "rank", "affiliation", "muc_affiliation", "affiliation_role")
+        if not role:
+            role = field(7, "rank", "affiliation", "muc_affiliation", "affiliation_role")
         online = field(5, "online", "is_online", "is_present")
         has_metadata = any(k in item or str(k) in item for k in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
         explicit_profile = bool(photo or role or status or user_id or online)
@@ -16656,7 +16663,16 @@ class TalkinBot:
                 self.user_photos = {}
             if not isinstance(getattr(self, "user_profile_ids", None), dict):
                 self.user_profile_ids = {}
-            users = self._extract_room_list_users(result if isinstance(result, dict) else {})
+            result = result if isinstance(result, dict) else {}
+            users = self._extract_room_list_users(result)
+            profile = result.get("profile") or result.get("user_profile") or result.get("profile_data")
+            if isinstance(profile, dict):
+                profile_user = dict(profile)
+                profile_user.setdefault("username", profile_user.get("user_name") or profile_user.get("name"))
+                profile_user.setdefault("photo", profile_user.get("avatar_url") or profile_user.get("photo_url") or profile_user.get("profile_photo_url"))
+                profile_user.setdefault("user_id", profile_user.get("id") or profile_user.get("uid"))
+                if profile_user.get("username"):
+                    users.append(profile_user)
             for user in users:
                 username = str(user.get("username") or "").strip().lstrip("@")
                 photo = str(user.get("photo") or "").strip()
@@ -16967,15 +16983,55 @@ class TalkinBot:
 
         def refresh():
             try:
+                # Match the APK's independent get_profile request first. A
+                # room roster is only a fallback because users may be offline
+                # or absent from the current room.
+                if username:
+                    self._request_native_profile_lookup(username)
                 # request_room_occupants() prefers Supabase and returns before
                 # asking Talkin. Avatars are delivered in Talkin UserItems, so
-                # explicitly request the native roster here.
+                # explicitly request the native roster here as a fallback.
                 self._request_native_profile_roster(room)
             except Exception as exc:
                 self.log("[PROFILE-PHOTO] room roster refresh failed:", type(exc).__name__)
 
         threading.Thread(target=refresh, name="profile-roster-refresh", daemon=True).start()
         return True
+
+    def _request_native_profile_lookup(self, username):
+        """Request a user profile like TalkinChat's get_profile IQ.
+
+        The gateway may return the profile as a single ``profile`` object or
+        normalize it into ``users[]``; both are consumed by
+        ``_cache_user_photos_from_result``. This request is deliberately
+        best-effort so older gateways keep using the roster fallback.
+        """
+        username = str(username or "").strip().lstrip("@")
+        if not username or not getattr(self, "ws", None):
+            return False
+        lock = getattr(self, "_profile_lookup_lock", None)
+        if lock is None:
+            lock = self._profile_lookup_lock = threading.Lock()
+        with lock:
+            recent = getattr(self, "_profile_lookup_at", {})
+            key = _norm_user(username)
+            now = time.monotonic()
+            if now - float(recent.get(key, 0) or 0) < 15.0:
+                return False
+            recent[key] = now
+            self._profile_lookup_at = recent
+        try:
+            sent = self.send_query(encode_query(
+                PROFILE_LOOKUP_ACTION,
+                type_=PROFILE_LOOKUP_TYPE,
+                to=username,
+                value="none",
+            ))
+            self.log("[PROFILE-PHOTO] direct get_profile request sent:", key)
+            return sent is not False
+        except Exception as exc:
+            self.log("[PROFILE-PHOTO] direct get_profile request failed:", type(exc).__name__)
+            return False
 
     def _lookup_profile_photo(self, username):
         """Resolve a photo by cached Talkin user id first, then by username."""
