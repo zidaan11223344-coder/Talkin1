@@ -16739,9 +16739,18 @@ class TalkinBot:
             profile = result.get("profile") or result.get("user_profile") or result.get("profile_data")
             if isinstance(profile, dict):
                 profile_user = dict(profile)
-                profile_user.setdefault("username", profile_user.get("user_name") or profile_user.get("name"))
-                profile_user.setdefault("photo", profile_user.get("avatar_url") or profile_user.get("photo_url") or profile_user.get("profile_photo_url"))
-                profile_user.setdefault("user_id", profile_user.get("id") or profile_user.get("uid"))
+                profile_user.setdefault("username", profile_user.get("user_name") or profile_user.get("name") or profile_user.get("jid"))
+                profile_user.setdefault("photo", profile_user.get("avatar_url") or profile_user.get("photo_url") or profile_user.get("profile_photo_url") or profile_user.get("image_url") or profile_user.get("url") or profile_user.get("media"))
+                profile_user.setdefault("user_id", profile_user.get("id") or profile_user.get("uid") or profile_user.get("user_id"))
+                # Some Talkin gateways return only {photo/url} for get_profile.
+                # If exactly one lookup is pending, bind that response to its
+                # requested account instead of losing the animated avatar.
+                if not profile_user.get("username"):
+                    pending = getattr(self, "_profile_lookup_pending", {})
+                    live_pending = [item for item in (pending.values() if isinstance(pending, dict) else [])
+                                    if isinstance(item, dict) and float(item.get("expires", 0) or 0) >= time.monotonic()]
+                    if len(live_pending) == 1:
+                        profile_user["username"] = live_pending[0].get("username", "")
                 if profile_user.get("username"):
                     users.append(profile_user)
             # Do not associate a bare URL from a generic ResultMessage with
@@ -18519,18 +18528,35 @@ class TalkinBot:
             share_text = f"🎵 تمت مشاركة أغنية معك\n🎼 العنوان: {title}\n▶️ اضغط زر التشغيل للاستماع إليها داخل الخاص."
             if artist:
                 share_text += f"\n🎤 الفنان: {artist}"
-            text_sent = self.send_private_text(target, share_text)
-            if text_sent is False:
-                raise RuntimeError("تعذر إرسال رسالة المشاركة النصية")
+            # Send text and attachment independently. A transient text-packet
+            # rejection must not prevent the actual MP3 from reaching the
+            # recipient, and vice versa.
+            text_error = None
+            try:
+                text_sent = self.send_private_text(target, share_text)
+                if text_sent is False:
+                    text_error = RuntimeError("تعذر إرسال رسالة المشاركة النصية")
+            except Exception as exc:
+                text_error = exc
+                self.log("[MUSIC] share text failed; continuing with audio:", repr(exc))
             # Do not batch the two private messages: let the text packet leave
             # first, then send the playable audio attachment.
             time.sleep(0.60)
-            media_sent = self.send_private_media(
-                target, media_url, "audio", duration, filename=filename,
-                local_path=local_path if native_local else None,
-            )
-            if media_sent is False:
-                raise RuntimeError("خادم Talkin لم يؤكد إرسال ملف الصوت")
+            media_error = None
+            try:
+                media_sent = self.send_private_media(
+                    target, media_url, "audio", duration, filename=filename,
+                    local_path=local_path if native_local else None,
+                )
+                if media_sent is False:
+                    media_error = RuntimeError("خادم Talkin لم يؤكد إرسال ملف الصوت")
+            except Exception as exc:
+                media_error = exc
+                self.log("[MUSIC] share audio failed:", repr(exc))
+            if text_error and media_error:
+                raise RuntimeError(f"النص والملف فشلا: {text_error}; {media_error}")
+            if media_error:
+                raise media_error
         except Exception as exc:
             self.log(
                 "[MUSIC] private share failed:",
@@ -18565,7 +18591,9 @@ class TalkinBot:
         expected_prefix = "portrait3d_" if design_kind == "portrait" else "name3d_"
         valid_suffixes = (".gif", ".jpg", ".jpeg", ".png")
         media_path = BASE_DIR / "generated_publish" / filename
-        if not target or not filename.startswith(expected_prefix) or not filename.lower().endswith(valid_suffixes) or not media_path.is_file():
+        allowed_prefixes = (expected_prefix, "light_" + expected_prefix)
+        if (not target or not filename.startswith(allowed_prefixes)
+                or not filename.lower().endswith(valid_suffixes) or not media_path.is_file()):
             notice = "⚠️ لا توجد صورة شخصية محفوظة للمشاركة؛ استخدم صمم صورتي أولاً." if design_kind == "portrait" else "⚠️ لا توجد بطاقة اسم محفوظة للمشاركة؛ استخدم اسم <اسم المستخدم> أولاً."
             self.send_room_text(room, notice) if room else self.send_private_text(sender, notice)
             return True
@@ -30355,7 +30383,9 @@ class TalkinBot:
         filename = Path(str(design.get("filename") or "")).name
         expected_prefix = "portrait3d_" if design_kind == "portrait" else "name3d_"
         valid_suffixes = (".gif",) if design_kind == "portrait" else (".gif", ".jpg")
-        if not filename.startswith(expected_prefix) or not filename.lower().endswith(valid_suffixes):
+        allowed_prefixes = (expected_prefix, "light_" + expected_prefix)
+        if (not filename.startswith(allowed_prefixes)
+                or not filename.lower().endswith(valid_suffixes)):
             self.send_private_text(sender, "❌ ملف التصميم المحفوظ غير صالح. أعد إنشاء التصميم ثم انشره.")
             return True
         media_path = BASE_DIR / "generated_publish" / filename
