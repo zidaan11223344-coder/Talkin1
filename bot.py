@@ -10461,15 +10461,25 @@ class TalkinBot:
         self.ws = None
         self.stop_event = threading.Event()
         # Realtime transport must never execute heavy command/event logic on
-        # the WebSocket reader thread. A single ordered worker keeps command
-        # order intact while allowing recv() to continue immediately.
+        # the WebSocket reader thread. A small pool drains the priority queue;
+        # per-room/per-private lanes below preserve ordering for the same chat
+        # while allowing independent rooms and replies to run concurrently.
         self._event_queue = queue.PriorityQueue(maxsize=max(200, int(os.getenv("EVENT_QUEUE_MAX", "1000"))))
         self._event_queue_seq = 0
         self._event_queue_lock = threading.Lock()
-        self._event_worker = threading.Thread(
-            target=self._event_worker_loop, name="ws-event-worker", daemon=True
-        )
-        self._event_worker.start()
+        self._event_lane_locks = {}
+        self._event_lane_guard = threading.Lock()
+        worker_count = max(2, min(4, int(os.getenv("EVENT_WORKERS", "3") or 3)))
+        self._event_workers = []
+        for worker_index in range(worker_count):
+            worker = threading.Thread(
+                target=self._event_worker_loop,
+                name=f"ws-event-worker-{worker_index + 1}", daemon=True,
+            )
+            self._event_workers.append(worker)
+            worker.start()
+        # Compatibility handle for diagnostics and older integrations.
+        self._event_worker = self._event_workers[0]
         self._room_broadcast_queue = queue.Queue(maxsize=20)
         self._room_broadcast_worker = threading.Thread(
             target=self._room_broadcast_worker_loop,
@@ -31056,6 +31066,9 @@ class TalkinBot:
             )
         if event_type in ("you_joined", "you_rejoined"):
             if room:
+                # Non-blocking native roster refresh: UserItem responses fill
+                # user_photos in the event workers, never on the socket reader.
+                self._queue_profile_roster_refresh(room)
                 entry_room = _norm_room(room)
                 entry_time = time.time()
                 getattr(self, "_room_entry_times", {}).update({entry_room: entry_time})
@@ -32012,14 +32025,41 @@ class TalkinBot:
         threading.Timer(max(2.0, float(os.getenv("ROOM_LIST_SYNC_TIMEOUT_SECONDS", "4") or 4)), fallback).start()
         return True
 
+    def _event_lane_key(self, message):
+        """Return a serialization lane without fully processing the frame."""
+        try:
+            top = decode_message(message)
+            room_event = top.get("room_event") if isinstance(top, dict) else None
+            if isinstance(room_event, dict):
+                room = str(room_event.get(13, "") or "").strip()
+                if room:
+                    return "room:" + _norm_room(room)
+            chat = top.get("chat_message") if isinstance(top, dict) else None
+            if isinstance(chat, dict):
+                room = str(chat.get(4, "") or chat.get(13, "") or "").strip()
+                if room:
+                    return "room:" + _norm_room(room)
+                sender = str(chat.get(3, "") or chat.get(22, "") or "").strip()
+                if sender:
+                    return "private:" + _norm_user(sender)
+        except Exception:
+            pass
+        return "global"
+
     def _event_worker_loop(self):
         while not self.stop_event.is_set():
             try:
                 _priority, _seq, ws, message = self._event_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
+            lane_key = self._event_lane_key(message)
+            with self._event_lane_guard:
+                lane_lock = self._event_lane_locks.setdefault(lane_key, threading.Lock())
             try:
-                self._process_message(ws, message)
+                # Independent rooms/private senders can proceed in parallel;
+                # commands in one lane remain ordered and state-safe.
+                with lane_lock:
+                    self._process_message(ws, message)
             except Exception as exc:
                 self.last_error = str(exc)
                 self.log("[EVENT-WORKER] processing failed:", repr(exc))
