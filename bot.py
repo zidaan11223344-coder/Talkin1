@@ -3341,7 +3341,7 @@ def _looks_like_bot_command(text):
         "mas@", "umas@", "vipmas@", "unvipmas@", "-vipmas@", "l@vipmas", "ربح@", "سحب ربح@", "-ربح@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "l@vipmas", "vipmas@", "unvipmas@", "-vipmas@", "ربح@", "سحب ربح@", "-ربح@", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "توب المراهنين", "توب رهان", "كمين", "الكمين", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "سدد سلفتي", "سدد سلفه", "سدد@", "نسبة مزاد", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", "my picture", "my photo", "picture me", "سهم", "arrow", "الماسه", "diamond", "sell@", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", "my picture", "my photo", "picture me", "سهم", "arrow", "الماسه", "diamond", "ماستي", "صيدي", "توب الماسه", "توب شوت", "sell@", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
         ".دخول غرفي", "دخول غرفي", "دخولغرفي", "my rooms", "start verification", "stop verification", "تشغيل التوثيق", "إيقاف التوثيق", "ايقاف التوثيق",
     )
     prefixes = prefixes + (
@@ -10823,6 +10823,7 @@ class TalkinBot:
         self._royal_hunt_lock = threading.RLock()
         self._royal_hunt_event = None
         self._royal_hunt_round_seq = 0
+        self._royal_hunt_next_kind = "royal_diamond"
         saved_dragon_hunters = _load_local_json(DRAGON_HUNTERS_FILE, {})
         saved_hunters = saved_dragon_hunters.get("hunters", {}) if isinstance(saved_dragon_hunters, dict) else {}
         self.dragon_hunters = {
@@ -10886,6 +10887,7 @@ class TalkinBot:
         self._mining_cooldown_lock = threading.RLock()
         self._mining_last_dig = {}
         threading.Thread(target=self._rare_diamond_event_worker, name="rare-diamond-worker", daemon=True).start()
+        threading.Thread(target=self._royal_hunt_event_worker, name="royal-hunt-worker", daemon=True).start()
         self.invite_message_template = _message_template("invite", "default", "يوجد معجب مخفي في {room}")
 
     def _load_social_features(self):
@@ -20897,30 +20899,38 @@ class TalkinBot:
             return True
 
     def _royal_hunt_event_worker(self):
-        while not self.stop_event.wait(480.0):
+        while not self.stop_event.wait(360.0):
             try:
                 self._start_royal_hunt_event()
             except Exception as exc:
                 self.log("[ROYAL-HUNT] scheduler failed:", repr(exc))
 
-    def _start_royal_hunt_event(self, announce=True):
+    def _start_royal_hunt_event(self, item=None, announce=True):
         now = time.time()
         with self._royal_hunt_lock:
+            item = item or getattr(self, "_royal_hunt_next_kind", "royal_diamond")
+            item = "royal_dragon" if item == "royal_dragon" else "royal_diamond"
+            self._royal_hunt_next_kind = "royal_dragon" if item == "royal_diamond" else "royal_diamond"
             self._royal_hunt_round_seq += 1
-            self._royal_hunt_event = {"id": self._royal_hunt_round_seq, "ends_at": now + 180.0, "dragon": "", "diamond": ""}
+            self._royal_hunt_event = {
+                "id": self._royal_hunt_round_seq, "kind": item,
+                "ends_at": now + 180.0, "winner": "",
+            }
+            event = dict(self._royal_hunt_event)
         if not announce:
-            return self._royal_hunt_event
+            return event
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()}, key=str.casefold)
-        def announce(target):
-            text = ("👑 بدأت الجولة الملكية — متاحة 3 دقائق!\n"
-                    "🐉 التنين الملكي: اكتب «سهم» أو «arrow» — الجائزة 2 مليار.\n"
-                    "💎 الألماسة الملكية: اكتب «الماسه» أو «diamond» — الجائزة 4 مليار.")
+        def announce_room(target):
+            if item == "royal_dragon":
+                text = "👑🐉 ظهر التنين الملكي! الجولة مفتوحة 3 دقائق — اكتب «سهم» أو «arrow» للفوز بـ 2 مليار."
+            else:
+                text = "👑💎 ظهرت الألماسة الملكية! الجولة مفتوحة 3 دقائق — اكتب «الماسه» أو «diamond» للفوز بـ 4 مليارات."
             try: self.send_room_text(target, text)
             except Exception as exc: self.log("[ROYAL-HUNT] announce failed:", target, repr(exc))
         if rooms:
             with ThreadPoolExecutor(max_workers=min(16, len(rooms)), thread_name_prefix="royal-open") as pool:
-                list(pool.map(announce, rooms))
-
+                list(pool.map(announce_room, rooms))
+        return event
     def _royal_hunt_command(self, room, sender, raw):
         text = " ".join(str(raw or "").strip().casefold().replace("أ", "ا").replace("إ", "ا").split()).replace("ة", "ه")
         if text in {"صيدي", "صيدى", "my hunt"}:
@@ -20932,6 +20942,16 @@ class TalkinBot:
         if text in {"ماستي", "ماسهتي", "my royal diamond"}:
             inv = self._royal_hunt.inventory(sender, sender)
             self.send_room_text(room, f"💎 لديك {int(inv.get('diamond', 0) or 0)} ألماسة ملكية فاخرة — قيمة الواحدة {_fmt_points(ROYAL_DIAMOND_VALUE)} نقطة.")
+            return True
+        if text in {"توب الماسه", "top diamond", "top diamonds"}:
+            rows = self._royal_hunt.top_diamonds(10)
+            lines = [f"{i}. @{name} — 💎 {count}" for i, (count, name) in enumerate(rows, 1)]
+            self.send_room_text(room, "🏆 توب الألماسة الملكية\n" + ("\n".join(lines) if lines else "لا توجد نتائج بعد."))
+            return True
+        if text in {"توب شوت", "top shot", "top royal dragon"}:
+            rows = self._royal_hunt.top_dragons(10)
+            lines = [f"{i}. @{name} — 🐉 {count}" for i, (count, name) in enumerate(rows, 1)]
+            self.send_room_text(room, "🏆 توب صائدي التنين الملكي\n" + ("\n".join(lines) if lines else "لا توجد نتائج بعد."))
             return True
         if text in {"الماسي", "الماسي", "top royal", "royal top"}:
             rows = self._royal_hunt.top(10)
@@ -20950,12 +20970,8 @@ class TalkinBot:
                 self.send_room_text(room, f"✅ تم بيع {result['sold']} من {item} مقابل +{_fmt_points(result['value'])} نقطة.")
             return True
         if text in {"سهم", "arrow", "صيد التنين الملكي", "صيد تنين ملكي", "سهم ملكي", "سهم التنين الملكي", "royal dragon hunt", "hunt royal dragon"}:
-            # Arrow alternates with the ordinary dragon: when a royal round is
-            # open it claims the royal dragon; otherwise it keeps old Shot-like behavior.
-            event = getattr(self, "_royal_hunt_event", None)
-            if isinstance(event, dict) and time.time() < float(event.get("ends_at", 0) or 0):
-                return self._royal_hunt_claim(room, sender, "royal_dragon")
-            return self._fishing_shoot(room, sender)
+            # Arrow is reserved for the royal dragon; Shot remains the ordinary hunt.
+            return self._royal_hunt_claim(room, sender, "royal_dragon")
         if text in {"الماسه", "diamond", "صيد الماسه", "صيد الماس", "الماس الملكي", "royal diamond hunt", "hunt royal diamond"}:
             return self._royal_hunt_claim(room, sender, "royal_diamond")
         return False
@@ -20965,13 +20981,17 @@ class TalkinBot:
         with self._royal_hunt_lock:
             event = self._royal_hunt_event
             if not isinstance(event, dict) or now >= float(event.get("ends_at", 0) or 0):
-                self.send_room_text(room, "⏳ لا توجد جولة ملكية مفتوحة الآن؛ انتظر الإعلان القادم كل 8 دقائق.")
+                self.send_room_text(room, "⏳ لا توجد جولة ملكية مفتوحة الآن؛ انتظر الإعلان القادم كل 6 دقائق.")
                 return True
             field = "dragon" if item == "royal_dragon" else "diamond"
-            if event.get(field):
+            if event.get("kind") != item:
+                current = "التنين الملكي" if event.get("kind") == "royal_dragon" else "الألماسة الملكية"
+                self.send_room_text(room, f"⏳ الجولة الحالية مخصصة لـ {current} فقط.")
+                return True
+            if event.get("winner"):
                 self.send_room_text(room, "⚠️ تم اصطياد هذه الجائزة في الجولة الحالية.")
                 return True
-            event[field] = str(sender)
+            event["winner"] = str(sender)
         self._royal_hunt.add(sender, sender, item, room)
         value = ROYAL_DRAGON_VALUE if item == "royal_dragon" else ROYAL_DIAMOND_VALUE
         _add_points(sender, value, repay_loan=True)
@@ -20979,11 +20999,13 @@ class TalkinBot:
         optimized = _optimize_social_media_asset(ASSETS_DIR / "treasures" / asset)
         media = f"{base}/publish/{quote(Path(optimized).name)}" if base and optimized else ""
         label = "التنين الملكي 🐉" if item == "royal_dragon" else "الألماسة الملكية 💎"
-        message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة"
+        message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة\n📷 صورة الفائز مرفقة بجانب اسمه."
+        avatar_url = getattr(self, "user_photos", {}).get(_norm_user(sender), "") or self._lookup_profile_photo(sender)
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()} | {str(room).strip()})
         def deliver(target):
             try:
                 self.send_room_text(target, message)
+                if avatar_url: self.send_room_media(target, avatar_url, "image")
                 if media: self.send_room_media(target, media, "image")
             except Exception as exc: self.log("[ROYAL-HUNT] result failed:", target, repr(exc))
         if rooms:
@@ -21096,9 +21118,6 @@ class TalkinBot:
             self._fishing_pending_shots = set()
             self._fishing_dragon_pending = ""
             self._fishing_dragon_caught = False
-        # Open the royal dragon and diamond at the same instant as the regular
-        # fishing round; their notice is appended below, never sent separately.
-        royal_event = self._start_royal_hunt_event(announce=False)
         try:
             rooms = self._active_rooms()
         except Exception:
@@ -21108,14 +21127,12 @@ class TalkinBot:
             if self._configured_room_language(target_room) == "en":
                 announcement = (
                     "🏹 Hunting trip open! Every 10 minutes.\n"
-                    "🐉 Dragon spotted — first Shot catches it for 1,000,000 points.\n"
-                    "👑 Royal round: Arrow catches the Royal Dragon for 2B; Diamond catches the Royal Diamond for 4B."
+                    "🐉 Dragon spotted — first Shot catches it for 1,000,000 points."
                 )
             else:
                 announcement = (
                     "🏹 بدأت رحلة الصيد! كل 10 دقائق.\n"
-                    "🐉 التنين موجود — أول من يرسل شوت أو Shot يصيده ويحصل على مليون نقطة.\n"
-                    "👑 الجولة الملكية: أرسل سهم للتنين الملكي أو الماسه للألماسة الملكية."
+                    "🐉 التنين موجود — أول من يرسل شوت أو Shot يصيده ويحصل على مليون نقطة."
                 )
             try:
                 self.send_room_text(target_room, announcement)

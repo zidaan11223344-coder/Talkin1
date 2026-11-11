@@ -59,6 +59,24 @@ class RoyalHuntStore:
                 rows.append((int(p.get("diamond", 0) or 0), int(p.get("dragon", 0) or 0), str(p.get("username", ""))))
             return sorted(rows, key=lambda x: (x[0] + x[1], x[0], x[1]), reverse=True)[:limit]
 
+    def top_diamonds(self, limit=10):
+        with self.lock:
+            rows = []
+            for p in self._load().get("players", {}).values():
+                if not isinstance(p, dict): continue
+                count = int(p.get("diamond", 0) or 0)
+                if count > 0: rows.append((count, str(p.get("username", ""))))
+            return sorted(rows, key=lambda x: (x[0], x[1].casefold()), reverse=True)[:limit]
+
+    def top_dragons(self, limit=10):
+        with self.lock:
+            rows = []
+            for p in self._load().get("players", {}).values():
+                if not isinstance(p, dict): continue
+                count = int(p.get("dragon", 0) or 0)
+                if count > 0: rows.append((count, str(p.get("username", ""))))
+            return sorted(rows, key=lambda x: (x[0], x[1].casefold()), reverse=True)[:limit]
+
     def sell(self, user_id, username, item: str, amount: int):
         amount = max(1, int(amount or 1))
         with self.lock:
