@@ -10886,7 +10886,6 @@ class TalkinBot:
         self._mining_cooldown_lock = threading.RLock()
         self._mining_last_dig = {}
         threading.Thread(target=self._rare_diamond_event_worker, name="rare-diamond-worker", daemon=True).start()
-        threading.Thread(target=self._royal_hunt_event_worker, name="royal-hunt-worker", daemon=True).start()
         self.invite_message_template = _message_template("invite", "default", "يوجد معجب مخفي في {room}")
 
     def _load_social_features(self):
@@ -20904,11 +20903,13 @@ class TalkinBot:
             except Exception as exc:
                 self.log("[ROYAL-HUNT] scheduler failed:", repr(exc))
 
-    def _start_royal_hunt_event(self):
+    def _start_royal_hunt_event(self, announce=True):
         now = time.time()
         with self._royal_hunt_lock:
             self._royal_hunt_round_seq += 1
             self._royal_hunt_event = {"id": self._royal_hunt_round_seq, "ends_at": now + 180.0, "dragon": "", "diamond": ""}
+        if not announce:
+            return self._royal_hunt_event
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()}, key=str.casefold)
         def announce(target):
             text = ("👑 بدأت الجولة الملكية — متاحة 3 دقائق!\n"
@@ -21095,6 +21096,9 @@ class TalkinBot:
             self._fishing_pending_shots = set()
             self._fishing_dragon_pending = ""
             self._fishing_dragon_caught = False
+        # Open the royal dragon and diamond at the same instant as the regular
+        # fishing round; their notice is appended below, never sent separately.
+        royal_event = self._start_royal_hunt_event(announce=False)
         try:
             rooms = self._active_rooms()
         except Exception:
@@ -21104,12 +21108,14 @@ class TalkinBot:
             if self._configured_room_language(target_room) == "en":
                 announcement = (
                     "🏹 Hunting trip open! Every 10 minutes.\n"
-                    "🐉 Dragon spotted — first Shot catches it for 1,000,000 points."
+                    "🐉 Dragon spotted — first Shot catches it for 1,000,000 points.\n"
+                    "👑 Royal round: Arrow catches the Royal Dragon for 2B; Diamond catches the Royal Diamond for 4B."
                 )
             else:
                 announcement = (
                     "🏹 بدأت رحلة الصيد! كل 10 دقائق.\n"
-                    "🐉 التنين موجود — أول من يرسل شوت أو Shot يصيده ويحصل على مليون نقطة."
+                    "🐉 التنين موجود — أول من يرسل شوت أو Shot يصيده ويحصل على مليون نقطة.\n"
+                    "👑 الجولة الملكية: أرسل سهم للتنين الملكي أو الماسه للألماسة الملكية."
                 )
             try:
                 self.send_room_text(target_room, announcement)
