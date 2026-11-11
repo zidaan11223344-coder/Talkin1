@@ -31003,6 +31003,8 @@ class TalkinBot:
         """Queue royal Explore broadcasts while preserving local preview behavior."""
         mode_match = re.match(r"^(aax2|ax2|ax1|aax|ax)@", str(command or "").strip(), re.I)
         mode = mode_match.group(1).casefold() if mode_match else ""
+        if not mode:
+            return False
         # Existing ax/aax2 previews remain synchronous for compatibility; only
         # all-room royal publication is moved off the receive loop.
         if mode in {"ax", "aax2"}:
