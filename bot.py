@@ -3341,7 +3341,7 @@ def _looks_like_bot_command(text):
         "mas@", "umas@", "vipmas@", "unvipmas@", "-vipmas@", "l@vipmas", "ربح@", "سحب ربح@", "-ربح@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "l@vipmas", "vipmas@", "unvipmas@", "-vipmas@", "ربح@", "سحب ربح@", "-ربح@", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "توب المراهنين", "توب رهان", "كمين", "الكمين", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "سدد سلفتي", "سدد سلفه", "سدد@", "نسبة مزاد", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", "my picture", "my photo", "picture me", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", "my picture", "my photo", "picture me", "سهم", "arrow", "الماسه", "diamond", "sell@", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
         ".دخول غرفي", "دخول غرفي", "دخولغرفي", "my rooms", "start verification", "stop verification", "تشغيل التوثيق", "إيقاف التوثيق", "ايقاف التوثيق",
     )
     prefixes = prefixes + (
@@ -9631,26 +9631,35 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
 
 
 def _optimize_social_media_asset(path):
-    """Create a lightweight copy for fast room opening while preserving the source."""
+    """Create a fast copy capped near 100 KiB while preserving animation."""
     if not PIL_AVAILABLE or not path:
         return Path(path) if path else path
     source = Path(path)
     if not source.is_file():
         return source
+    limit = 100 * 1024
     try:
         with Image.open(source) as image:
-            max_side = 640 if source.suffix.casefold() == ".gif" else 720
+            is_gif = source.suffix.casefold() == ".gif"
+            max_side = 480 if is_gif else 640
             scale = min(1.0, max_side / max(image.width, image.height))
             target_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
-            output = BASE_DIR / "generated_publish" / f"light_{source.stem}{source.suffix.casefold()}"
-            if source.suffix.casefold() in {".jpg", ".jpeg"}:
+            output_ext = ".gif" if is_gif else ".jpg"
+            output = BASE_DIR / "generated_publish" / f"light_{source.stem}{output_ext}"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if source.suffix.casefold() in {".jpg", ".jpeg", ".png"}:
                 frame = image.convert("RGB")
                 if scale < 1.0:
                     frame = frame.resize(target_size, Image.Resampling.LANCZOS)
-                frame.save(output, "JPEG", quality=78, optimize=True, progressive=True)
-            elif source.suffix.casefold() == ".gif":
+                # Quality is stepped down only as needed; ordinary cards remain sharper.
+                for quality in (78, 68, 58, 48, 38, 30):
+                    frame.save(output, "JPEG", quality=quality, optimize=True, progressive=True)
+                    if output.stat().st_size <= limit:
+                        break
+                return output if output.is_file() else source
+            if is_gif:
                 total = max(1, int(getattr(image, "n_frames", 1)))
-                count = min(total, 8)
+                count = min(total, 5)
                 indexes = [min(total - 1, round(i * (total - 1) / max(1, count - 1))) for i in range(count)]
                 frames = []
                 for index in indexes:
@@ -9658,12 +9667,14 @@ def _optimize_social_media_asset(path):
                     frame = image.convert("RGB")
                     if scale < 1.0:
                         frame = frame.resize(target_size, Image.Resampling.LANCZOS)
-                    frames.append(frame.quantize(colors=64, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
-                frames[0].save(output, "GIF", save_all=True, append_images=frames[1:],
-                               duration=170, loop=0, optimize=True, disposal=2)
-            else:
-                return source
-        return output if output.is_file() else source
+                    frames.append(frame.quantize(colors=48, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
+                frames[0].save(output, "GIF", save_all=True, append_images=frames[1:], duration=190, loop=0, optimize=True, disposal=2)
+                # Very detailed GIFs get one final compact pass.
+                if output.stat().st_size > limit and count > 3:
+                    frames = frames[::2][:3]
+                    frames[0].save(output, "GIF", save_all=True, append_images=frames[1:], duration=220, loop=0, optimize=True, disposal=2)
+                return output if output.is_file() else source
+            return source
     except Exception:
         return source
 
@@ -20901,8 +20912,8 @@ class TalkinBot:
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()}, key=str.casefold)
         def announce(target):
             text = ("👑 بدأت الجولة الملكية — متاحة 3 دقائق!\n"
-                    "🐉 التنين الملكي: اكتب «صيد التنين الملكي» أو «سهم ملكي» — الجائزة 2 مليار.\n"
-                    "💎 الألماسة الملكية: اكتب «صيد الماسه» أو «الماسه» — الجائزة 4 مليار.")
+                    "🐉 التنين الملكي: اكتب «سهم» أو «arrow» — الجائزة 2 مليار.\n"
+                    "💎 الألماسة الملكية: اكتب «الماسه» أو «diamond» — الجائزة 4 مليار.")
             try: self.send_room_text(target, text)
             except Exception as exc: self.log("[ROYAL-HUNT] announce failed:", target, repr(exc))
         if rooms:
@@ -20926,9 +20937,9 @@ class TalkinBot:
             lines = [f"{i}. @{name} — 💎 {diamond} | 🐉 {dragon}" for i,(diamond,dragon,name) in enumerate(rows, 1)]
             self.send_room_text(room, "🏆 توب الألماسة والتنين الملكي\n" + ("\n".join(lines) if lines else "لا توجد نتائج بعد."))
             return True
-        sell = re.fullmatch(r"بيع@(ملكي|ملكيه|الملكيه|الملكي|تنين ملكي|الماسه)@([0-9]+)", text)
+        sell = re.fullmatch(r"(?:بيع|sell)@(ملكي|ملكيه|الملكيه|الملكي|تنين ملكي|الماسه|royal|dragon|diamond)@([0-9]+)", text)
         if sell:
-            label, amount = sell.group(1), int(sell.group(2)); is_diamond = "ماس" in label
+            label, amount = sell.group(1), int(sell.group(2)); is_diamond = ("ماس" in label or label == "diamond")
             result = self._royal_hunt.sell(sender, sender, "royal_diamond" if is_diamond else "royal_dragon", amount)
             if not result.get("ok"):
                 self.send_room_text(room, "❌ لا تملك الكمية المطلوبة للبيع.")
@@ -20937,9 +20948,14 @@ class TalkinBot:
                 item = "الألماسة الملكية" if is_diamond else "التنين الملكي"
                 self.send_room_text(room, f"✅ تم بيع {result['sold']} من {item} مقابل +{_fmt_points(result['value'])} نقطة.")
             return True
-        if text in {"صيد التنين الملكي", "صيد تنين ملكي", "سهم ملكي", "سهم التنين الملكي", "royal dragon hunt", "hunt royal dragon"}:
-            return self._royal_hunt_claim(room, sender, "royal_dragon")
-        if text in {"صيد الماسه", "صيد الماس", "الماسه", "الماس الملكي", "royal diamond hunt", "hunt royal diamond"}:
+        if text in {"سهم", "arrow", "صيد التنين الملكي", "صيد تنين ملكي", "سهم ملكي", "سهم التنين الملكي", "royal dragon hunt", "hunt royal dragon"}:
+            # Arrow alternates with the ordinary dragon: when a royal round is
+            # open it claims the royal dragon; otherwise it keeps old Shot-like behavior.
+            event = getattr(self, "_royal_hunt_event", None)
+            if isinstance(event, dict) and time.time() < float(event.get("ends_at", 0) or 0):
+                return self._royal_hunt_claim(room, sender, "royal_dragon")
+            return self._fishing_shoot(room, sender)
+        if text in {"الماسه", "diamond", "صيد الماسه", "صيد الماس", "الماس الملكي", "royal diamond hunt", "hunt royal diamond"}:
             return self._royal_hunt_claim(room, sender, "royal_diamond")
         return False
 
@@ -20959,7 +20975,8 @@ class TalkinBot:
         value = ROYAL_DRAGON_VALUE if item == "royal_dragon" else ROYAL_DIAMOND_VALUE
         _add_points(sender, value, repay_loan=True)
         base = _public_base_url(); asset = "royal_dragon_winner_3d.jpg" if item == "royal_dragon" else "royal_diamond_winner_3d.jpg"
-        media = f"{base}/assets/treasures/{asset}" if base else ""
+        optimized = _optimize_social_media_asset(ASSETS_DIR / "treasures" / asset)
+        media = f"{base}/publish/{quote(Path(optimized).name)}" if base and optimized else ""
         label = "التنين الملكي 🐉" if item == "royal_dragon" else "الألماسة الملكية 💎"
         message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة"
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()} | {str(room).strip()})
@@ -25534,7 +25551,7 @@ class TalkinBot:
                     "🎮 Games — wagers\n━━━━━━━━━━━━\nbet@amount — wager | duel@amount — duel\nmyluck@amount — luck wager\ninvestment@amount — investment game\nChoose the stake after the game command.",
                     "🎮 Games — bank and rewards\n━━━━━━━━━━━━\nbank million — million bank | billion — billion game\nfarm@item — plant a crop | stock — choose a market\nface@name — face game\nType ns for the next games list.",
                     "🎲 Room games — Ludo and Snake & Ladders\n━━━━━━━━━━━━\nludo — start Ludo; choose 1–4 players\n1 = play against the bot; 2–4 = multiplayer\nOther players type join. When the game starts, the player whose turn it is types rool to roll the die and move. First token to the finish wins.\nsnake — start Snake & Ladders; type join to enter.\nType ns for the next games list.",
-                    "🎮 More games\n━━━━━━━━━━━━\nmarriage, challenge, riddle, mood, horse, entertainment\nstock/market, steal@name, lookalike@name\nhunt a beauty / hunt a man — random member with a generic stock photo\nmy ex / khul / divorce — playful room-court games\nShot — one shot every 2 minutes; each ordinary animal pays 5,000 points. The first shot after a trip announcement catches the 1,000,000-point dragon.\nlightning, ruby, crash, detector\nType ns for the next games list.",
+                    "🎮 More games\n━━━━━━━━━━━━\nmarriage, challenge, riddle, mood, horse, entertainment\nstock/market, steal@name, lookalike@name\nhunt a beauty / hunt a man — random member with a generic stock photo\nmy ex / khul / divorce — playful room-court games\nShot / شوت — ordinary dragon and animal hunt; arrow / سهم claims the royal dragon when its round is open. The first shot after a trip announcement catches the 1,000,000-point dragon.\nlightning, ruby, crash, detector\nType ns for the next games list.",
                     "🏏 Cricket\n━━━━━━━━━━━━\nMaster: start cricket game / stop cricket game.\nVerified players: .cr 1, choose 1–4 players, then each player types join. Choose 1 (bat) or 2 (defend), then send a score from 0 to 6 for each ball.\nType ns to return to the first game list.",
                 ],
                 4: [
