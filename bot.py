@@ -20914,7 +20914,7 @@ class TalkinBot:
             draw = ImageDraw.Draw(panel)
             width, height = card.size
             left, top, right, bottom = 42, max(0, height - 142), width - 42, height - 24
-            draw.rounded_rectangle((left, top, right, bottom), radius=28, fill=(8, 10, 22, 225), outline=(255, 211, 112, 235), width=3)
+            draw.rounded_rectangle((left, top, right, bottom), radius=28, fill=(145, 8, 18, 230), outline=(255, 92, 92, 245), width=3)
             avatar = None
             if avatar_url:
                 try:
@@ -20932,7 +20932,7 @@ class TalkinBot:
                 ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
                 card.paste(avatar, (left + 22, top + 26), mask)
                 draw = ImageDraw.Draw(panel)
-                draw.ellipse((left + 22, top + 26, left + 22 + size, top + 26 + size), outline=(255, 226, 148, 255), width=3)
+                draw.ellipse((left + 22, top + 26, left + 22 + size, top + 26 + size), outline=(255, 220, 220, 255), width=3)
                 text_x = left + 132
             else:
                 text_x = left + 28
@@ -20941,7 +20941,7 @@ class TalkinBot:
             font = ImageFont.truetype(str(font_path), 34) if font_path else ImageFont.load_default()
             name = str(username or "").strip().lstrip("@")[:32]
             label = f"الفائز: @{name}"
-            draw.text((text_x, top + 46), label, fill=(255, 244, 204, 255), font=font, stroke_width=1, stroke_fill=(0, 0, 0, 180))
+            draw.text((text_x, top + 46), label, fill=(255, 255, 255, 255), font=font, stroke_width=1, stroke_fill=(0, 0, 0, 180))
             card.alpha_composite(panel)
             out = BASE_DIR / "generated_publish" / f"royal_winner_{item}_{uuid.uuid4().hex}.jpg"
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -21013,7 +21013,7 @@ class TalkinBot:
             return True
         sell = re.fullmatch(r"(?:بيع|sell)@(ملكي|ملكيه|الملكيه|الملكي|تنين ملكي|الماسه|royal|dragon|diamond)@([0-9]+)", text)
         if sell:
-            label, amount = sell.group(1), int(sell.group(2)); is_diamond = ("ماس" in label or label == "diamond")
+            label, amount = sell.group(1), int(sell.group(2)); is_diamond = ("ماس" in label or label in {"ملكيه", "الملكيه", "diamond"})
             result = self._royal_hunt.sell(sender, sender, "royal_diamond" if is_diamond else "royal_dragon", amount)
             if not result.get("ok"):
                 self.send_room_text(room, "❌ لا تملك الكمية المطلوبة للبيع.")
@@ -21034,15 +21034,18 @@ class TalkinBot:
         with self._royal_hunt_lock:
             event = self._royal_hunt_event
             if not isinstance(event, dict) or now >= float(event.get("ends_at", 0) or 0):
-                self.send_room_text(room, "⏳ لا توجد جولة ملكية مفتوحة الآن؛ انتظر الإعلان القادم كل 6 دقائق.")
+                target = "التنين الملكي" if item == "royal_dragon" else "الألماسة الملكية"
+                self.send_room_text(room, f"❌ لم تعثر على {target}؛ لا توجد جولة معلنة الآن.")
                 return True
             field = "dragon" if item == "royal_dragon" else "diamond"
             if event.get("kind") != item:
                 current = "التنين الملكي" if event.get("kind") == "royal_dragon" else "الألماسة الملكية"
-                self.send_room_text(room, f"⏳ الجولة الحالية مخصصة لـ {current} فقط.")
+                target = "التنين الملكي" if item == "royal_dragon" else "الألماسة الملكية"
+                self.send_room_text(room, f"❌ لم تعثر على {target}؛ الجولة الحالية مخصصة لـ {current}.")
                 return True
             if event.get("winner"):
-                self.send_room_text(room, "⚠️ تم اصطياد هذه الجائزة في الجولة الحالية.")
+                target = "التنين الملكي" if item == "royal_dragon" else "الألماسة الملكية"
+                self.send_room_text(room, f"🏹 رميت {'سهمًا' if item == 'royal_dragon' else 'الماسة'} ولم تعثر على {target}." )
                 return True
             event["winner"] = str(sender)
         self._royal_hunt.add(sender, sender, item, room)
@@ -21054,7 +21057,8 @@ class TalkinBot:
         winner_card = self._render_royal_winner_card(item, sender, avatar_url)
         optimized = _optimize_social_media_asset(winner_card) if winner_card else None
         media = f"{base}/publish/{quote(Path(optimized).name)}" if base and optimized else ""
-        message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة\n📷 الاسم والصورة داخل بطاقة الفوز."
+        verb = "اصطاد" if item == "royal_dragon" else "اصطاد"
+        message = f"🏆 @{str(sender).lstrip('@')} {verb} {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة\n📷 اسم الفائز وصورته داخل بطاقة الفوز."
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()} | {str(room).strip()})
         def deliver(target):
             try:
@@ -31384,10 +31388,6 @@ class TalkinBot:
             if _norm_user(username) in {_norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID)}:
                 self._handle_unconfirmed_bot_user_left(room)
                 reason_raw = str(event.get("reason", "") or event.get(31, "") or event.get("status", ""))
-                self._send_master_room_departure_notice(
-                    room, "user_left", reason=reason_raw,
-                    actor=str(event.get(22, "") or event.get("actor", "") or ""),
-                )
                 reason = reason_raw.casefold()
                 explicit_removal = any(token in reason for token in ("kick", "remove", "ban", "طرد", "إزالة", "حظر"))
                 bot_is_target = _norm_user(event_user_17) in {
@@ -31406,6 +31406,10 @@ class TalkinBot:
                 # issued by the bot against someone else.
                 if (not intentional and (explicit_removal or
                         (bot_is_target and actor_is_other_account))):
+                    pending_notices = getattr(self, "_pending_kick_notices", None)
+                    if not isinstance(pending_notices, set):
+                        pending_notices = self._pending_kick_notices = set()
+                    pending_notices.add(_norm_room(room))
                     self.log(f"[KICK_DETECTED] bot left as removed target from {room}; rejoining automatically...")
                     self._schedule_auto_rejoin(room)
             else:
@@ -31509,6 +31513,10 @@ class TalkinBot:
                         }
                         intentional = _norm_room(room) in getattr(self, "_intentional_leaves", set())
                         if changed_role in ("kicked", "outcast") and was_in_room and not intentional:
+                            pending_notices = getattr(self, "_pending_kick_notices", None)
+                            if not isinstance(pending_notices, set):
+                                pending_notices = self._pending_kick_notices = set()
+                            pending_notices.add(_norm_room(room))
                             self.log(f"[KICK_DETECTED] Bot was removed from {room}; rejoining automatically...")
                             self._schedule_auto_rejoin(room)
                         elif intentional:
@@ -31587,6 +31595,15 @@ class TalkinBot:
                 getattr(self, "_recent_bot_room_departures", {}).pop(room_key, None)
                 getattr(self, "_intentional_leaves", set()).discard(room_key)
             self.last_joined_room = room
+            kick_notices = getattr(self, "_pending_kick_notices", set())
+            if room and _norm_room(room) in kick_notices:
+                kick_notices.discard(_norm_room(room))
+                master = str(BOT_MASTER or "").strip().lstrip("@")
+                if master:
+                    try:
+                        self.send_private_text(master, f"✅ تم طرد البوت فعليًا من الغرفة: {room}\n✅ عاد البوت إلى الغرفة بنجاح.")
+                    except Exception as exc:
+                        self.log("[ROOM] kick return notice failed:", repr(exc))
             rnorm = _norm_room(room)
             waiting_ack = getattr(self, "_auto_rejoin_waiting_ack", None)
             if waiting_ack is not None:
