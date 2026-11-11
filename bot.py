@@ -54,6 +54,7 @@ from auction_game import AuctionGame, BIDDING_DURATION_SECONDS, TURN_TIMEOUT_SEC
 from cricket_integration import CricketIntegration
 import shop as member_shop
 from treasure_mining import DIAMOND_KEYS, ITEMS as MINING_ITEMS, MiningStore, format_cooldown, resolve_item_keys
+from royal_hunt import RoyalHuntStore, ROYAL_DRAGON_VALUE, ROYAL_DIAMOND_VALUE
 # Environment priority: platform variables, then the project's .env, then
 # non-empty defaults from .env.example. This lets deployment-specific paths win.
 _ENV_BASE_DIR = Path(__file__).resolve().parent
@@ -1081,6 +1082,7 @@ WAGER_STATE_FILE = DATA_DIR / "wager_state.json"
 WAGER_ADMIN_RULES_FILE = DATA_DIR / "wager_admin_rules.json"
 _WAGER_ADMIN_RULES_LOCK = threading.RLock()
 DRAGON_HUNTERS_FILE = DATA_DIR / "dragon_hunters.json"
+ROYAL_HUNT_FILE = DATA_DIR / "royal_hunt.json"
 PAYROLL_FILE = DATA_DIR / "payroll.json"
 PAYROLL_COOLDOWN_SECONDS = max(60.0, float(os.getenv("PAYROLL_COOLDOWN_SECONDS", "600") or 600))
 PAYROLL_JOBS = (
@@ -3339,7 +3341,7 @@ def _looks_like_bot_command(text):
         "mas@", "umas@", "vipmas@", "unvipmas@", "-vipmas@", "l@vipmas", "ربح@", "سحب ربح@", "-ربح@", "umas@", "mvip@", "umvip@", "l@mvip", "l@mas", "l@vipmas", "vipmas@", "unvipmas@", "-vipmas@", "ربح@", "سحب ربح@", "-ربح@", "sb@", "ts@", "i@", "inv", "دعوات", "دعوه ", "دعوة ", "invite", "رساله ", "mvip@", "umvip@", "l@mvip", "l@mas", "خروج",
         "say ", "قل ", "دخول@", "join@", "play ", "music ", "song ", "post@", "publish@", "protection", "enable protection", "disable protection", "رساله ", "تحويل للكل@", "خاص@", "رسالة@", "رساله خاص@", "broadcast@", "رسالهغرف@", "رسالةغرف@", "رساله غرفه@", "رسالة غرفه@", "مشاركه ", "مشاركة ", ".تشغيل ", "بث ", "help", "a1", "a2", "a3", "a4", "a5", "a6", "ns", "التالي", "القائمة التالية", "next", "اوامر", "المسترات", "نقاطي", "نقاط ", "points", "points ", "توب", "توب المراهنين", "توب رهان", "كمين", "الكمين", "top", "ملياري", "مليارات", "مليوني", "ملايين", "هدايا", "gifts", "gv", "sher@", "فتح المليون", "غلق المليون", "فتح مليار", "غلق مليار", "فتح المليار", "غلق المليار", "فحص صورة المليار", "فحص صوره المليار", "فحص_صورة_المليار",
         "العاب", "ألعاب", "لعب", "تسليه", "تسلية", "زواج", "زوجه", "تحدي", "لغز", "مزاج", "حظ", "حظ يا نصيب", "نرد", "بورصه", "بورصة", "بورصتي", "my stock history", "my stock market", "سلفني", "سدد سلفتي", "سدد سلفه", "سدد@", "نسبة مزاد", "loan", "محفظة", "محفظه", "محفظتي", "wallet", "portfolio", "my wallet", "بنك", "تخمين", "سؤال", "حجر", "ورق", "مقص", "مليار", "بنك مليون", "ثعبان", "snake", "سناكي", "لودو", "ludo", "انضمام", "join", "rool", "roll", "مراهنة@", "مراهنه@", "رهان@", "مضاربة@", "استثمار@", "حظي@", "زرع", "حصانه", "حصانة", "عملة", "عجلة", "صندوق", "كوب", "كأس", "طاولة", "اونو", "وحش", "بركان", "طائر", "نجم", "حصانة", "فيس", "سنارة", "سناره", "برق", "ياقوت", "صدام", "كاشف", "اسرق", "بوست", "انشر", "تشغيل الحماية", "تشغيل الحمايه", "إيقاف الحماية", "ايقاف الحماية", "mr@", "mbp@",
-        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
+        "+sr@", "sr@", "swc", "خاص@", "رسالة@", "broadcast@", "mf@", "+mf@", "-mf@", "l@mf", "l@sr", "l@mbp", "l@a", "l@m", "l@o", "l@b", "is@", "mbp@", "clear@mf", "دخول الكل", "دخولكل", "اضف لملف الغرف", "أضف لملف الغرف", "تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات", "تشغيل الالعاب", "تشغيل الألعاب", "ايقاف الالعاب", "إيقاف الالعاب", "ايقاف الألعاب", "إيقاف الألعاب", "s@", "صورتي", "صورتك", "my picture", "my photo", "picture me", ".صوره", ".صوره@", "شبيه@", "شبيه ", "شبيهك@", "شبيهك ",
         ".دخول غرفي", "دخول غرفي", "دخولغرفي", "my rooms", "start verification", "stop verification", "تشغيل التوثيق", "إيقاف التوثيق", "ايقاف التوثيق",
     )
     prefixes = prefixes + (
@@ -9009,11 +9011,11 @@ def render_user_3d_portrait_gif(photo_url, username, variant=0):
 
     variant = int(variant or 0) % 5
     palettes = (
-        ((4, 9, 30), (17, 27, 72), (75, 220, 255), (249, 190, 91)),
-        ((22, 5, 32), (74, 12, 74), (255, 101, 188), (255, 211, 112)),
-        ((4, 25, 24), (10, 74, 70), (75, 245, 203), (255, 215, 122)),
-        ((26, 13, 4), (86, 34, 8), (255, 154, 66), (255, 226, 148)),
-        ((8, 8, 22), (35, 16, 78), (165, 116, 255), (255, 210, 103)),
+        ((3, 5, 14), (32, 20, 8), (255, 190, 64), (255, 239, 177)),       # black gold
+        ((3, 15, 38), (10, 55, 102), (67, 180, 255), (216, 239, 255)),     # sapphire
+        ((2, 23, 20), (8, 83, 66), (49, 224, 170), (226, 255, 190)),       # emerald
+        ((24, 10, 4), (104, 39, 8), (191, 103, 35), (255, 226, 157)),      # bronze coffee
+        ((22, 4, 30), (74, 12, 70), (193, 107, 255), (255, 218, 133)),     # amethyst
     )
     accent, gold = palettes[variant][2], palettes[variant][3]
     # Deep 3D background with a colored halo behind the medallion.
@@ -9057,10 +9059,32 @@ def render_user_3d_portrait_gif(photo_url, username, variant=0):
         # Positive angular progression makes the portrait turn right/clockwise.
         speed = (1.0, 1.35, 0.82, 1.7, 1.12)[variant]
         angle = 2 * math.pi * frame_no / frame_count * speed
-        perspective = max(0.055, abs(math.cos(angle)))
+        # Every template has its own motion language, not only a new palette.
+        if variant == 0:  # slow royal coin rotation
+            perspective = max(0.055, abs(math.cos(angle)))
+            tilt = 0.0
+            y_offset = 0
+        elif variant == 1:  # sapphire lift and diagonal tilt
+            perspective = 0.82 + 0.16 * math.cos(angle)
+            tilt = 5.5 * math.sin(angle)
+            y_offset = int(20 * math.sin(angle))
+        elif variant == 2:  # emerald breathing / zoom pulse
+            perspective = 0.86 + 0.12 * math.sin(angle * 2.0)
+            tilt = 1.8 * math.sin(angle * 2.0)
+            y_offset = int(10 * math.cos(angle * 2.0))
+        elif variant == 3:  # bronze orbit with faster side sweep
+            perspective = 0.68 + 0.28 * abs(math.sin(angle))
+            tilt = 9.0 * math.sin(angle)
+            y_offset = int(26 * math.cos(angle))
+        else:  # amethyst snap rotation and shimmer
+            perspective = 0.72 + 0.22 * abs(math.cos(angle * 1.5))
+            tilt = -7.0 * math.sin(angle * 1.5)
+            y_offset = int(16 * math.sin(angle * 1.5))
         face_w = max(28, int(diameter * perspective))
         face = avatar.transpose(Image.Transpose.FLIP_LEFT_RIGHT) if math.cos(angle) < 0 else avatar
         face = face.resize((face_w, diameter), Image.Resampling.LANCZOS)
+        if tilt:
+            face = face.rotate(tilt, resample=Image.Resampling.BICUBIC, expand=True)
         face_mask = Image.new("L", (face_w, diameter), 0)
         ImageDraw.Draw(face_mask).ellipse((1, 1, face_w-2, diameter-2), fill=255)
         face.putalpha(face_mask)
@@ -9082,7 +9106,7 @@ def render_user_3d_portrait_gif(photo_url, username, variant=0):
         d.ellipse((center_x-half_w, center_y-diameter//2-12,
                    center_x+half_w, center_y+diameter//2+12),
                   fill=(3, 8, 28, 255), outline=(*gold, 250), width=6)
-        frame.alpha_composite(face, (center_x-face_w//2, center_y-diameter//2))
+        frame.alpha_composite(face, (center_x-face.width//2, center_y-diameter//2 + y_offset))
 
         # A bright jewel travels clockwise around the medallion rim.
         bead_x = int(center_x + 292 * math.cos(angle - math.pi/2))
@@ -9340,6 +9364,21 @@ def render_explore_premium_card(text, username, photo_url="", language="ar", var
     for i in range(46):
         x=(i*191+83)%940+70; y=(i*239+51)%1360+70; r=2+(i%3)
         draw.ellipse((x-r,y-r,x+r,y+r), fill=(*gold_accent,110+(i%4)*28))
+    # Each royal skin also has a different frame language.
+    if variant == 0:
+        draw.arc((130, 250, 950, 1070), 205, 335, fill=(*gold_accent, 180), width=8)
+    elif variant == 1:
+        for x in range(90, 1000, 90):
+            draw.line((x, 260, x + 180, 900), fill=(*blue_accent, 42), width=5)
+    elif variant == 2:
+        for radius in (310, 350, 390):
+            draw.ellipse((540-radius, 450-radius, 540+radius, 450+radius),
+                         outline=(*blue_accent, 48), width=4)
+    else:
+        for angle in range(0, 360, 30):
+            rad = math.radians(angle)
+            draw.line((540, 450, 540 + int(470*math.cos(rad)), 450 + int(470*math.sin(rad))),
+                      fill=(*gold_accent, 34), width=4)
 
     # Header branding.
     header_font = None
@@ -9485,6 +9524,29 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
         )
         for i in range(frame_count):
             phase = 2 * math.pi * i / frame_count
+            motion_variant = int(variant or 0) % 4
+            # Royal templates deliberately use four different motion systems:
+            # orbit, vertical levitation, breathing zoom, and diagonal drift.
+            if motion_variant == 0:
+                motion_x = 13 * math.sin(phase)
+                motion_y = 10 * math.cos(phase)
+                main_scale = 0.92 + 0.08 * math.cos(phase)
+                main_tilt = 3.5 * math.sin(phase)
+            elif motion_variant == 1:
+                motion_x = 24 * math.sin(phase * 1.5)
+                motion_y = 34 * math.sin(phase)
+                main_scale = 0.91 + 0.06 * math.sin(phase * 2)
+                main_tilt = -5.0 * math.sin(phase * 1.5)
+            elif motion_variant == 2:
+                motion_x = 7 * math.cos(phase * 2)
+                motion_y = 12 * math.sin(phase * 2)
+                main_scale = 0.86 + 0.13 * (0.5 + 0.5 * math.sin(phase * 2))
+                main_tilt = 1.8 * math.sin(phase * 2)
+            else:
+                motion_x = 42 * math.cos(phase)
+                motion_y = 20 * math.sin(phase * 1.3)
+                main_scale = 0.90 + 0.06 * math.cos(phase * 1.3)
+                main_tilt = 8.0 * math.sin(phase)
             # Type the submitted text progressively, then hold the complete line
             # for the last frames so GIF clients visibly show the writing effect.
             visible_chars = min(len(raw_text), max(0, int(len(raw_text) * (i + 1) / 10)))
@@ -9520,15 +9582,16 @@ def render_explore_premium_animated_card(text, username, photo_url="", language=
                 overlay.alpha_composite(mini, (x, y))
 
             # Floating main portrait: horizontal perspective plus a small clockwise tilt.
-            perspective = max(0.68, 0.92 + 0.18 * math.cos(phase))
+            perspective = max(0.62, main_scale)
             main_w = int(main_d * perspective)
-            main = avatar.resize((main_w, main_d), Image.Resampling.LANCZOS)
-            main = main.rotate(3.5 * math.sin(phase), resample=Image.Resampling.BICUBIC, expand=True)
+            main_h = int(main_d * (0.98 + 0.02 * math.cos(phase)))
+            main = avatar.resize((main_w, main_h), Image.Resampling.LANCZOS)
+            main = main.rotate(main_tilt, resample=Image.Resampling.BICUBIC, expand=True)
             main_mask = Image.new("L", main.size, 0)
             ImageDraw.Draw(main_mask).ellipse((4, 4, main.width - 5, main.height - 5), fill=255)
             main.putalpha(main_mask)
-            float_x = int(main_cx - main.width / 2 + 13 * math.sin(phase))
-            float_y = int(main_cy - main.height / 2 + 10 * math.cos(phase * 1.2))
+            float_x = int(main_cx - main.width / 2 + motion_x)
+            float_y = int(main_cy - main.height / 2 + motion_y)
             # Animated glow and metallic rings sit behind the moving portrait.
             pulse = int(105 + 65 * (0.5 + 0.5 * math.sin(phase)))
             od.ellipse((float_x - 19, float_y - 19, float_x + main.width + 19, float_y + main.height + 19),
@@ -10745,6 +10808,10 @@ class TalkinBot:
         self._stock_market_seen = set()
         self._stock_market_user_cooldowns = {}
         self._dragon_hunters_lock = threading.RLock()
+        self._royal_hunt = RoyalHuntStore(ROYAL_HUNT_FILE)
+        self._royal_hunt_lock = threading.RLock()
+        self._royal_hunt_event = None
+        self._royal_hunt_round_seq = 0
         saved_dragon_hunters = _load_local_json(DRAGON_HUNTERS_FILE, {})
         saved_hunters = saved_dragon_hunters.get("hunters", {}) if isinstance(saved_dragon_hunters, dict) else {}
         self.dragon_hunters = {
@@ -10808,6 +10875,7 @@ class TalkinBot:
         self._mining_cooldown_lock = threading.RLock()
         self._mining_last_dig = {}
         threading.Thread(target=self._rare_diamond_event_worker, name="rare-diamond-worker", daemon=True).start()
+        threading.Thread(target=self._royal_hunt_event_worker, name="royal-hunt-worker", daemon=True).start()
         self.invite_message_template = _message_template("invite", "default", "يوجد معجب مخفي في {room}")
 
     def _load_social_features(self):
@@ -20818,6 +20886,93 @@ class TalkinBot:
             self.send_room_text(room, tr("⚠️ تعذر إكمال عملية الراتب؛ لم أؤكد الصرف. حاول مرة أخرى بعد قليل.", "⚠️ Salary processing failed; payment was not confirmed. Please retry shortly."))
             return True
 
+    def _royal_hunt_event_worker(self):
+        while not self.stop_event.wait(480.0):
+            try:
+                self._start_royal_hunt_event()
+            except Exception as exc:
+                self.log("[ROYAL-HUNT] scheduler failed:", repr(exc))
+
+    def _start_royal_hunt_event(self):
+        now = time.time()
+        with self._royal_hunt_lock:
+            self._royal_hunt_round_seq += 1
+            self._royal_hunt_event = {"id": self._royal_hunt_round_seq, "ends_at": now + 180.0, "dragon": "", "diamond": ""}
+        rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()}, key=str.casefold)
+        def announce(target):
+            text = ("👑 بدأت الجولة الملكية — متاحة 3 دقائق!\n"
+                    "🐉 التنين الملكي: اكتب «صيد التنين الملكي» أو «سهم ملكي» — الجائزة 2 مليار.\n"
+                    "💎 الألماسة الملكية: اكتب «صيد الماسه» أو «الماسه» — الجائزة 4 مليار.")
+            try: self.send_room_text(target, text)
+            except Exception as exc: self.log("[ROYAL-HUNT] announce failed:", target, repr(exc))
+        if rooms:
+            with ThreadPoolExecutor(max_workers=min(16, len(rooms)), thread_name_prefix="royal-open") as pool:
+                list(pool.map(announce, rooms))
+
+    def _royal_hunt_command(self, room, sender, raw):
+        text = " ".join(str(raw or "").strip().casefold().replace("أ", "ا").replace("إ", "ا").split()).replace("ة", "ه")
+        if text in {"صيدي", "صيدى", "my hunt"}:
+            inv = self._royal_hunt.inventory(sender, sender)
+            animals = inv.get("animals", {}) if isinstance(inv.get("animals"), dict) else {}
+            shown = ", ".join(f"{k} ×{v}" for k,v in animals.items()) if animals else "لا يوجد"
+            self.send_room_text(room, f"🏹 صيد @{str(sender).lstrip('@')}\n🐉 تنانين ملكية: {int(inv.get('dragon', 0) or 0)}\n💎 ألماسات ملكية: {int(inv.get('diamond', 0) or 0)}\n🐾 الحيوانات: {shown}")
+            return True
+        if text in {"ماستي", "ماسهتي", "my royal diamond"}:
+            inv = self._royal_hunt.inventory(sender, sender)
+            self.send_room_text(room, f"💎 لديك {int(inv.get('diamond', 0) or 0)} ألماسة ملكية فاخرة — قيمة الواحدة {_fmt_points(ROYAL_DIAMOND_VALUE)} نقطة.")
+            return True
+        if text in {"الماسي", "الماسي", "top royal", "royal top"}:
+            rows = self._royal_hunt.top(10)
+            lines = [f"{i}. @{name} — 💎 {diamond} | 🐉 {dragon}" for i,(diamond,dragon,name) in enumerate(rows, 1)]
+            self.send_room_text(room, "🏆 توب الألماسة والتنين الملكي\n" + ("\n".join(lines) if lines else "لا توجد نتائج بعد."))
+            return True
+        sell = re.fullmatch(r"بيع@(ملكي|ملكيه|الملكيه|الملكي|تنين ملكي|الماسه)@([0-9]+)", text)
+        if sell:
+            label, amount = sell.group(1), int(sell.group(2)); is_diamond = "ماس" in label
+            result = self._royal_hunt.sell(sender, sender, "royal_diamond" if is_diamond else "royal_dragon", amount)
+            if not result.get("ok"):
+                self.send_room_text(room, "❌ لا تملك الكمية المطلوبة للبيع.")
+            else:
+                _add_points(sender, result["value"], repay_loan=True)
+                item = "الألماسة الملكية" if is_diamond else "التنين الملكي"
+                self.send_room_text(room, f"✅ تم بيع {result['sold']} من {item} مقابل +{_fmt_points(result['value'])} نقطة.")
+            return True
+        if text in {"صيد التنين الملكي", "صيد تنين ملكي", "سهم ملكي", "سهم التنين الملكي", "royal dragon hunt", "hunt royal dragon"}:
+            return self._royal_hunt_claim(room, sender, "royal_dragon")
+        if text in {"صيد الماسه", "صيد الماس", "الماسه", "الماس الملكي", "royal diamond hunt", "hunt royal diamond"}:
+            return self._royal_hunt_claim(room, sender, "royal_diamond")
+        return False
+
+    def _royal_hunt_claim(self, room, sender, item):
+        now = time.time()
+        with self._royal_hunt_lock:
+            event = self._royal_hunt_event
+            if not isinstance(event, dict) or now >= float(event.get("ends_at", 0) or 0):
+                self.send_room_text(room, "⏳ لا توجد جولة ملكية مفتوحة الآن؛ انتظر الإعلان القادم كل 8 دقائق.")
+                return True
+            field = "dragon" if item == "royal_dragon" else "diamond"
+            if event.get(field):
+                self.send_room_text(room, "⚠️ تم اصطياد هذه الجائزة في الجولة الحالية.")
+                return True
+            event[field] = str(sender)
+        self._royal_hunt.add(sender, sender, item, room)
+        value = ROYAL_DRAGON_VALUE if item == "royal_dragon" else ROYAL_DIAMOND_VALUE
+        _add_points(sender, value, repay_loan=True)
+        base = _public_base_url(); asset = "royal_dragon_winner_3d.jpg" if item == "royal_dragon" else "royal_diamond_winner_3d.jpg"
+        media = f"{base}/assets/treasures/{asset}" if base else ""
+        label = "التنين الملكي 🐉" if item == "royal_dragon" else "الألماسة الملكية 💎"
+        message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة"
+        rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()} | {str(room).strip()})
+        def deliver(target):
+            try:
+                self.send_room_text(target, message)
+                if media: self.send_room_media(target, media, "image")
+            except Exception as exc: self.log("[ROYAL-HUNT] result failed:", target, repr(exc))
+        if rooms:
+            with ThreadPoolExecutor(max_workers=min(16, len(rooms)), thread_name_prefix="royal-result") as pool:
+                list(pool.map(deliver, rooms))
+        return True
+
     def _fishing_event_worker(self):
         interval = 600.0
         while not self.stop_event.wait(interval):
@@ -22125,7 +22280,7 @@ class TalkinBot:
         if not room:
             return True
         text = str(body or "").strip()
-        if text.casefold() not in {"صورتي", "صورتك"}:
+        if text.casefold() not in {"صورتي", "صورتك", "my picture", "my photo", "picture me"}:
             return False
 
         candidates = []
@@ -25051,6 +25206,8 @@ class TalkinBot:
         if not _games_enabled_for_room(room):
             self.send_room_text(room, "🛑 الألعاب متوقفة في هذه الغرفة حالياً.")
             return True
+        if self._royal_hunt_command(room, sender_name, original_raw):
+            return True
         if game_low in {"سدد سلفتي", "سدد سلفه", "سدد السلفه", "سدد السلفتي", "repay loan", "repay my loan"}:
             result = _repay_points_loan(sender_name)
             if result.get("ok"):
@@ -25370,7 +25527,7 @@ class TalkinBot:
                 ],
                 2: [
                     "🎵 Music\n━━━━━━━━━━━━\n.sa song name / play song name — play music\nstop music / stop — stop the current song\nsher@name — share the current song",
-                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nصورتي — send your account avatar directly to the room\n.صوره <username/topic> — strict-SafeSearch internet image\n.صوره — random image: 30% monkeys; otherwise adult portrait matching known gender\nشبيه@name / شبيهك@name — safe lookalike-style image\nExplicit/obscene image searches are blocked.",
+                    "❤️ Reactions, photos and lookalikes\n━━━━━━━━━━━━\nlk@code — like | lv@code — love | dl@code — dislike\ncm@code text — comment | report@code text — report\nصورتي / my picture / my photo — send your account avatar directly to the room\n.صوره <username/topic> — strict-SafeSearch internet image\n.صوره — random image: 30% monkeys; otherwise adult portrait matching known gender\nشبيه@name / شبيهك@name — safe lookalike-style image\nExplicit/obscene image searches are blocked.",
                 ],
                 3: [
                     "🎮 Games — solo games\n━━━━━━━━━━━━\nrock / paper / scissors — play against the bot\ninvestment, luck, coin@heads/tails, wheel\nbox@1-3, cup@1-3, monster, volcano, bird, star\ntable, uno\nType ns for the next games list.",
@@ -30709,7 +30866,7 @@ class TalkinBot:
             return True
         return False
 
-    def _handle_explore_command(self, room, command, sender):
+    def _publish_explore_command_sync(self, room, command, sender):
         match = re.fullmatch(r"(aax2|ax2|ax1|aax|ax)@(.+)", str(command or "").strip(), re.I | re.S)
         if not match:
             return False
@@ -30819,6 +30976,28 @@ class TalkinBot:
             self.send_private_text(sender, notice)
         return True
 
+    def _handle_explore_command(self, room, command, sender):
+        """Queue royal Explore broadcasts while preserving local preview behavior."""
+        mode_match = re.match(r"^(aax2|ax2|ax1|aax|ax)@", str(command or "").strip(), re.I)
+        mode = mode_match.group(1).casefold() if mode_match else ""
+        # Existing ax/aax2 previews remain synchronous for compatibility; only
+        # all-room royal publication is moved off the receive loop.
+        if mode in {"ax", "aax2"}:
+            return self._publish_explore_command_sync(room, command, sender)
+        lock = getattr(self, "_explore_publish_lock", None)
+        if lock is None:
+            lock = self._explore_publish_lock = threading.Lock()
+        if not lock.acquire(blocking=False):
+            self.send_room_text(room, "⏳ يوجد نشر اكسبلور جارٍ الآن؛ سيستمر البوت باستقبال بقية الأوامر.")
+            return True
+        def worker():
+            try:
+                self._publish_explore_command_sync(room, command, sender)
+            finally:
+                lock.release()
+        self.send_room_text(room, "⏳ جاري تجهيز اكسبلور في الخلفية؛ يمكنك إرسال أوامر أخرى الآن.")
+        threading.Thread(target=worker, name="explore-publish", daemon=True).start()
+        return True
     def handle_room_event(self, result):
         event = (result.get("room_event") or {}) if isinstance(result, dict) else {}
         event_type = str(event.get(1, ""))

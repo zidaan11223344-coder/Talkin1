@@ -61,6 +61,8 @@ ITEMS = {
     },
 }
 DIAMOND_KEYS = tuple(key for key, item in ITEMS.items() if item["kind"] == "diamond")
+# The royal diamond is earned only from the separate royal hunt.
+ORDINARY_DIAMOND_KEYS = tuple(key for key in DIAMOND_KEYS if key != "diamond_royal")
 
 # Weights sum to 10,000. A failed dig still consumes the 30-second cooldown.
 OUTCOME_KEYS = (
@@ -74,10 +76,10 @@ _ALIAS_TO_KEYS = {
     "نحاس": ("copper",), "النحاس": ("copper",), "copper": ("copper",),
     "حديد": ("iron",), "الحديد": ("iron",), "iron": ("iron",),
     "ياقوت": ("ruby",), "الياقوت": ("ruby",), "ruby": ("ruby",),
-    "الماس": DIAMOND_KEYS, "الألماس": DIAMOND_KEYS, "الالماس": DIAMOND_KEYS,
-    "ماس": DIAMOND_KEYS, "diamond": DIAMOND_KEYS, "diamonds": DIAMOND_KEYS,
+    "الماس": ORDINARY_DIAMOND_KEYS, "الألماس": ORDINARY_DIAMOND_KEYS, "الالماس": ORDINARY_DIAMOND_KEYS,
+    "ماس": ORDINARY_DIAMOND_KEYS, "diamond": ORDINARY_DIAMOND_KEYS, "diamonds": ORDINARY_DIAMOND_KEYS,
     "الماس العادي": ("diamond_clear",), "ألماس عادي": ("diamond_clear",),
-    "diamond clear": ("diamond_clear",), "clear diamond": ("diamond_clear",), "diamond": DIAMOND_KEYS,
+    "diamond clear": ("diamond_clear",), "clear diamond": ("diamond_clear",), "diamond": ORDINARY_DIAMOND_KEYS,
     "الماس الازرق": ("diamond_blue",), "الماس الأزرق": ("diamond_blue",),
     "ألماس ازرق": ("diamond_blue",), "blue diamond": ("diamond_blue",), "diamond blue": ("diamond_blue",),
     "الماس البنفسجي": ("diamond_purple",), "الماس البنفسجى": ("diamond_purple",),
@@ -211,8 +213,8 @@ class MiningStore:
 
     @staticmethod
     def _random_diamond_outcome() -> str:
-        weights = [OUTCOME_WEIGHTS[OUTCOME_KEYS.index(key)] for key in DIAMOND_KEYS]
-        return random.choices(DIAMOND_KEYS, weights=weights, k=1)[0]
+        weights = [OUTCOME_WEIGHTS[OUTCOME_KEYS.index(key)] for key in ORDINARY_DIAMOND_KEYS]
+        return random.choices(ORDINARY_DIAMOND_KEYS, weights=weights, k=1)[0]
 
     @staticmethod
     def _random_diamond_spawns(start: float) -> list[float]:
@@ -260,7 +262,7 @@ class MiningStore:
             if schedule["times"] and schedule["times"][0] <= moment:
                 schedule["times"].pop(0)
                 item_key = self.diamond_chooser()
-                if item_key not in DIAMOND_KEYS:
+                if item_key not in ORDINARY_DIAMOND_KEYS:
                     item_key = self._random_diamond_outcome()
             else:
                 item_key = self.chooser()
