@@ -5490,6 +5490,27 @@ def _room_protection_cfg(room):
     if not isinstance(cfg,dict): cfg={}
     authorized = bool(cfg.get("authorized") or cfg.get("authorized_by") or cfg.get("authorization"))
     return {"swear":authorized and bool(cfg.get("swear",False)),"flood":authorized and bool(cfg.get("flood",False)),"joinleave":authorized and bool(cfg.get("joinleave",False)),"no_photo":authorized and bool(cfg.get("no_photo",False)),"repeat_limit":max(2,min(50,int(cfg.get("repeat_limit",3) or 3)))}
+
+def _reset_protection_switches_on_startup():
+    """Disable all automatic protections after every process restart."""
+    data = _room_protection_data()
+    rooms = data.get("rooms", {}) if isinstance(data.get("rooms"), dict) else {}
+    changed = False
+    for key, raw_cfg in list(rooms.items()):
+        if not isinstance(raw_cfg, dict):
+            continue
+        cfg = dict(raw_cfg)
+        for switch in ("swear", "flood", "joinleave", "no_photo"):
+            if bool(cfg.get(switch, False)):
+                cfg[switch] = False
+                changed = True
+        rooms[key] = cfg
+    if changed:
+        data["rooms"] = rooms
+        _save_local_json(PROTECTION_FILE, data)
+    # The bot-wide anti-flood protection is opt-in as well.
+    _save_bot_protection_enabled(False)
+
 def _save_room_protection(room, **changes):
     data=_room_protection_data(); rooms=data.get("rooms",{}) if isinstance(data.get("rooms"),dict) else {}
     cfg=_room_protection_cfg(room); cfg.update(changes); cfg["repeat_limit"]=max(2,min(50,int(cfg.get("repeat_limit",3) or 3)))
@@ -5614,6 +5635,20 @@ def _room_manager(bot, room, sender):
         "admin", "administrator", "moderator", "moder", "mod",
         "مشرف", "مشرفين", "ادمن", "إداري",
         "صانع", "صانع_الغرفة", "مالك",
+    }
+
+
+def _room_protection_manager(bot, room, sender):
+    """Only masters or the room creator may change protection switches."""
+    if _is_master_name(sender) or _is_primary_master(sender) or _is_room_creator(room, sender):
+        return True
+    role, known = _room_role(bot, room, sender)
+    if not known:
+        return False
+    role_key = re.sub(r"[\s_-]+", "", str(role or "").casefold())
+    return role_key in {
+        "owner", "creator", "roomowner", "roomcreator", "host",
+        "مالك", "صانع", "صانعالغرفة", "صانعالغرفه",
     }
 
 def _room_role(bot, room, sender, event_role=None):
@@ -10398,6 +10433,9 @@ def start_asset_server():
 
 class TalkinBot:
     def __init__(self):
+        # Never restore automatic protection switches across a process restart.
+        # Room creators/masters must explicitly enable them again.
+        _reset_protection_switches_on_startup()
         self.ws = None
         self.stop_event = threading.Event()
         # Realtime transport must never execute heavy command/event logic on
@@ -27526,6 +27564,7 @@ class TalkinBot:
         protection_match = re.fullmatch(r"(?:حماية|حمايه|حماية الغرفة|حمايه الغرفه|protection|room protection)(?:@([^@]+)|\s+(.+))?", text, re.I)
         if protection_match:
             room_manager = _room_protection_manager(self, room, sender)
+
             if not ((_is_primary_master(sender) and is_private) or room_manager):
                 if room and not is_private:
                     self.send_room_text(room, "🚫 قائمة الحماية لصانع الغرفة أو الماستر فقط.")
@@ -27567,6 +27606,7 @@ class TalkinBot:
         st=pending_protection.get(protection_key,{})
         if st.get("awaiting_number") and re.fullmatch(r"\d+",low):
             room_manager = _room_protection_manager(self, room, sender)
+
             if not ((is_private and _is_primary_master(sender)) or (not is_private and room_manager)):
                 return True
             try:
@@ -27586,6 +27626,7 @@ class TalkinBot:
         if protection_key in pending_protection and low.isdigit():
             st=pending_protection.get(protection_key,{})
             room_manager = _room_protection_manager(self, room, sender)
+
             if not ((is_private and _is_primary_master(sender)) or (not is_private and room_manager)):
                 if is_private and _is_primary_master(sender):
                     self.send_private_text(sender, "🔒 أرسل رقم الخيار من خاص البوت أو داخل الغرفة بصفتك صانعاً.")
@@ -27641,6 +27682,7 @@ class TalkinBot:
 
         if low in ("تشغيل الحماية", "تشغيل الحمايه", "الحماية تشغيل", "الحمايه تشغيل", "enable protection", "enable room protection"):
             if not _room_protection_manager(self, room, sender):
+
                 return True
             cfg = _save_room_moderation(room, enabled=True)
             _save_room_protection(room, swear=True, flood=True)
@@ -27648,6 +27690,7 @@ class TalkinBot:
             return True
         if low in ("إيقاف الحماية", "ايقاف الحماية", "إيقاف الحمايه", "ايقاف الحمايه", "الحماية إيقاف", "الحمايه ايقاف", "disable protection", "disable room protection"):
             if not _room_protection_manager(self, room, sender):
+
                 return True
             _save_room_moderation(room, enabled=False)
             _save_room_protection(room, swear=False, flood=False)
@@ -27656,6 +27699,7 @@ class TalkinBot:
         m_repeat = re.fullmatch(r"mr@(\d+)", text, re.I)
         if m_repeat:
             if not _room_protection_manager(self, room, sender):
+
                 return True
             limit = max(2, min(50, int(m_repeat.group(1))))
             _save_room_moderation(room, repeat_limit=limit)
