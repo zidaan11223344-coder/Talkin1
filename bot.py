@@ -9029,12 +9029,34 @@ def render_user_3d_portrait_gif(photo_url, username, variant=0):
     gd.ellipse((35, 20, 685, 670), fill=(*accent, 58))
     glow = glow.filter(ImageFilter.GaussianBlur(62))
     bg = Image.alpha_composite(bg.convert("RGBA"), glow)
+    # Distinct visual language for each personal portrait template.
+    motif = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    md = ImageDraw.Draw(motif, "RGBA")
+    if variant == 1:
+        for x in range(-height, width, 86):
+            md.line((x, 0, x + height, height), fill=(*accent, 42), width=8)
+    elif variant == 2:
+        for radius in range(150, 520, 58):
+            md.ellipse((center_x-radius, center_y-radius, center_x+radius, center_y+radius), outline=(*accent, 38), width=4)
+    elif variant == 3:
+        for angle_deg in range(0, 360, 18):
+            rad = math.radians(angle_deg)
+            md.line((center_x, center_y, center_x + int(520 * math.cos(rad)), center_y + int(520 * math.sin(rad))), fill=(*gold, 30), width=5)
+    elif variant == 4:
+        nodes = [(90 + (i * 137) % 540, 80 + (i * 211) % 650) for i in range(12)]
+        for i, (x, y) in enumerate(nodes):
+            if i:
+                px, py = nodes[i - 1]
+                md.line((px, py, x, y), fill=(*accent, 55), width=3)
+            md.ellipse((x-6, y-6, x+6, y+6), fill=(*gold, 150))
+    bg = Image.alpha_composite(bg, motif)
 
     frames = []
     frame_count = 24
     for frame_no in range(frame_count):
         # Positive angular progression makes the portrait turn right/clockwise.
-        angle = 2 * math.pi * frame_no / frame_count
+        speed = (1.0, 1.35, 0.82, 1.7, 1.12)[variant]
+        angle = 2 * math.pi * frame_no / frame_count * speed
         perspective = max(0.055, abs(math.cos(angle)))
         face_w = max(28, int(diameter * perspective))
         face = avatar.transpose(Image.Transpose.FLIP_LEFT_RIGHT) if math.cos(angle) < 0 else avatar
@@ -10600,7 +10622,8 @@ class TalkinBot:
         # and sets; audio streaming itself remains per-room and non-blocking.
         self._live_state_lock = threading.RLock()
         self.invite_pending = False
-        self.invites_enabled = True
+        invite_state = _load_local_json(DATA_DIR / "invite_settings.json", {})
+        self.invites_enabled = bool(invite_state.get("enabled", True)) if isinstance(invite_state, dict) else True
         self.invite_silent_master = False
         self.invite_room = ""
         self.invite_sent = set()
@@ -22092,8 +22115,12 @@ class TalkinBot:
             return True
         busy.add(key)
         self._profile_picture_busy = busy
-        # «صورتي» تعني تحديثاً صريحاً: احذف رابط الصورة السابق لهذه الحسابات
-        # حتى يعيد Talkin إرسال UserItem الأحدث في كل تنفيذ للأمر.
+        # Keep the last avatar while requesting a fresh native profile.  A
+        # secondary room can answer the roster request late or omit UserItem
+        # photos entirely; deleting the known URL first caused «صورتي» to
+        # fail there even though the same account worked in the base room.
+        # The request below still refreshes the cache whenever the gateway
+        # returns a newer URL.
         photos = getattr(self, "user_photos", {})
         previous_photos = {}
         if isinstance(photos, dict):
@@ -22101,8 +22128,6 @@ class TalkinBot:
                 previous = photos.get(_norm_user(candidate)) or photos.get(str(candidate).casefold())
                 if str(previous or "").startswith(("http://", "https://", "//")):
                     previous_photos[_norm_user(candidate)] = str(previous)
-                photos.pop(str(candidate).casefold(), None)
-                photos.pop(_norm_user(candidate), None)
 
         def cached_photo(candidate):
             photos = getattr(self, "user_photos", {})
@@ -26403,7 +26428,11 @@ class TalkinBot:
             role = {"o": "owner", "a": "admin", "m": "member"}.get(code, "member")
             # Capture the bot's own identity BEFORE excluding it from the
             # invitation roster. This is the authoritative owner check.
-            bot_key = _norm_user(BOT_ID)
+            bot_keys = {
+                _norm_user(BOT_ID), _norm_user(PRIMARY_BOT_ID),
+                _norm_user(getattr(self, "bot_id", "")),
+            }
+            bot_keys.discard("")
             bot_names = {
                 _norm_user(str(u.get("username") or "").strip().lstrip("@"))
                 for u in users
@@ -26414,7 +26443,7 @@ class TalkinBot:
                 # the complete owners_list response. Never trust a stale local
                 # role cache, because that could start invitations after the
                 # bot was downgraded or removed as room owner.
-                state["bot_is_owner"] = bool(bot_key and bot_key in bot_names)
+                state["bot_is_owner"] = bool(bot_keys.intersection(bot_names))
                 if not state["bot_is_owner"]:
                     self.log("[INV] owner verification failed:", source_room,
                              "bot=", BOT_ID, "owners=", sorted(bot_names))
@@ -28097,9 +28126,11 @@ class TalkinBot:
                 return True
             if low == "تشغيل الدعوات":
                 self.invites_enabled = True
+                _save_local_json(DATA_DIR / "invite_settings.json", {"enabled": True, "updated_at": int(time.time())})
                 self.send_private_text(sender, "✅ تم تشغيل الدعوات.")
             else:
                 self.invites_enabled = False
+                _save_local_json(DATA_DIR / "invite_settings.json", {"enabled": False, "updated_at": int(time.time())})
                 self.send_private_text(sender, "🛑 تم إيقاف الدعوات.")
             return True
 
@@ -30500,9 +30531,12 @@ class TalkinBot:
                 self.send_private_text(sender, notice) if is_private else self.send_room_text(room, notice)
                 return True
             try:
-                template_index = int(getattr(self, "_portrait_template_index", -1) or -1) + 1
-                template_index %= 5
-                self._portrait_template_index = template_index
+                portrait_indices = getattr(self, "_portrait_template_indices", None)
+                if not isinstance(portrait_indices, dict):
+                    portrait_indices = self._portrait_template_indices = {}
+                portrait_key = _norm_user(sender)
+                template_index = (int(portrait_indices.get(portrait_key, -1)) + 1) % 5
+                portrait_indices[portrait_key] = template_index
                 image_path = render_user_3d_portrait_gif(photo_url, sender, variant=template_index)
                 media_path, media_type = _prepare_talkin_animation_media(image_path)
                 media_path = _optimize_social_media_asset(media_path)
@@ -30678,13 +30712,17 @@ class TalkinBot:
                     mode = "cycle"
                 if mode == "cycle":
                     mode = "static"
-            explore_variant = int(getattr(self, "_explore_template_index", -1) or -1) + 1
-            explore_variant %= 4
+            explore_variant = (int(getattr(self, "_explore_template_index", -1)) + 1) % 4
             self._explore_template_index = explore_variant
             if premium_template:
-                card = render_explore_premium_card(
-                    text, sender, avatar_url, language=language, variant=explore_variant
-                )
+                if command_mode == "ax1":
+                    card = render_explore_premium_animated_card(
+                        text, sender, avatar_url, language=language, variant=explore_variant
+                    )
+                else:
+                    card = render_explore_premium_card(
+                        text, sender, avatar_url, language=language, variant=explore_variant
+                    )
             else:
                 card = (render_explore_animated_card(text, sender, avatar_url, language=language,
                                                      secondary_text=secondary_text)
@@ -31675,14 +31713,14 @@ class TalkinBot:
                 self._remember_bot_action(room, body, frm, is_private=False)
             return
         m_share_photo = re.fullmatch(
-            r"(?:مشاركه|مشاركة)\s+(?:صورتي|صورتى|الصورة|الصوره|صورة)@?([^\s@]+)",
+            r"(?:مشاركه|مشاركة)\s+(?:صورتي|صورتى|الصورة|الصوره|صورة)\s*@?([^\s@]+)",
             body.strip(), re.I,
         )
         if m_share_photo:
             self.share_personal_design_private(frm, m_share_photo.group(1), "portrait", room)
             return
         m_share_name = re.fullmatch(
-            r"(?:مشاركه|مشاركة)\s+(?:اسمي|اسمى|الاسم)@?([^\s@]+)",
+            r"(?:مشاركه|مشاركة)\s+(?:اسمي|اسمى|الاسم)\s*@?([^\s@]+)",
             body.strip(), re.I,
         )
         if m_share_name:
@@ -32388,9 +32426,11 @@ class TalkinBot:
                         elif body.strip().casefold() in ("تشغيل الدعوات", "ايقاف الدعوات", "إيقاف الدعوات") and _is_primary_master(frm):
                             if body.strip().casefold() == "تشغيل الدعوات":
                                 self.invites_enabled = True
+                                _save_local_json(DATA_DIR / "invite_settings.json", {"enabled": True, "updated_at": int(time.time())})
                                 self.send_private_text(frm, "✅ تم تشغيل الدعوات.")
                             else:
                                 self.invites_enabled = False
+                                _save_local_json(DATA_DIR / "invite_settings.json", {"enabled": False, "updated_at": int(time.time())})
                                 self.send_private_text(frm, "🛑 تم إيقاف الدعوات.")
                         elif re.fullmatch(r"s@(.+)", body.strip(), re.I) and _is_primary_master(frm):
                             target = re.fullmatch(r"s@(.+)", body.strip(), re.I).group(1).strip().lstrip("@")
