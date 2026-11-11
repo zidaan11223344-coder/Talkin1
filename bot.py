@@ -20898,6 +20898,59 @@ class TalkinBot:
             self.send_room_text(room, tr("⚠️ تعذر إكمال عملية الراتب؛ لم أؤكد الصرف. حاول مرة أخرى بعد قليل.", "⚠️ Salary processing failed; payment was not confirmed. Please retry shortly."))
             return True
 
+    def _render_royal_winner_card(self, item, username, avatar_url=""):
+        """Place the real winner name and avatar inside the generated winner panel."""
+        if not PIL_AVAILABLE:
+            return None
+        asset = "royal_dragon_winner_3d.jpg" if item == "royal_dragon" else "royal_diamond_winner_3d.jpg"
+        source = ASSETS_DIR / "treasures" / asset
+        if not source.is_file():
+            return None
+        try:
+            with Image.open(source) as raw:
+                card = raw.convert("RGBA")
+            card.thumbnail((960, 640), Image.Resampling.LANCZOS)
+            panel = Image.new("RGBA", card.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(panel)
+            width, height = card.size
+            left, top, right, bottom = 42, max(0, height - 142), width - 42, height - 24
+            draw.rounded_rectangle((left, top, right, bottom), radius=28, fill=(8, 10, 22, 225), outline=(255, 211, 112, 235), width=3)
+            avatar = None
+            if avatar_url:
+                try:
+                    response = requests.get(str(avatar_url), timeout=(3, 8), headers={"User-Agent": "Talkin1Bot/1.0"})
+                    response.raise_for_status()
+                    with Image.open(io.BytesIO(response.content)) as raw_avatar:
+                        avatar = raw_avatar.convert("RGBA")
+                    avatar.thumbnail((86, 86), Image.Resampling.LANCZOS)
+                except Exception as exc:
+                    self.log("[ROYAL-HUNT] winner avatar download failed:", repr(exc))
+            if avatar is not None:
+                size = 86
+                avatar = avatar.resize((size, size), Image.Resampling.LANCZOS)
+                mask = Image.new("L", (size, size), 0)
+                ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+                card.paste(avatar, (left + 22, top + 26), mask)
+                draw = ImageDraw.Draw(panel)
+                draw.ellipse((left + 22, top + 26, left + 22 + size, top + 26 + size), outline=(255, 226, 148, 255), width=3)
+                text_x = left + 132
+            else:
+                text_x = left + 28
+            font_candidates = [ASSETS_DIR / "NotoSansArabic-SemiBold.ttf", ASSETS_DIR / "DejaVuSans-Bold.ttf", Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")]
+            font_path = next((fp for fp in font_candidates if fp.is_file()), None)
+            font = ImageFont.truetype(str(font_path), 34) if font_path else ImageFont.load_default()
+            name = str(username or "").strip().lstrip("@")[:32]
+            label = f"الفائز: @{name}"
+            draw.text((text_x, top + 46), label, fill=(255, 244, 204, 255), font=font, stroke_width=1, stroke_fill=(0, 0, 0, 180))
+            card.alpha_composite(panel)
+            out = BASE_DIR / "generated_publish" / f"royal_winner_{item}_{uuid.uuid4().hex}.jpg"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            card.convert("RGB").save(out, "JPEG", quality=88, optimize=True, progressive=True)
+            return out
+        except Exception as exc:
+            self.log("[ROYAL-HUNT] winner card failed:", repr(exc))
+            return None
+
     def _royal_hunt_event_worker(self):
         while not self.stop_event.wait(360.0):
             try:
@@ -20995,17 +21048,17 @@ class TalkinBot:
         self._royal_hunt.add(sender, sender, item, room)
         value = ROYAL_DRAGON_VALUE if item == "royal_dragon" else ROYAL_DIAMOND_VALUE
         _add_points(sender, value, repay_loan=True)
-        base = _public_base_url(); asset = "royal_dragon_winner_3d.jpg" if item == "royal_dragon" else "royal_diamond_winner_3d.jpg"
-        optimized = _optimize_social_media_asset(ASSETS_DIR / "treasures" / asset)
-        media = f"{base}/publish/{quote(Path(optimized).name)}" if base and optimized else ""
+        base = _public_base_url()
         label = "التنين الملكي 🐉" if item == "royal_dragon" else "الألماسة الملكية 💎"
-        message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة\n📷 صورة الفائز مرفقة بجانب اسمه."
         avatar_url = getattr(self, "user_photos", {}).get(_norm_user(sender), "") or self._lookup_profile_photo(sender)
+        winner_card = self._render_royal_winner_card(item, sender, avatar_url)
+        optimized = _optimize_social_media_asset(winner_card) if winner_card else None
+        media = f"{base}/publish/{quote(Path(optimized).name)}" if base and optimized else ""
+        message = f"🏆 @{str(sender).lstrip('@')} فاز بـ {label}!\n💰 الجائزة: +{_fmt_points(value)} نقطة\n📷 الاسم والصورة داخل بطاقة الفوز."
         rooms = sorted({str(r).strip() for r in (self._active_rooms() or []) if str(r).strip()} | {str(room).strip()})
         def deliver(target):
             try:
                 self.send_room_text(target, message)
-                if avatar_url: self.send_room_media(target, avatar_url, "image")
                 if media: self.send_room_media(target, media, "image")
             except Exception as exc: self.log("[ROYAL-HUNT] result failed:", target, repr(exc))
         if rooms:
